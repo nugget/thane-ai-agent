@@ -360,31 +360,35 @@ type runFunc func(ctx context.Context, req *agent.Request, cb agent.StreamCallba
 // first token takes, and a done chunk with empty content ends it.
 //
 // The first token or tool call the run reports picks how its text is
-// written. A token first streams the reply live: every token is
+// written. A token first streams the run's text live: every token is
 // written as it arrives. A tool call first drops every token and
 // writes resp.Content as one chunk once the run returns, so text the
-// model wrote around its tool calls never reaches the client.
+// model wrote around its tool calls never reaches the client. A token
+// with empty text carries no text: it is not written and does not
+// count as the first token.
 //
 // For a run that returns without error, the message content of the
 // chunks the handler writes, read in order, obeys these invariants:
-//   - When the run reported no tool call and the tokens it streamed
-//     are a prefix of resp.Content (all of it, part of it, or none, as
-//     on the greeting fast path and the runtime's fallback and timeout
-//     replies, which no token carries), the chunks concatenate to
-//     resp.Content, and the part no token carried is one chunk written
-//     before the done chunk. A streamed request delivers the text an
-//     unstreamed one would.
-//   - When the run reported no tool call and the tokens it streamed
-//     are not a prefix of resp.Content, the stream cannot take them
-//     back, so the text the client assembles ends with resp.Content:
-//     nothing more is written when the tokens already end with it, as
-//     when a retried call streams the reply again after an abandoned
-//     attempt, and otherwise a blank line and resp.Content follow them.
 //   - When a tool call came first, the chunks concatenate to
 //     resp.Content.
-//   - When a token came first and the run reported a tool call later,
-//     the chunks are the tokens of every iteration, and nothing
-//     reconciles them with resp.Content.
+//   - Otherwise, when the tokens the run streamed are a prefix of
+//     resp.Content (all of it, part of it, or none, as on the greeting
+//     fast path and the runtime's fallback and timeout replies, which
+//     no token carries), the chunks concatenate to resp.Content, and
+//     the part no token carried is one chunk written before the done
+//     chunk. A streamed request then delivers the text an unstreamed
+//     one would.
+//   - Otherwise the stream cannot take back the tokens it wrote, so
+//     the text the client assembles contains resp.Content: nothing
+//     more is written when the tokens already contain it, and
+//     otherwise a blank line and resp.Content follow them, before the
+//     done chunk. The tokens contain the reply when a retried call
+//     streamed it again after an abandoned attempt, when a provider
+//     stripped a tool-call payload it had streamed after the reply, and
+//     when a run that called tools streamed its reply, or kept its
+//     narration as the reply, after the text of earlier iterations.
+//     They lack it when the reply is a fallback or timeout notice that
+//     no token carried.
 //
 // A run that returns an error ends the stream with one done chunk
 // whose done_reason is "error" and whose content is the client-safe
@@ -431,7 +435,8 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		// tokenFirst and toolFirst record which kind of event the run
 		// reported first; at most one of them is set.
 		tokenFirst, toolFirst bool
-		// toolCalled records that the run reported a tool call at all.
+		// toolCalled records that the run reported a tool call at all,
+		// for the log line of a reply the tokens did not carry.
 		toolCalled bool
 		// streamed is the text of every token written to the client.
 		streamed strings.Builder
@@ -444,7 +449,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 				toolFirst = true
 			}
 		case agent.KindToken:
-			if toolFirst {
+			if toolFirst || event.Token == "" {
 				return
 			}
 			tokenFirst = true
@@ -478,16 +483,14 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
-	switch {
-	case toolFirst:
+	if toolFirst {
 		writeChunk(resp.Content)
-	case toolCalled:
-		// The tokens already written are this tool-calling run's text.
-	default:
+	} else {
 		text := streamed.String()
 		if tail := ollamaStreamTail(text, resp.Content); tail != "" {
 			attrs := []any{
 				"request_id", resp.RequestID,
+				"tool_called", toolCalled,
 				"streamed_len", len(text),
 				"reply_len", len(resp.Content),
 				"tail_len", len(tail),
@@ -495,7 +498,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 			if strings.HasPrefix(resp.Content, text) {
 				logger.Debug("ollama stream writing reply text no token carried", attrs...)
 			} else {
-				logger.Warn("ollama stream diverged from the reply, writing the reply after it", attrs...)
+				logger.Warn("ollama stream lacks the reply, writing it after the streamed text", attrs...)
 			}
 			writeChunk(tail)
 		}
@@ -522,14 +525,14 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 
 // ollamaStreamTail returns what a stream that has already written
 // streamed must still write for the text a client assembles from it to
-// end with reply: the rest of reply when streamed is a prefix of it,
-// nothing when streamed already ends with it, and otherwise a blank
-// line and then reply.
+// hold reply: the rest of reply when streamed is a prefix of it,
+// nothing when streamed already contains it, and otherwise a blank line
+// and then reply.
 func ollamaStreamTail(streamed, reply string) string {
 	if rest, ok := strings.CutPrefix(reply, streamed); ok {
 		return rest
 	}
-	if strings.HasSuffix(streamed, reply) {
+	if strings.Contains(streamed, reply) {
 		return ""
 	}
 	return "\n\n" + reply

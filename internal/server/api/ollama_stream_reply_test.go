@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
@@ -293,13 +294,43 @@ func ollamaToolCallEvents() []agent.StreamEvent {
 	return []agent.StreamEvent{{Kind: agent.KindToolCallStart}, {Kind: agent.KindToolCallDone, ToolName: "get_state"}}
 }
 
+// ollamaTwoCuts returns every way to cut s into two non-empty tokens
+// at a rune boundary.
+func ollamaTwoCuts(s string) [][]string {
+	var out [][]string
+	for i := range s {
+		if i > 0 {
+			out = append(out, []string{s[:i], s[i:]})
+		}
+	}
+	return out
+}
+
+// ollamaStripTools is the tool a provider is offered when it strips a
+// tool-call payload from the end of a reply.
+var ollamaStripTools = []string{"get_state"}
+
+// ollamaTrailingPayloads are tool calls a model writes as text after
+// its reply, each with the separator it writes before them: a fenced
+// call and flat calls. A provider streams them with the reply and then
+// strips them, and the whitespace around them, from the reply it
+// returns.
+var ollamaTrailingPayloads = []string{
+	"\n\n```json\n{\"name\":\"get_state\",\"arguments\":{\"entity_id\":\"light.garage\"}}\n```",
+	" {\"name\":\"get_state\"}",
+	"\n\n{\"name\":\"get_state\"}\n",
+}
+
 // ollamaGeneratedReplyCases generates the runs the stream contract
 // covers: replies no token carried (the greeting fast path, the
 // runtime's fallback and timeout replies, an empty reply), a reply
 // streamed in every chunking and cut short after every rune, retried
-// and abandoned streams that diverge from the reply, and a tool call
-// at every position in the token stream.
-func ollamaGeneratedReplyCases() []ollamaReplyCase {
+// and abandoned streams that diverge from the reply, replies a
+// provider stripped a streamed tool-call payload from, a tool call at
+// every position in the token stream, narration before a tool call
+// followed by every kind of reply, and empty tokens at every position.
+func ollamaGeneratedReplyCases(t *testing.T) []ollamaReplyCase {
+	t.Helper()
 	const reply = "Done ✓"
 	unstreamedReplies := []string{
 		prompts.InteractiveEmptyResponseFallback,
@@ -386,22 +417,107 @@ func ollamaGeneratedReplyCases() []ollamaReplyCase {
 		}
 	}
 
+	// The reply streamed with a tool-call payload after it, which the
+	// provider stripped from the reply it returned, in every chunking a
+	// cut can make: the tokens already hold the reply, so nothing more
+	// is written.
+	for _, lead := range []string{"", "\n"} {
+		for _, payload := range ollamaTrailingPayloads {
+			text := lead + reply + payload
+			if stripped := llm.StripTrailingToolCallText(text, ollamaStripTools, llm.DefaultToolCallTextProfile()); stripped != reply {
+				t.Fatalf("StripTrailingToolCallText(%q) = %q, want %q: the payload is not one a provider strips", text, stripped, reply)
+			}
+			chunkings := append([][]string{{text}, ollamaRunes(text)}, ollamaTwoCuts(text)...)
+			for _, tokens := range chunkings {
+				add(ollamaReplyCase{
+					name:       fmt.Sprintf("streamed %q, provider stripped it to %q", tokens, reply),
+					script:     ollamaReplyScript{events: ollamaScriptEvents(ollamaTokenEvents(tokens)...), reply: reply},
+					wantChunks: tokens,
+				})
+			}
+		}
+	}
+
 	// A tool call at every position in the token stream. First, it
 	// drops the tokens and the reply goes out whole; after a token, the
-	// tokens are the whole text.
+	// tokens are written live and a reply they do not carry follows
+	// them after a blank line.
 	for _, tokens := range [][]string{{reply}, ollamaRunes(reply), {"Do", "ne ✓"}} {
 		for p := 0; p <= len(tokens); p++ {
 			for _, text := range []string{reply, unstreamedReplies[0], ""} {
 				body := slices.Concat(ollamaTokenEvents(tokens[:p]), ollamaToolCallEvents(), ollamaTokenEvents(tokens[p:]))
-				want := tokens
-				if p == 0 {
+				var want []string
+				switch {
+				case p == 0:
 					want = []string{text}
+				case text == reply || text == "":
+					want = tokens
+				default:
+					want = append(slices.Clone(tokens), "\n\n"+text)
 				}
 				add(ollamaReplyCase{
 					name:           fmt.Sprintf("tool call after %q of %q, reply %q", tokens[:p], tokens, text),
 					script:         ollamaReplyScript{events: ollamaScriptEvents(body...), reply: text},
 					wantChunks:     want,
-					unstreamedText: p == 0,
+					unstreamedText: p == 0 || text == reply,
+				})
+			}
+		}
+	}
+
+	// Narration streamed before a tool call, then a final iteration
+	// that streams the reply, part of the run's text, or nothing, and
+	// every kind of reply. The narration ends the run as deferred text
+	// when the final iteration writes nothing. A reply the tokens carry
+	// adds nothing; any other follows them after a blank line.
+	const narration = "Checking. "
+	for _, said := range [][]string{{narration}, ollamaRunes(narration)} {
+		for _, final := range [][]string{nil, {reply}, ollamaRunes(reply)} {
+			replies := append([]string{reply, narration, ""}, unstreamedReplies...)
+			for _, text := range replies {
+				body := slices.Concat(ollamaTokenEvents(said), ollamaToolCallEvents(), ollamaTokenEvents(final))
+				want := slices.Concat(said, final)
+				carried := text == "" || text == narration || (text == reply && len(final) > 0)
+				if !carried {
+					want = append(want, "\n\n"+text)
+				}
+				add(ollamaReplyCase{
+					name:       fmt.Sprintf("narration %q, tool call, then %q, reply %q", said, final, text),
+					script:     ollamaReplyScript{events: ollamaScriptEvents(body...), reply: text},
+					wantChunks: want,
+				})
+			}
+		}
+	}
+
+	// An empty token at every position carries no text: it writes no
+	// chunk, and a tool call after nothing but empty tokens came first.
+	for k := 0; k <= runeCount; k++ {
+		prefix := ollamaRunePrefix(reply, k)
+		runes := ollamaRunes(prefix)
+		for p := 0; p <= len(runes); p++ {
+			tokens := slices.Concat(runes[:p], []string{""}, runes[p:])
+			want := slices.Clone(runes)
+			if rest := reply[len(prefix):]; rest != "" {
+				want = append(want, rest)
+			}
+			add(ollamaReplyCase{
+				name:           fmt.Sprintf("streamed %q of %q with an empty token", tokens, reply),
+				script:         ollamaReplyScript{events: ollamaScriptEvents(ollamaTokenEvents(tokens)...), reply: reply},
+				wantChunks:     want,
+				unstreamedText: true,
+			})
+		}
+	}
+	for _, empties := range [][]string{{""}, {"", ""}} {
+		for _, after := range [][]string{nil, {reply}, ollamaRunes(reply)} {
+			for _, text := range []string{reply, unstreamedReplies[0], ""} {
+				body := slices.Concat(ollamaTokenEvents(empties), ollamaToolCallEvents(), ollamaTokenEvents(after))
+				add(ollamaReplyCase{
+					name:           fmt.Sprintf("tool call after empty tokens %q, then %q, reply %q", empties, after, text),
+					script:         ollamaReplyScript{events: ollamaScriptEvents(body...), reply: text},
+					wantChunks:     []string{text},
+					unstreamedText: true,
 				})
 			}
 		}
@@ -422,7 +538,7 @@ func TestOllamaChatStream_ReplyContract(t *testing.T) {
 		{"chat", "turn on the garage lights"},
 		{"auxiliary", "Generate a concise, 3-5 word title with an emoji summarizing the chat history."},
 	}
-	cases := ollamaGeneratedReplyCases()
+	cases := ollamaGeneratedReplyCases(t)
 
 	for _, l := range listeners {
 		for _, u := range users {
@@ -455,6 +571,9 @@ func TestOllamaChatStream_NamedReplies(t *testing.T) {
 		events []agent.StreamEvent
 		reply  string
 		want   []string
+		// stripped marks a reply a provider made by stripping a
+		// tool-call payload from the text its tokens streamed.
+		stripped bool
 	}{
 		{
 			name:  "greeting fast path",
@@ -523,11 +642,68 @@ func TestOllamaChatStream_NamedReplies(t *testing.T) {
 			want:   []string{"Checking. ", lit},
 		},
 		{
+			name:     "provider stripped a fenced tool call after the reply",
+			user:     chat,
+			events:   tokens(lit+"\n\n", "```json\n", `{"name":"get_state","arguments":{"entity_id":"light.garage"}}`, "\n```"),
+			reply:    lit,
+			want:     []string{lit + "\n\n", "```json\n", `{"name":"get_state","arguments":{"entity_id":"light.garage"}}`, "\n```"},
+			stripped: true,
+		},
+		{
+			name:     "provider stripped a flat tool call after the reply",
+			user:     chat,
+			events:   tokens(lit, ` {"name":"get_state"}`),
+			reply:    lit,
+			want:     []string{lit, ` {"name":"get_state"}`},
+			stripped: true,
+		},
+		{
+			name:   "timeout notice after narration and a tool call",
+			user:   chat,
+			events: slices.Concat(tokens("Let me check the garage."), ollamaToolCallEvents()),
+			reply:  timeout,
+			want:   []string{"Let me check the garage.", "\n\n" + timeout},
+		},
+		{
+			name:   "fallback after narration and a tool call",
+			user:   chat,
+			events: slices.Concat(tokens("Let me check the garage."), ollamaToolCallEvents()),
+			reply:  prompts.InteractiveEmptyResponseFallback,
+			want:   []string{"Let me check the garage.", "\n\n" + prompts.InteractiveEmptyResponseFallback},
+		},
+		{
+			name:   "narration kept as the reply after a tool call",
+			user:   chat,
+			events: slices.Concat(tokens("Let me check the garage."), ollamaToolCallEvents()),
+			reply:  "Let me check the garage.",
+			want:   []string{"Let me check the garage."},
+		},
+		{
+			name:   "empty token before a tool call",
+			user:   chat,
+			events: slices.Concat(tokens(""), ollamaToolCallEvents(), tokens("Checking. ")),
+			reply:  lit,
+			want:   []string{lit},
+		},
+		{
 			name:  "empty reply",
 			user:  chat,
 			reply: "",
 			want:  nil,
 		},
+	}
+
+	for _, row := range rows {
+		if !row.stripped {
+			continue
+		}
+		var text strings.Builder
+		for _, event := range row.events {
+			text.WriteString(event.Token)
+		}
+		if got := llm.StripTrailingToolCallText(text.String(), ollamaStripTools, llm.DefaultToolCallTextProfile()); got != row.reply {
+			t.Fatalf("%s: StripTrailingToolCallText(%q) = %q, want the row's reply %q", row.name, text.String(), got, row.reply)
+		}
 	}
 
 	runner := &ollamaScriptRunner{}
@@ -547,6 +723,17 @@ func TestOllamaChatStream_NamedReplies(t *testing.T) {
 	}
 }
 
+// ollamaHolds reports whether reply appears anywhere in streamed,
+// comparing every window of streamed against it.
+func ollamaHolds(streamed, reply string) bool {
+	for i := 0; i+len(reply) <= len(streamed); i++ {
+		if streamed[i:i+len(reply)] == reply {
+			return true
+		}
+	}
+	return false
+}
+
 // TestOllamaStreamTail checks ollamaStreamTail over every pair of
 // strings up to four letters from a two-letter alphabet.
 func TestOllamaStreamTail(t *testing.T) {
@@ -564,15 +751,15 @@ func TestOllamaStreamTail(t *testing.T) {
 		for _, reply := range words {
 			tail := ollamaStreamTail(streamed, reply)
 			assembled := streamed + tail
-			if !strings.HasSuffix(assembled, reply) {
-				t.Errorf("ollamaStreamTail(%q, %q) = %q: %q does not end with the reply", streamed, reply, tail, assembled)
+			if !ollamaHolds(assembled, reply) {
+				t.Errorf("ollamaStreamTail(%q, %q) = %q: %q does not hold the reply", streamed, reply, tail, assembled)
 			}
 			switch {
 			case strings.HasPrefix(reply, streamed):
 				if assembled != reply {
 					t.Errorf("ollamaStreamTail(%q, %q) = %q, want the rest of the reply", streamed, reply, tail)
 				}
-			case strings.HasSuffix(streamed, reply):
+			case ollamaHolds(streamed, reply):
 				if tail != "" {
 					t.Errorf("ollamaStreamTail(%q, %q) = %q, want nothing", streamed, reply, tail)
 				}
