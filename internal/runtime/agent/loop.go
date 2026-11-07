@@ -157,7 +157,11 @@ const storedHistoryGapThreshold = 30 * time.Minute
 
 // Response is the result of a single agent Run() call. It contains the
 // model's final content, token usage counters, and metadata about which
-// tools and capability tags were active during execution.
+// tools and capability tags were active during execution. Its
+// FinishReason says why the Run ended: "stop" when a model reply ended
+// it, the engine's exhaust reason (such as max_iterations or
+// token_budget) when the run ran out, or "timeout_recovery" when timeout
+// recovery supplied the reply it ended on.
 type Response struct {
 	Content                  string                              `json:"content"`
 	Model                    string                              `json:"model"`
@@ -2562,15 +2566,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// a caller-supplied SystemPrompt is used verbatim, and a
 			// timeout-recovered reply answered buildRecoveryPrompt or was
 			// synthesized without a call. The handler marks that one
-			// reply, and reading the mark clears it, so a later call in
-			// the same turn, such as one answering input that arrived at
-			// closure, keeps its profile. IterationRecord is not
-			// archived, so this line is the durable record of how each
-			// call's tool calls arrived.
+			// reply, and responseReported takes the mark off it, so a
+			// later call in the same turn, such as one answering input
+			// that arrived at closure, keeps its profile.
+			// IterationRecord is not archived, so this line is the
+			// durable record of how each call's tool calls arrived.
 			profile := promptProfile
-			if llmErr.recoveryAnswered {
+			if llmErr.responseReported() {
 				profile = ""
-				llmErr.recoveryAnswered = false
 			}
 			iterLog := logging.Logger(iterCtx)
 			// Anthropic's input_tokens leaves out what the cache wrote
@@ -2795,15 +2798,23 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}
 
+	// An exhausted run finishes with the reason it ran out. The output
+	// budget can run out on a recovered reply, and the budget is then
+	// still the reason worth reporting; every other exhaust reason ends
+	// the run on a force-text reply, a runtime placeholder, or no text.
+	// A run that ended on a reply finishes as timeout_recovery only when
+	// timeout recovery supplied that reply. The engine reports the reply
+	// a run ends on last, so finalRecovered describes it; a recovered
+	// reply that a later call followed, as when input arriving at
+	// closure holds the turn open, does not mark the run.
 	finishReason := "stop"
-	if iterResult.Exhausted {
+	switch {
+	case iterResult.Exhausted:
 		finishReason = iterResult.ExhaustReason
 		if finishReason == "" {
 			finishReason = "max_iterations"
 		}
-	}
-	// Detect when the error handler triggered timeout recovery.
-	if llmErr.timeoutRecovered && iterResult.ExhaustReason != iterate.ExhaustTokenBudget {
+	case llmErr.finalRecovered:
 		finishReason = "timeout_recovery"
 	}
 
@@ -2880,21 +2891,36 @@ func (l *Loop) conversationChannelBinding(ctx context.Context, conversationID st
 // llmErrorOutcome is what the OnLLMError handler leaves for the rest of
 // Run to read about the responses it produced.
 type llmErrorOutcome struct {
-	// timeoutRecovered is set once timeout recovery answers in place of
-	// the model the Run asked, and makes the Run's finish reason
-	// timeout_recovery.
-	timeoutRecovered bool
 	// recoveryAnswered is set when timeout recovery supplied the
 	// response the engine reports next: an answer to
 	// buildRecoveryPrompt, or canned text no call produced, so no
-	// interaction profile rendered the prompt it answers. The response
-	// callback clears it as it reads it.
+	// interaction profile rendered the prompt it answers.
+	// responseReported clears it as it reads it.
 	recoveryAnswered bool
+	// finalRecovered says whether timeout recovery supplied the latest
+	// response the engine reported, which once the engine returns is
+	// the run's last. Run reads it to finish as timeout_recovery only
+	// when recovery wrote the reply the run ended on; every reported
+	// response overwrites it, so a recovered reply that a later call
+	// followed no longer counts.
+	finalRecovered bool
 	// requestReplaced is set when the handler's response answers a
 	// request other than the iteration's own messages and tools, or
 	// is canned text no call produced. Run clears it as each iteration
 	// starts.
 	requestReplaced bool
+}
+
+// responseReported moves the handler's recovery mark onto the response
+// the engine just reported and says whether timeout recovery supplied
+// it. The response callback calls it for every response the engine
+// reports, the force-text call's among them, so finalRecovered always
+// describes the latest one.
+func (o *llmErrorOutcome) responseReported() bool {
+	recovered := o.recoveryAnswered
+	o.recoveryAnswered = false
+	o.finalRecovered = recovered
+	return recovered
 }
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements
@@ -2982,9 +3008,8 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"recovery_model", l.recoveryModel,
 					)
 					// Return a static recovery response as content. It
-					// answered no prompt, and the turn still ended in
-					// timeout recovery.
-					outcome.timeoutRecovered = true
+					// answered no prompt, and it is still timeout
+					// recovery's reply.
 					outcome.recoveryAnswered = true
 					outcome.requestReplaced = true
 					return &llm.ChatResponse{
@@ -2996,7 +3021,6 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				if resp.Message.Content == "" {
 					resp.Message.Content = prompts.TimeoutRecoveryEmpty
 				}
-				outcome.timeoutRecovered = true
 				outcome.recoveryAnswered = true
 				outcome.requestReplaced = true
 				return resp, l.recoveryModel, nil
@@ -3004,7 +3028,6 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// No recovery model — return a static fallback response
 			// so the user sees something rather than an error.
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
-			outcome.timeoutRecovered = true
 			outcome.recoveryAnswered = true
 			outcome.requestReplaced = true
 			used := toolsUsedFromMessages(msgs)
