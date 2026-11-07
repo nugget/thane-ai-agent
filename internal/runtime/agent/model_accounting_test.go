@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/platform/usage"
+	"github.com/nugget/thane-ai-agent/internal/runtime/loop"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -120,7 +121,8 @@ func TestRun_AccountsEachModelCallIncludingRetryUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 5 || response.Model != "claude-recovery" || response.InputTokens != 600 || response.OutputTokens != 60 || response.PeakInputTokens != 300 || response.Iterations != 2 {
+	// The recovery call's prompt is 300 uncached + 50 written + 40 read.
+	if len(calls) != 5 || response.Model != "claude-recovery" || response.InputTokens != 600 || response.OutputTokens != 60 || response.PeakInputTokens != 390 || response.Iterations != 2 {
 		t.Fatalf("call/response totals = calls:%v response:%+v", calls, response)
 	}
 	if response.CacheCreationInputTokens != 50 || response.CacheReadInputTokens != 40 {
@@ -286,5 +288,53 @@ func TestRun_NoUsageForSyntheticRecovery(t *testing.T) {
 	summary, err := loop.usageStore.Summary(time.Time{}, time.Now().Add(time.Hour))
 	if err != nil || summary.TotalRecords != 0 || response.InputTokens != 0 || response.OutputTokens != 0 {
 		t.Fatalf("fabricated usage: response=%+v summary=%+v error=%v", response, summary, err)
+	}
+}
+
+// TestRun_PeakCountsCachedPrompt pins context fill to the whole prompt.
+// Anthropic reports cache writes and reads apart from input_tokens, so a
+// well-cached call has a small InputTokens and a full window; the peak,
+// and the loop_status fill derived from it, must see the full window.
+func TestRun_PeakCountsCachedPrompt(t *testing.T) {
+	const window = 200000
+	tests := []struct {
+		name                             string
+		input, creation, ttl1h, read     int
+		wantPeak, wantInput, wantFillPct int
+	}{
+		{name: "uncached call", input: 50000, wantPeak: 50000, wantInput: 50000, wantFillPct: 25},
+		{name: "warm call", input: 600, read: 99400, wantPeak: 100000, wantInput: 600, wantFillPct: 50},
+		{name: "creation-heavy cold call", input: 400, creation: 79600, ttl1h: 79600, wantPeak: 80000, wantInput: 400, wantFillPct: 40},
+		{name: "mixed write and read", input: 1000, creation: 9000, ttl1h: 9000, read: 140000, wantPeak: 150000, wantInput: 1000, wantFillPct: 75},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testLoop, _, _ := newAccountingTestLoop(t)
+			testLoop.llm = accountingTestClient{call: func(_ context.Context, model string, _ []map[string]any) (*llm.ChatResponse, error) {
+				return &llm.ChatResponse{
+					Model: model, InputTokens: tt.input, OutputTokens: 10,
+					CacheCreationInputTokens: tt.creation, CacheCreation1hInputTokens: tt.ttl1h, CacheReadInputTokens: tt.read,
+					Message: llm.Message{Role: "assistant", Content: "The source is unchanged."},
+				}, nil
+			}}
+			response, err := testLoop.Run(context.Background(), &Request{
+				ConversationID: "cached-fill", Model: "claude-primary",
+				Messages: []Message{{Role: "user", Content: "Is the source unchanged?"}},
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.PeakInputTokens != tt.wantPeak || response.InputTokens != tt.wantInput {
+				t.Fatalf("peak/input = %d/%d, want %d/%d", response.PeakInputTokens, response.InputTokens, tt.wantPeak, tt.wantInput)
+			}
+			status := loop.Status{
+				ID: "cached-loop", Name: "cached", State: loop.StateSleeping,
+				LastInputTokens: response.InputTokens, LastPeakInputTokens: response.PeakInputTokens, ContextWindow: window,
+			}
+			view := loop.NewLoopViewResolver([]loop.Status{status}, nil, time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)).FromStatus(status)
+			if view.ContextFillPct == nil || *view.ContextFillPct != tt.wantFillPct {
+				t.Fatalf("context_fill_pct = %v, want %d", view.ContextFillPct, tt.wantFillPct)
+			}
+		})
 	}
 }
