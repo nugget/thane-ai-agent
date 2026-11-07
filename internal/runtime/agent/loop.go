@@ -77,7 +77,7 @@ type Request struct {
 	InitialTags     []string                            `json:"-"` // Tags to activate at Run start (carried forward from previous loop iterations)
 	RuntimeTags     []string                            `json:"-"` // Trusted runtime-asserted tags pinned for this run only
 	RuntimeTools    []*tools.Tool                       `json:"-"` // Request-scoped tools visible only to this run
-	PullInput       func(context.Context) []llm.Message `json:"-"` // Polled at each iteration boundary and at closure to merge newly-arrived input into the live turn (#1221); nil disables
+	PullInput       func(context.Context) []llm.Message `json:"-"` // Polled at each iteration boundary and, when an iteration and enough output budget remain to answer it, at closure to merge newly-arrived input into the live turn (#1221); nil disables
 	MaxIterations   int                                 `json:"-"` // Optional per-request iteration cap (0 = default)
 	MaxOutputTokens int                                 `json:"-"` // Reported output-token budget across all model attempts, including recovery (0 = unlimited)
 	ToolTimeout     time.Duration                       `json:"-"` // Optional per-tool timeout (0 = no extra timeout)

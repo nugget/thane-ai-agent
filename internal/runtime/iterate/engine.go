@@ -46,7 +46,13 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		illegalStrikes     int
 		emptyRetried       bool
 		deferredText       string
-		breakReason        string
+		heldReply          string
+		// deferredTokens and heldTokens are the output tokens the calls
+		// that wrote deferredText and heldReply spent. A stand-in costs
+		// what its original call did, not the empty call it fills in for.
+		deferredTokens int
+		heldTokens     int
+		breakReason    string
 	)
 
 	for i := 0; i < cfg.MaxIterations; i++ {
@@ -250,6 +256,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			// deferredText, so #347's user-visible duplication stays fixed.
 			if cfg.DeferMixedText && llmResp.Message.Content != "" {
 				deferredText = llmResp.Message.Content
+				deferredTokens = llmResp.OutputTokens
 			}
 
 			if cfg.NormalizeToolCall != nil {
@@ -422,16 +429,31 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			deferredText = ""
 		}
 
+		// replyTokens is what the text this iteration ends on cost to
+		// write. A stand-in below takes its original call's cost, so the
+		// closure guard weighs the reply it would hold, not the empty
+		// response that reply fills in for.
+		replyTokens := llmResp.OutputTokens
+
 		// Handle empty responses. After tool call iterations this is a
 		// common failure mode, but first-turn empty completions are not
 		// useful either, so treat both paths consistently when nudging
-		// is enabled.
+		// is enabled. What stands in for the missing text, newest first:
+		// text the model wrote beside an earlier tool call (fresh text
+		// clears it, so any left was written after the latest hold), a
+		// nudge while an iteration remains to answer it, the reply a
+		// closure hold folded into history, and last the fallback.
 		if llmResp.Message.Content == "" {
 			if deferredText != "" {
 				iterLog.Info("using deferred text from prior iteration",
 					"deferred_len", len(deferredText))
 				llmResp.Message.Content = deferredText
-			} else if cfg.NudgeOnEmpty && !emptyRetried {
+				replyTokens = deferredTokens
+			} else if cfg.NudgeOnEmpty && !emptyRetried && i+1 < cfg.MaxIterations {
+				// The nudge needs a next iteration to answer it. On the
+				// last one it would end the loop on a user message,
+				// which force-text recovery does not answer, and the run
+				// would return no content at all.
 				iterLog.Warn("empty response, nudging model")
 				prompt := cfg.NudgePrompt
 				if prompt == "" {
@@ -443,8 +465,27 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				})
 				emptyRetried = true
 				continue
+			} else if heldReply != "" {
+				// A closure hold kept the turn open for input that arrived
+				// after this reply was finished, and nothing since has
+				// answered it. The held reply still answers everything
+				// before that input, so it ships instead of the fallback.
+				iterLog.Warn("empty response after a closure hold, returning the held reply",
+					"held_len", len(heldReply), "nudged", emptyRetried)
+				llmResp.Message.Content = heldReply
+				replyTokens = heldTokens
+			} else if cfg.NudgeOnEmpty && !emptyRetried {
+				// The nudge was not spent, but no iteration remains to
+				// answer it, so the run has run out. It ends the way any
+				// run that runs out of iterations does: exhausted, with
+				// force-text recovery trying once when the last message
+				// is a tool result. A canned fallback here would read to
+				// callers such as delegates as a run that finished.
+				iterLog.Warn("empty response on the last iteration, ending the run as exhausted")
+				break
 			} else if cfg.NudgeOnEmpty {
-				// Nudge was already attempted and failed — apply fallback.
+				// The nudge was already spent and the model still wrote
+				// nothing — apply fallback.
 				iterLog.Error("empty response after nudge, returning fallback")
 				fallback := cfg.FallbackContent
 				if fallback == "" {
@@ -452,9 +493,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				}
 				llmResp.Message.Content = fallback
 			}
-			// When NudgeOnEmpty is false, empty content is preserved —
-			// the caller is responsible for handling it (e.g., delegate
-			// treats it as ExhaustNoOutput).
+			// When NudgeOnEmpty is false and nothing earlier stands in,
+			// empty content is preserved — the caller is responsible for
+			// handling it (e.g., delegate treats it as ExhaustNoOutput).
 		}
 
 		// --- Closure-time input merge (#1221) ---
@@ -468,12 +509,39 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// boundary. OnTextResponse is deliberately NOT fired here — this is
 		// not the turn's final reply, so memory/fact-extraction waits for the
 		// real close. The callback's shared per-turn drain budget bounds how
-		// many times a turn can be held open; the remainder rides the
-		// immediate post-turn re-wake.
+		// many times a turn can be held open.
+		//
+		// The held reply is remembered as heldReply, so that when nothing
+		// later produces text the turn returns it rather than the fallback
+		// (the empty-response handling above). A newer text reply always
+		// supersedes it: that reply either closes the turn here or is held
+		// in its place.
+		//
+		// A hold must be able to answer what it pulls, and when it cannot
+		// (see closureHoldBlocker) the engine does not poll here at all.
+		// On the last allowed iteration, holding ended the loop on the
+		// pulled user message, which force-text recovery does not answer:
+		// the run returned no content, the reply was dropped, and the input
+		// was drained into a turn that never answered it. With less output
+		// allowance left than this reply spent, the held iteration's
+		// ceiling is that remainder, so its answer is likely cut short, and
+		// the cut-short text (or the budget fallback) would replace the
+		// finished reply. Polling and then declining the hold would not
+		// help, since whatever the callback returns counts as delivered (the
+		// loop acks it with the turn). Unpolled, the input stays with the
+		// caller; the loop's mailbox acks only the wake batch and what was
+		// pulled, then re-wakes on whatever is still pending (the post-turn
+		// ack and wakeIfMailboxNonEmpty in internal/runtime/loop's
+		// Loop.run), which is also where input past the drain budget goes.
+		// That re-wake is a new run with its own iterations and budget.
 		if cfg.PullInput != nil && llmResp.Message.Content != "" {
-			if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
+			if blocker := cfg.closureHoldBlocker(i, totalOutput, replyTokens); blocker != "" {
+				iterLog.Debug("closure poll skipped, reply closes the turn",
+					"blocker", blocker)
+			} else if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
 				messages = append(messages, llmResp.Message)
 				messages = append(messages, pulled...)
+				heldReply, heldTokens = llmResp.Message.Content, replyTokens
 				iterLog.Info("held turn open for input arriving at closure",
 					"pulled_messages", len(pulled))
 				continue
