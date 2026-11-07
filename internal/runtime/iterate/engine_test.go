@@ -433,6 +433,79 @@ func TestEngine_PullInputAtClosureNoInputEndsTurn(t *testing.T) {
 	}
 }
 
+// scriptedArrivals is a PullInput for closure-hold tests that delivers
+// input once it has arrived. arrivals maps a count of completed LLM calls
+// to the input pending from then on, so {1: "B"} is a message that arrived
+// while the first call was composing its reply. Each poll delivers every
+// arrival not yet taken and records how many calls had completed when it
+// ran: a poll at the top of iteration k and one at the closure of
+// iteration k-1 both see k calls, and their order tells them apart.
+type scriptedArrivals struct {
+	mock      *mockLLM
+	arrivals  map[int]string
+	taken     map[int]bool
+	pollsAt   []int
+	delivered []string
+}
+
+func newScriptedArrivals(mock *mockLLM, arrivals map[int]string) *scriptedArrivals {
+	return &scriptedArrivals{mock: mock, arrivals: arrivals, taken: make(map[int]bool)}
+}
+
+func (s *scriptedArrivals) pull(context.Context) []llm.Message {
+	s.mock.mu.Lock()
+	calls := len(s.mock.calls)
+	s.mock.mu.Unlock()
+	s.pollsAt = append(s.pollsAt, calls)
+	var out []llm.Message
+	for after := 0; after <= calls; after++ {
+		content, ok := s.arrivals[after]
+		if !ok || s.taken[after] {
+			continue
+		}
+		s.taken[after] = true
+		s.delivered = append(s.delivered, content)
+		out = append(out, llm.Message{Role: "user", Content: content})
+	}
+	return out
+}
+
+// pending lists, in arrival order, the input no poll delivered.
+func (s *scriptedArrivals) pending() []string {
+	last := 0
+	for after := range s.arrivals {
+		last = max(last, after)
+	}
+	var out []string
+	for after := 0; after <= last; after++ {
+		if content, ok := s.arrivals[after]; ok && !s.taken[after] {
+			out = append(out, content)
+		}
+	}
+	return out
+}
+
+// assertReplyShipped checks that a run closed normally with want as its
+// final reply: returned as Content, handed to OnTextResponse exactly once
+// (replies records each call), and last in the returned history.
+func assertReplyShipped(t *testing.T, result *Result, replies []string, want string) {
+	t.Helper()
+	if result.Content != want {
+		t.Errorf("content = %q, want %q", result.Content, want)
+	}
+	if result.Exhausted || result.ExhaustReason != "" {
+		t.Errorf("exhausted = %v (%q), want a normal close", result.Exhausted, result.ExhaustReason)
+	}
+	if len(replies) != 1 || replies[0] != want {
+		t.Errorf("OnTextResponse got %q, want exactly [%q]", replies, want)
+	}
+	if n := len(result.Messages); n == 0 {
+		t.Errorf("history is empty, want it to end with the shipped reply %q", want)
+	} else if last := result.Messages[n-1]; last.Role != "assistant" || last.Content != want {
+		t.Errorf("history ends with %s %q, want the shipped assistant reply %q", last.Role, last.Content, want)
+	}
+}
+
 // TestEngine_ClosureHoldNeedsAnotherIteration pins that the closure poll
 // holds a turn open only when an iteration remains to answer what it pulls.
 // On the last allowed iteration the reply ships as the turn's final reply
@@ -446,14 +519,9 @@ func TestEngine_ClosureHoldNeedsAnotherIteration(t *testing.T) {
 		name          string
 		maxIterations int
 		responses     []*llm.ChatResponse
-		// arrivals maps a count of completed LLM calls to the input
-		// that is pending from then on, so {1: "B"} is a message that
-		// arrived while the first call was composing its reply.
-		arrivals map[int]string
+		arrivals      map[int]string // see scriptedArrivals
 		// wantPollsAt lists, for each PullInput poll in order, how many
-		// LLM calls had completed when it ran. A poll at the top of
-		// iteration k and one at the closure of iteration k-1 both see
-		// k calls; the order tells them apart.
+		// LLM calls had completed when it ran.
 		wantPollsAt     []int
 		wantContent     string
 		wantCalls       int
@@ -512,29 +580,8 @@ func TestEngine_ClosureHoldNeedsAnotherIteration(t *testing.T) {
 			mock := &mockLLM{responses: tt.responses}
 			cfg := baseCfg(mock, &mockExecutor{})
 			cfg.MaxIterations = tt.maxIterations
-
-			var (
-				pollsAt   []int
-				delivered []string
-				taken     = make(map[int]bool)
-			)
-			cfg.PullInput = func(context.Context) []llm.Message {
-				mock.mu.Lock()
-				calls := len(mock.calls)
-				mock.mu.Unlock()
-				pollsAt = append(pollsAt, calls)
-				var out []llm.Message
-				for after := 0; after <= calls; after++ {
-					content, ok := tt.arrivals[after]
-					if !ok || taken[after] {
-						continue
-					}
-					taken[after] = true
-					delivered = append(delivered, content)
-					out = append(out, llm.Message{Role: "user", Content: content})
-				}
-				return out
-			}
+			input := newScriptedArrivals(mock, tt.arrivals)
+			cfg.PullInput = input.pull
 			var replies []string
 			cfg.OnTextResponse = func(_ context.Context, content string, _ []llm.Message) {
 				replies = append(replies, content)
@@ -545,36 +592,259 @@ func TestEngine_ClosureHoldNeedsAnotherIteration(t *testing.T) {
 				t.Fatalf("Run: %v", err)
 			}
 
-			if result.Content != tt.wantContent {
-				t.Errorf("content = %q, want %q", result.Content, tt.wantContent)
-			}
-			if result.Exhausted || result.ExhaustReason != "" {
-				t.Errorf("exhausted = %v (%q), want a normal close", result.Exhausted, result.ExhaustReason)
-			}
-			if len(replies) != 1 || replies[0] != tt.wantContent {
-				t.Errorf("OnTextResponse got %q, want exactly [%q]", replies, tt.wantContent)
-			}
+			assertReplyShipped(t, result, replies, tt.wantContent)
 			if len(mock.calls) != tt.wantCalls {
 				t.Errorf("LLM calls = %d, want %d", len(mock.calls), tt.wantCalls)
 			}
-			if fmt.Sprint(pollsAt) != fmt.Sprint(tt.wantPollsAt) {
-				t.Errorf("PullInput polled after %v LLM calls, want %v", pollsAt, tt.wantPollsAt)
+			if fmt.Sprint(input.pollsAt) != fmt.Sprint(tt.wantPollsAt) {
+				t.Errorf("PullInput polled after %v LLM calls, want %v", input.pollsAt, tt.wantPollsAt)
 			}
-			if fmt.Sprint(delivered) != fmt.Sprint(tt.wantDelivered) {
-				t.Errorf("delivered %q, want %q", delivered, tt.wantDelivered)
+			if fmt.Sprint(input.delivered) != fmt.Sprint(tt.wantDelivered) {
+				t.Errorf("delivered %q, want %q", input.delivered, tt.wantDelivered)
 			}
-			var undelivered []string
-			for after := 0; after <= len(tt.responses); after++ {
-				if content, ok := tt.arrivals[after]; ok && !taken[after] {
-					undelivered = append(undelivered, content)
+			if got := input.pending(); fmt.Sprint(got) != fmt.Sprint(tt.wantUndelivered) {
+				t.Errorf("left pending %q, want %q", got, tt.wantUndelivered)
+			}
+		})
+	}
+}
+
+// TestEngine_ClosureHoldNeedsOutputAllowance pins that the closure poll
+// holds a turn open only when the output allowance left is at least what
+// the finished reply spent. The held iteration's ceiling is that
+// remainder, so with less left its answer is likely cut short, and the
+// cut-short text (or the budget fallback) would replace a finished reply.
+// The reply ships instead, and the input stays with the caller, whose
+// re-wake starts a run with its own budget.
+func TestEngine_ClosureHoldNeedsOutputAllowance(t *testing.T) {
+	reply := func(content string, outputTokens int) *llm.ChatResponse {
+		resp := textResponse(content)
+		resp.OutputTokens = outputTokens
+		return resp
+	}
+	// What a held iteration capped at 5 tokens comes back with.
+	truncated := reply("Here are th", 5)
+	truncated.StopReason = "max_tokens"
+	const b = "B, sent while A was answered"
+
+	tests := []struct {
+		name            string
+		maxOutputTokens int
+		responses       []*llm.ChatResponse
+		// wantPollsAt lists, for each PullInput poll in order, how many
+		// LLM calls had completed when it ran.
+		wantPollsAt     []int
+		wantContent     string
+		wantCalls       int
+		wantDelivered   []string
+		wantUndelivered []string
+	}{
+		{
+			name:            "allowance left below the reply: reply ships, input waits",
+			maxOutputTokens: 100,
+			responses:       []*llm.ChatResponse{reply("Complete answer to A.", 95), truncated},
+			// Top of iteration 0 only: the 5 tokens left cannot pay for
+			// another reply the size of the 95-token one in hand.
+			wantPollsAt:     []int{0},
+			wantContent:     "Complete answer to A.",
+			wantCalls:       1,
+			wantUndelivered: []string{b},
+		},
+		{
+			name:            "allowance left equal to the reply: turn held",
+			maxOutputTokens: 190,
+			responses: []*llm.ChatResponse{
+				reply("Complete answer to A.", 95),
+				reply("Here are the answers to A and B.", 50),
+			},
+			// Top of iteration 0, closure of iteration 0 (95 left for a
+			// 95-token reply, so B is delivered and the turn held), top of
+			// iteration 1. Iteration 1's closure is not polled: 45 left is
+			// less than its 50-token reply.
+			wantPollsAt:   []int{0, 1, 1},
+			wantContent:   "Here are the answers to A and B.",
+			wantCalls:     2,
+			wantDelivered: []string{b},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockLLM{responses: tt.responses}
+			cfg := baseCfg(mock, &mockExecutor{})
+			cfg.MaxOutputTokens = tt.maxOutputTokens
+			input := newScriptedArrivals(mock, map[int]string{1: b})
+			cfg.PullInput = input.pull
+			var replies []string
+			cfg.OnTextResponse = func(_ context.Context, content string, _ []llm.Message) {
+				replies = append(replies, content)
+			}
+
+			result, err := (&Engine{}).Run(context.Background(), cfg, baseMessages())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			assertReplyShipped(t, result, replies, tt.wantContent)
+			if len(mock.calls) != tt.wantCalls {
+				t.Errorf("LLM calls = %d, want %d", len(mock.calls), tt.wantCalls)
+			}
+			if fmt.Sprint(input.pollsAt) != fmt.Sprint(tt.wantPollsAt) {
+				t.Errorf("PullInput polled after %v LLM calls, want %v", input.pollsAt, tt.wantPollsAt)
+			}
+			if fmt.Sprint(input.delivered) != fmt.Sprint(tt.wantDelivered) {
+				t.Errorf("delivered %q, want %q", input.delivered, tt.wantDelivered)
+			}
+			if got := input.pending(); fmt.Sprint(got) != fmt.Sprint(tt.wantUndelivered) {
+				t.Errorf("left pending %q, want %q", got, tt.wantUndelivered)
+			}
+		})
+	}
+}
+
+// TestEngine_EmptyResponseStandIn pins what a run returns in place of an
+// empty response, newest first: text the model wrote beside an earlier
+// tool call, a nudge while an iteration remains to answer it, the reply a
+// closure hold folded into history, and last FallbackContent. A nudge on
+// the last iteration used to end the run on the nudge itself, with no
+// content and exhausted at max_iterations; after a hold on the
+// second-to-last iteration that also discarded the finished held reply.
+func TestEngine_EmptyResponseStandIn(t *testing.T) {
+	const (
+		nudge    = "Nudge: please answer."
+		fallback = "Fallback: please try again."
+		r1       = "Here is the answer to A."
+		b        = "B, sent while A was answered"
+	)
+	mixed := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role:      "assistant",
+			Content:   "Checking B now.",
+			ToolCalls: []llm.ToolCall{makeToolCall("search", map[string]any{"q": "B"})},
+		},
+		InputTokens:  20,
+		OutputTokens: 10,
+	}
+
+	tests := []struct {
+		name          string
+		maxIterations int
+		noNudge       bool
+		deferMixed    bool
+		responses     []*llm.ChatResponse
+		arrivals      map[int]string // see scriptedArrivals
+		wantContent   string
+		wantCalls     int
+		// wantNudges counts the calls whose request ends with the nudge.
+		wantNudges int
+	}{
+		{
+			name:          "hold on the second-to-last iteration, empty on the last: held reply ships",
+			maxIterations: 2,
+			responses:     []*llm.ChatResponse{textResponse(r1), textResponse("")},
+			arrivals:      map[int]string{1: b},
+			wantContent:   r1,
+			wantCalls:     2,
+		},
+		{
+			name:          "empty on the last iteration without a hold: fallback, no nudge",
+			maxIterations: 2,
+			responses: []*llm.ChatResponse{
+				toolCallResponse(makeToolCall("search", map[string]any{"q": "A"})),
+				textResponse(""),
+			},
+			wantContent: fallback,
+			wantCalls:   2,
+		},
+		{
+			name:          "hold then empty with an iteration left: nudged",
+			maxIterations: 3,
+			responses: []*llm.ChatResponse{
+				textResponse(r1),
+				textResponse(""),
+				textResponse("Here are the answers to A and B."),
+			},
+			arrivals:    map[int]string{1: b},
+			wantContent: "Here are the answers to A and B.",
+			wantCalls:   3,
+			wantNudges:  1,
+		},
+		{
+			name:          "nudged reply empty again: held reply ships",
+			maxIterations: 3,
+			responses:     []*llm.ChatResponse{textResponse(r1), textResponse(""), textResponse("")},
+			arrivals:      map[int]string{1: b},
+			wantContent:   r1,
+			wantCalls:     3,
+			wantNudges:    1,
+		},
+		{
+			name:          "nudging disabled: held reply ships",
+			maxIterations: 3,
+			noNudge:       true,
+			responses:     []*llm.ChatResponse{textResponse(r1), textResponse("")},
+			arrivals:      map[int]string{1: b},
+			wantContent:   r1,
+			wantCalls:     2,
+		},
+		{
+			name:          "deferred text written after the hold outranks the held reply",
+			maxIterations: 3,
+			deferMixed:    true,
+			responses:     []*llm.ChatResponse{textResponse(r1), mixed, textResponse("")},
+			arrivals:      map[int]string{1: b},
+			wantContent:   "Checking B now.",
+			wantCalls:     3,
+		},
+		{
+			name:          "a newer held reply supersedes the older",
+			maxIterations: 4,
+			responses: []*llm.ChatResponse{
+				textResponse(r1),
+				textResponse("Here are the answers to A and B."),
+				textResponse(""),
+				textResponse(""),
+			},
+			arrivals:    map[int]string{1: b, 2: "C, sent while B was answered"},
+			wantContent: "Here are the answers to A and B.",
+			wantCalls:   4,
+			wantNudges:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockLLM{responses: tt.responses}
+			cfg := baseCfg(mock, &mockExecutor{})
+			cfg.MaxIterations = tt.maxIterations
+			cfg.NudgeOnEmpty = !tt.noNudge
+			cfg.NudgePrompt = nudge
+			cfg.FallbackContent = fallback
+			cfg.DeferMixedText = tt.deferMixed
+			cfg.PullInput = newScriptedArrivals(mock, tt.arrivals).pull
+			var replies []string
+			cfg.OnTextResponse = func(_ context.Context, content string, _ []llm.Message) {
+				replies = append(replies, content)
+			}
+
+			result, err := (&Engine{}).Run(context.Background(), cfg, baseMessages())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			assertReplyShipped(t, result, replies, tt.wantContent)
+			if len(mock.calls) != tt.wantCalls {
+				t.Errorf("LLM calls = %d, want %d", len(mock.calls), tt.wantCalls)
+			}
+			nudges := 0
+			for _, call := range mock.calls {
+				if n := len(call.Messages); n > 0 && call.Messages[n-1].Content == nudge {
+					nudges++
 				}
 			}
-			if fmt.Sprint(undelivered) != fmt.Sprint(tt.wantUndelivered) {
-				t.Errorf("left pending %q, want %q", undelivered, tt.wantUndelivered)
-			}
-			last := result.Messages[len(result.Messages)-1]
-			if last.Role != "assistant" || last.Content != tt.wantContent {
-				t.Errorf("history ends with %s %q, want the shipped assistant reply", last.Role, last.Content)
+			if nudges != tt.wantNudges {
+				t.Errorf("calls answering a nudge = %d, want %d", nudges, tt.wantNudges)
 			}
 		})
 	}
