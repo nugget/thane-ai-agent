@@ -3,6 +3,8 @@ package llm
 import (
 	"encoding/json"
 	"math"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -449,6 +451,12 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"bare tool_call tags", func(n int) string { return strings.Repeat("<tool_call>{", n) }},
 		{"harmony recipients", func(n int) string { return strings.Repeat("to=functions.a {", n) }},
 		{"empty tool_call tags", func(n int) string { return strings.Repeat("<tool_call></tool_call>", n) }},
+		// Each bare tag walks back over the tags before it, so only the
+		// bare-tag cap keeps these linear.
+		{"stacked tool_call tags", func(n int) string { return strings.Repeat("<tool_call>", n) }},
+		{"empty tool_call tags after a many-parameter call", func(n int) string {
+			return "<function=a>" + strings.Repeat("<parameter=b>c</parameter>", n) + "</function>" + strings.Repeat("<tool_call></tool_call>", n)
+		}},
 		{"cut-off calls", func(n int) string { return strings.Repeat(`{"name":"a","arguments":{}`, n) }},
 		{"call-shaped objects in a row", func(n int) string { return strings.Repeat(`{"name":"a","arguments":[1]} `, n) }},
 		{"qwen calls in a JSON call's arguments", func(n int) string {
@@ -465,19 +473,24 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"named data objects before a call", func(n int) string {
 			return strings.Repeat(`{"name":"x","state":"on"},`, n) + jsonCall
 		}},
-		// Every level is a candidate that parses but is not a call, so
-		// only the candidate cap keeps this linear. Depth stays under the
-		// JSON decoder's nesting limit, which would otherwise end it early.
-		{"nested call-shaped decoys", func(n int) string {
+		// Every level has a top-level name, and only the innermost has
+		// an arguments key, so no level is a candidate and none may be
+		// parsed. Depth stays under the JSON decoder's nesting limit.
+		{"nested named objects over an arguments key", func(n int) string {
 			return strings.Repeat(`{"name":"a","x":`, n/4) + `{"arguments":1}` + strings.Repeat("}", n/4)
 		}},
 	}
+	// The garbage collector runs between measurements, never during one:
+	// a cycle that starts mid-run spreads mark workers over every core,
+	// and process CPU time charges all of them to that run.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	// The fastest of several runs of each size, the sizes interleaved, so
 	// what contention CPU time still feels slows both alike.
 	measure := func(small, large string) (time.Duration, time.Duration) {
 		best := [2]time.Duration{math.MaxInt64, math.MaxInt64}
 		for range 5 {
 			for i, text := range []string{small, large} {
+				runtime.GC()
 				start := processCPUTime(t)
 				ScanWire(text, text, wireOffered)
 				best[i] = min(best[i], processCPUTime(t)-start)
