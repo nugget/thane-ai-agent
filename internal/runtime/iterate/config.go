@@ -213,10 +213,11 @@ func (c Config) outputBudgetExhausted(totalOutput int) bool {
 }
 
 // closureHoldBlocker names what rules out holding the turn open after
-// iteration i ended in a text reply that spent replyTokens, with
-// totalOutput spent so far including that reply: "last_iteration" when
-// no iteration remains to answer pulled input, "output_budget" when the
-// allowance left under MaxOutputTokens is smaller than that reply. It
+// iteration i ended in a text reply that cost replyTokens to write, with
+// totalOutput spent so far: "last_iteration" when no iteration remains to
+// answer pulled input, "output_budget" when the allowance left under
+// MaxOutputTokens is smaller than that reply. For text standing in for an
+// empty response, replyTokens is what the call that wrote it spent. It
 // returns "" when a hold may be taken.
 func (c Config) closureHoldBlocker(i, totalOutput, replyTokens int) string {
 	switch {

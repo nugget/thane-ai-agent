@@ -615,7 +615,8 @@ func TestEngine_ClosureHoldNeedsAnotherIteration(t *testing.T) {
 // remainder, so with less left its answer is likely cut short, and the
 // cut-short text (or the budget fallback) would replace a finished reply.
 // The reply ships instead, and the input stays with the caller, whose
-// re-wake starts a run with its own budget.
+// re-wake starts a run with its own budget. Text standing in for an empty
+// response is weighed at what its own call spent, not at the empty call.
 func TestEngine_ClosureHoldNeedsOutputAllowance(t *testing.T) {
 	reply := func(content string, outputTokens int) *llm.ChatResponse {
 		resp := textResponse(content)
@@ -625,12 +626,21 @@ func TestEngine_ClosureHoldNeedsOutputAllowance(t *testing.T) {
 	// What a held iteration capped at 5 tokens comes back with.
 	truncated := reply("Here are th", 5)
 	truncated.StopReason = "max_tokens"
-	const b = "B, sent while A was answered"
+	const (
+		b = "B, sent while A was answered"
+		c = "C, sent while B was answered"
+	)
+	mixed := reply("Checking A.", 95)
+	mixed.Message.ToolCalls = []llm.ToolCall{makeToolCall("search", map[string]any{"q": "A"})}
 
 	tests := []struct {
 		name            string
 		maxOutputTokens int
-		responses       []*llm.ChatResponse
+		deferMixed      bool
+		// arrivals defaults to B arriving during the first call; see
+		// scriptedArrivals.
+		arrivals  map[int]string
+		responses []*llm.ChatResponse
 		// wantPollsAt lists, for each PullInput poll in order, how many
 		// LLM calls had completed when it ran.
 		wantPollsAt     []int
@@ -666,6 +676,43 @@ func TestEngine_ClosureHoldNeedsOutputAllowance(t *testing.T) {
 			wantCalls:     2,
 			wantDelivered: []string{b},
 		},
+		{
+			name:            "held reply standing in for an empty one is weighed at its own cost",
+			maxOutputTokens: 190,
+			arrivals:        map[int]string{1: b, 2: c},
+			responses: []*llm.ChatResponse{
+				reply("Complete answer to A.", 95),
+				reply("", 5),
+				truncated,
+			},
+			// B is delivered at iteration 0's closure (95 left, 95-token
+			// reply). Iteration 1 comes back empty after 5 tokens and the
+			// held reply stands in; 90 left is less than the 95 it cost,
+			// so C is not polled and the held reply ships.
+			wantPollsAt:     []int{0, 1, 1},
+			wantContent:     "Complete answer to A.",
+			wantCalls:       2,
+			wantDelivered:   []string{b},
+			wantUndelivered: []string{c},
+		},
+		{
+			name:            "deferred text standing in for an empty one is weighed at its own cost",
+			maxOutputTokens: 190,
+			deferMixed:      true,
+			arrivals:        map[int]string{2: b},
+			responses: []*llm.ChatResponse{
+				mixed,
+				reply("", 5),
+				truncated,
+			},
+			// The text written beside the tool call stands in for the
+			// empty reply; 90 left is less than the 95 its call cost, so
+			// B is not polled and that text ships.
+			wantPollsAt:     []int{0, 1},
+			wantContent:     "Checking A.",
+			wantCalls:       2,
+			wantUndelivered: []string{b},
+		},
 	}
 
 	for _, tt := range tests {
@@ -673,7 +720,12 @@ func TestEngine_ClosureHoldNeedsOutputAllowance(t *testing.T) {
 			mock := &mockLLM{responses: tt.responses}
 			cfg := baseCfg(mock, &mockExecutor{})
 			cfg.MaxOutputTokens = tt.maxOutputTokens
-			input := newScriptedArrivals(mock, map[int]string{1: b})
+			cfg.DeferMixedText = tt.deferMixed
+			arrivals := tt.arrivals
+			if arrivals == nil {
+				arrivals = map[int]string{1: b}
+			}
+			input := newScriptedArrivals(mock, arrivals)
 			cfg.PullInput = input.pull
 			var replies []string
 			cfg.OnTextResponse = func(_ context.Context, content string, _ []llm.Message) {

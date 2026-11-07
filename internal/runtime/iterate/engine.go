@@ -47,7 +47,12 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		emptyRetried       bool
 		deferredText       string
 		heldReply          string
-		breakReason        string
+		// deferredTokens and heldTokens are the output tokens the calls
+		// that wrote deferredText and heldReply spent. A stand-in costs
+		// what its original call did, not the empty call it fills in for.
+		deferredTokens int
+		heldTokens     int
+		breakReason    string
 	)
 
 	for i := 0; i < cfg.MaxIterations; i++ {
@@ -251,6 +256,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			// deferredText, so #347's user-visible duplication stays fixed.
 			if cfg.DeferMixedText && llmResp.Message.Content != "" {
 				deferredText = llmResp.Message.Content
+				deferredTokens = llmResp.OutputTokens
 			}
 
 			if cfg.NormalizeToolCall != nil {
@@ -423,6 +429,12 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			deferredText = ""
 		}
 
+		// replyTokens is what the text this iteration ends on cost to
+		// write. A stand-in below takes its original call's cost, so the
+		// closure guard weighs the reply it would hold, not the empty
+		// response that reply fills in for.
+		replyTokens := llmResp.OutputTokens
+
 		// Handle empty responses. After tool call iterations this is a
 		// common failure mode, but first-turn empty completions are not
 		// useful either, so treat both paths consistently when nudging
@@ -436,6 +448,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				iterLog.Info("using deferred text from prior iteration",
 					"deferred_len", len(deferredText))
 				llmResp.Message.Content = deferredText
+				replyTokens = deferredTokens
 			} else if cfg.NudgeOnEmpty && !emptyRetried && i+1 < cfg.MaxIterations {
 				// The nudge needs a next iteration to answer it. On the
 				// last one it would end the loop on a user message,
@@ -460,6 +473,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				iterLog.Warn("empty response after a closure hold, returning the held reply",
 					"held_len", len(heldReply), "nudged", emptyRetried)
 				llmResp.Message.Content = heldReply
+				replyTokens = heldTokens
 			} else if cfg.NudgeOnEmpty && !emptyRetried {
 				// The nudge was not spent, but no iteration remains to
 				// answer it, so the run has run out. It ends the way any
@@ -521,13 +535,13 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// Loop.run), which is also where input past the drain budget goes.
 		// That re-wake is a new run with its own iterations and budget.
 		if cfg.PullInput != nil && llmResp.Message.Content != "" {
-			if blocker := cfg.closureHoldBlocker(i, totalOutput, llmResp.OutputTokens); blocker != "" {
+			if blocker := cfg.closureHoldBlocker(i, totalOutput, replyTokens); blocker != "" {
 				iterLog.Debug("closure poll skipped, reply closes the turn",
 					"blocker", blocker)
 			} else if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
 				messages = append(messages, llmResp.Message)
 				messages = append(messages, pulled...)
-				heldReply = llmResp.Message.Content
+				heldReply, heldTokens = llmResp.Message.Content, replyTokens
 				iterLog.Info("held turn open for input arriving at closure",
 					"pulled_messages", len(pulled))
 				continue
