@@ -163,8 +163,11 @@ type Response struct {
 	// Model names the model credited with the Run's last reply: the
 	// model the Run was calling when it ended, which failover can
 	// change mid-run, unless timeout recovery supplied the last
-	// response the Run reported. Then it is the recovery model, or the
-	// Run's own model for the static fallback that no model wrote.
+	// response the Run reported and the Run started no iteration after
+	// it. Then it is the recovery model, or the Run's own model for the
+	// static fallback that no model wrote. On the deferred-text path
+	// FinishReason describes, it is the model that returned the empty
+	// reply, though the text shipped is timeout recovery's.
 	Model string `json:"model"`
 	// FinishReason says why the Run ended. It is the engine's exhaust
 	// reason (max_iterations, token_budget, illegal_tool and the like)
@@ -2515,6 +2518,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 			iterEstimate = estimateRequest(msgs, toolDefs)
 			llmErr.requestReplaced = false
+			// This iteration's call follows any recovered reply, so a
+			// run that ends on it, as when it spends the rest of the
+			// output budget without answering, did not end on recovery.
+			llmErr.finalRecovered = false
 			callAttrs := []any{
 				"kind", events.KindLLMCall,
 				"iteration", i,
@@ -2779,9 +2786,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if err == nil {
 		// The engine names the model it was calling, which timeout
 		// recovery's reply leaves unchanged. Credit recovery's model
-		// when its response was the run's last, so the request records
-		// and the Response name it. A failed run ended on its failed
-		// call, and keeps the model that call went to.
+		// when its response was the run's last and no iteration's call
+		// followed it, so the request records and the Response name
+		// it. A run that ended on a later iteration's call, by failing
+		// or by spending the rest of the output budget, keeps the
+		// model that call went to.
 		iterResult.Model = llmErr.replyModel(iterResult.Model)
 	}
 	if iterResult != nil {
@@ -2931,11 +2940,14 @@ type llmErrorOutcome struct {
 	// engine's result cannot name it; see replyModel.
 	recoveredBy string
 	// finalRecovered says whether timeout recovery supplied the latest
-	// response the engine reported, which once the engine returns is
-	// the run's last. Run reads it to finish as timeout_recovery only
-	// when recovery wrote the reply the run ended on; every reported
-	// response overwrites it, so a recovered reply that a later call
-	// followed no longer counts.
+	// response the engine reported since the current iteration
+	// started. Every reported response overwrites it and Run clears it
+	// as each iteration starts, so a recovered reply that a later
+	// iteration's call followed no longer counts, even when that call
+	// ended the run without a response. The force-text call starts no
+	// iteration, so one that fails leaves it set. Run reads it to
+	// finish as timeout_recovery only when recovery wrote the reply the
+	// run ended on, and to credit that reply's model.
 	finalRecovered bool
 	// requestReplaced is set when the handler's response answers a
 	// request other than the iteration's own messages and tools, or
@@ -2947,8 +2959,8 @@ type llmErrorOutcome struct {
 // responseReported moves the handler's recovery mark onto the response
 // the engine just reported and says whether timeout recovery supplied
 // it. The response callback calls it for every response the engine
-// reports, the force-text call's among them, so finalRecovered always
-// describes the latest one.
+// reports, the force-text call's among them, so finalRecovered
+// describes the latest one until the next iteration starts.
 func (o *llmErrorOutcome) responseReported() bool {
 	recovered := o.recoveryAnswered
 	o.recoveryAnswered = false
@@ -2969,9 +2981,10 @@ func (o *llmErrorOutcome) recoveryReplied(model string) {
 
 // replyModel names the model to credit with a completed run's last
 // reply, given runModel, the model the engine was calling when the run
-// ended. When timeout recovery supplied the latest response the engine
-// reported, that is the model recovery credited the response to;
-// otherwise it is runModel.
+// ended. When finalRecovered says timeout recovery supplied the latest
+// response the engine reported and no iteration started after it, that
+// is the model recovery credited the response to; otherwise it is
+// runModel.
 func (o *llmErrorOutcome) replyModel(runModel string) string {
 	if o.finalRecovered {
 		return o.recoveredBy

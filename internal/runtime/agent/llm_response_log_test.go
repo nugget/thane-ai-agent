@@ -301,9 +301,10 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			// When that force-text call fails, the recovered response
 			// is the last one reported, but the run ends on the
 			// runtime's empty-response placeholder, not on it, so it
-			// still finishes with the reason it ran out. The Response
-			// credits the model of the last response the run reported,
-			// which is the recovery model's.
+			// still finishes with the reason it ran out. The force-text
+			// call starts no iteration, so the Response credits the
+			// model of the last response the run reported, which is the
+			// recovery model's.
 			name:          "timeout recovery with tool calls then force text fails",
 			recoveryModel: "claude-recovery",
 			maxIterations: 2,

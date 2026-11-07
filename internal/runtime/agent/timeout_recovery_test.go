@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
+	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
 )
 
 // --- isTimeout tests ---
@@ -368,54 +370,145 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 	}
 }
 
-// TestTimeoutRecovery_FailedRunKeepsRunModel pins the model a run that
-// failed after timeout recovery answered is recorded under. Recovery's
-// reply carried tool calls, the next call went back to the run's own
-// model and failed there, so the request record names that model, not
-// the recovery model whose response the run reported last.
-func TestTimeoutRecovery_FailedRunKeepsRunModel(t *testing.T) {
+// TestTimeoutRecovery_LaterCallKeepsRunModel pins the model a run is
+// recorded under when a call after timeout recovery's reply ends it.
+// Recovery answered one call, and the next went back to the run's own
+// model and ended the run there, by failing or by spending the rest of
+// the output budget. The request record, and the Response when the run
+// completes, name that model, not the recovery model whose response the
+// run reported last.
+func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 	t.Parallel()
 
-	loop, _, _ := newAccountingTestLoop(t)
-	loop.recoveryModel = "claude-recovery"
 	failure := errors.New("provider unavailable")
-	var dispatched []string
-	loop.llm = accountingTestClient{call: func(_ context.Context, model string, _ []map[string]any) (*llm.ChatResponse, error) {
-		dispatched = append(dispatched, model)
-		switch len(dispatched) {
-		case 1:
-			return accountingToolResponse(), nil
-		case 2, 3, 4:
-			return nil, errTestTimeout
-		case 5:
-			resp := accountingToolResponse()
-			resp.Model = model
-			resp.Message.ToolCalls[0].ID = "recovery-call"
-			return resp, nil
-		case 6:
-			return nil, failure
-		default:
-			return nil, fmt.Errorf("unexpected model call %d", len(dispatched))
-		}
-	}}
-	var live logging.RequestContent
-	loop.liveRequestRecorder = func(_ context.Context, content logging.RequestContent) { live = content }
+	recoveredToolCall := func(model string) *llm.ChatResponse {
+		resp := accountingToolResponse()
+		resp.Model = model
+		resp.Message.ToolCalls[0].ID = "recovery-call"
+		return resp
+	}
+	tests := []struct {
+		name string
+		// maxOutputTokens is the request's output budget; zero is
+		// none.
+		maxOutputTokens int
+		// recovered is the recovery model's reply to the fifth call.
+		recovered func(model string) *llm.ChatResponse
+		// pullAtClosure delivers one user message as the recovered
+		// reply closes, which holds the turn open.
+		pullAtClosure bool
+		// laterOutputTokens is what the sixth call, on the run's own
+		// model, spends before it fails with laterErr.
+		laterOutputTokens int
+		laterErr          error
+		// wantErr is the error Run fails with; nil when it completes.
+		wantErr    error
+		wantFinish string
+	}{
+		{
+			// The explicit request model rules failover out, so the
+			// failure ends the run.
+			name:      "fails after recovered tool calls",
+			recovered: recoveredToolCall,
+			laterErr:  failure,
+			wantErr:   failure,
+		},
+		{
+			name:            "spends the budget answering input at closure",
+			maxOutputTokens: 50,
+			recovered: func(model string) *llm.ChatResponse {
+				return &llm.ChatResponse{
+					Model: model, StopReason: "end_turn", OutputTokens: 20,
+					Message: llm.Message{Role: "assistant", Content: "Recovered."},
+				}
+			},
+			pullAtClosure:     true,
+			laterOutputTokens: 20,
+			laterErr:          errors.New("stream reset"),
+			wantFinish:        iterate.ExhaustTokenBudget,
+		},
+		{
+			name:              "spends the budget after recovered tool calls",
+			maxOutputTokens:   50,
+			recovered:         recoveredToolCall,
+			laterOutputTokens: 30,
+			laterErr:          errors.New("stream reset"),
+			wantFinish:        iterate.ExhaustTokenBudget,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			loop, _, _ := newAccountingTestLoop(t)
+			loop.recoveryModel = "claude-recovery"
+			var dispatched []string
+			loop.llm = accountingTestClient{call: func(_ context.Context, model string, _ []map[string]any) (*llm.ChatResponse, error) {
+				dispatched = append(dispatched, model)
+				switch len(dispatched) {
+				case 1:
+					return accountingToolResponse(), nil
+				case 2, 3, 4:
+					return nil, errTestTimeout
+				case 5:
+					return tt.recovered(model), nil
+				case 6:
+					if tt.laterOutputTokens > 0 {
+						return &llm.ChatResponse{Model: model, OutputTokens: tt.laterOutputTokens}, tt.laterErr
+					}
+					return nil, tt.laterErr
+				default:
+					return nil, fmt.Errorf("unexpected model call %d", len(dispatched))
+				}
+			}}
+			var pullInput func(context.Context) []llm.Message
+			if tt.pullAtClosure {
+				delivered := false
+				pullInput = func(context.Context) []llm.Message {
+					if delivered || len(dispatched) < 5 {
+						return nil
+					}
+					delivered = true
+					return []llm.Message{{Role: "user", Content: "And the tests?"}}
+				}
+			}
+			var live logging.RequestContent
+			loop.liveRequestRecorder = func(_ context.Context, content logging.RequestContent) { live = content }
 
-	// The explicit model rules failover out, so the failure ends the run.
-	resp, err := loop.Run(context.Background(), &Request{
-		ConversationID: "failed-after-recovery",
-		Model:          "claude-primary",
-		Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
-	}, nil)
-	if resp != nil || !errors.Is(err, failure) {
-		t.Fatalf("Run = %+v, %v; want the failed call's error", resp, err)
-	}
-	want := []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery", "claude-primary"}
-	if !slices.Equal(dispatched, want) {
-		t.Errorf("dispatched models = %v, want %v", dispatched, want)
-	}
-	if live.Model != "claude-primary" {
-		t.Errorf("live request model = %q, want claude-primary", live.Model)
+			resp, err := loop.Run(context.Background(), &Request{
+				ConversationID:  "later-call-after-recovery",
+				Model:           "claude-primary",
+				MaxOutputTokens: tt.maxOutputTokens,
+				Messages:        []Message{{Role: "user", Content: "Inspect the source."}},
+				PullInput:       pullInput,
+			}, nil)
+			want := []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery", "claude-primary"}
+			if !slices.Equal(dispatched, want) {
+				t.Errorf("dispatched models = %v, want %v", dispatched, want)
+			}
+			if live.Model != "claude-primary" {
+				t.Errorf("live request model = %q, want claude-primary", live.Model)
+			}
+			if tt.wantErr != nil {
+				if resp != nil || !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Run = %+v, %v; want the failed call's error", resp, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if resp.FinishReason != tt.wantFinish {
+				t.Errorf("finish reason = %q, want %q", resp.FinishReason, tt.wantFinish)
+			}
+			if resp.Model != "claude-primary" {
+				t.Errorf("response model = %q, want claude-primary", resp.Model)
+			}
+			// The run ended on the runtime's placeholder, not on the
+			// recovered reply.
+			if resp.Content != prompts.EmptyResponseFallback {
+				t.Errorf("content = %q, want the empty-response fallback", resp.Content)
+			}
+		})
 	}
 }
 
