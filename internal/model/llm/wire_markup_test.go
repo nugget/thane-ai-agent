@@ -469,20 +469,23 @@ func TestScanWireScalesLinearly(t *testing.T) {
 			return strings.Repeat(`{"name":"a","x":`, n/4) + `{"arguments":1}` + strings.Repeat("}", n/4)
 		}},
 	}
-	// fastest of a few runs, so a scheduler hiccup cannot fake a slope.
-	measure := func(text string) time.Duration {
-		best := time.Duration(math.MaxInt64)
-		for range 3 {
-			start := time.Now()
-			ScanWire(text, text, wireOffered)
-			best = min(best, time.Since(start))
+	// The fastest of several runs of each size, the sizes interleaved, so
+	// a scheduler hiccup or a busy stretch on a shared CI runner slows
+	// both alike instead of landing on the large runs and faking a slope.
+	measure := func(small, large string) (time.Duration, time.Duration) {
+		best := [2]time.Duration{math.MaxInt64, math.MaxInt64}
+		for range 5 {
+			for i, text := range []string{small, large} {
+				start := time.Now()
+				ScanWire(text, text, wireOffered)
+				best[i] = min(best[i], time.Since(start))
+			}
 		}
-		return max(best, time.Microsecond)
+		return max(best[0], time.Microsecond), max(best[1], time.Microsecond)
 	}
 	for _, in := range inputs {
 		t.Run(in.name, func(t *testing.T) {
-			small := measure(in.text(base))
-			large := measure(in.text(base * factor))
+			small, large := measure(in.text(base), in.text(base*factor))
 			if ratio := float64(large) / float64(small); ratio > bound {
 				t.Fatalf("x%d input took x%.1f as long (%v -> %v), want under x%.0f", factor, ratio, small, large, bound)
 			}
