@@ -468,9 +468,23 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// boundary. OnTextResponse is deliberately NOT fired here — this is
 		// not the turn's final reply, so memory/fact-extraction waits for the
 		// real close. The callback's shared per-turn drain budget bounds how
-		// many times a turn can be held open; the remainder rides the
-		// immediate post-turn re-wake.
-		if cfg.PullInput != nil && llmResp.Message.Content != "" {
+		// many times a turn can be held open.
+		//
+		// A hold needs an iteration left to answer what it pulls, so the
+		// last allowed iteration does not poll here at all. Holding there
+		// ended the loop on the pulled user message, which force-text
+		// recovery does not answer: the run returned no content, the reply
+		// was dropped, and the input was drained into a turn that never
+		// answered it. Polling and then declining the hold would not help,
+		// since whatever the callback returns counts as delivered (the loop
+		// acks it with the turn). Unpolled, the input stays with the caller;
+		// the loop's mailbox acks only the wake batch and what was pulled,
+		// then re-wakes on whatever is still pending (the post-turn ack and
+		// wakeIfMailboxNonEmpty in internal/runtime/loop's Loop.run), which
+		// is also where input past the drain budget goes. A spent output
+		// budget never reaches this point: the budget check above returns
+		// first.
+		if cfg.PullInput != nil && llmResp.Message.Content != "" && i+1 < cfg.MaxIterations {
 			if pulled := cfg.PullInput(iterCtx); len(pulled) > 0 {
 				messages = append(messages, llmResp.Message)
 				messages = append(messages, pulled...)

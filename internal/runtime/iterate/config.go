@@ -137,6 +137,14 @@ type Config struct {
 	// proceeds with them in context. This is the seam that merges
 	// newly-arrived conversation input into a live turn (#1221): a long
 	// tool-heavy turn becomes aware of messages that arrive while it works.
+	//
+	// It is polled once more when an iteration ends in a text reply and
+	// another iteration remains. A non-empty return there holds the turn
+	// open: the reply joins history without reaching OnTextResponse, the
+	// input follows it, and the next iteration answers both. The last
+	// allowed iteration skips this poll, so its reply closes the turn and
+	// input that arrived while it was composed stays with the caller.
+	//
 	// Nil disables mid-turn input. The callback owns delta-gating (return
 	// only what is new) and any per-turn drain budget (return empty once
 	// spent); the engine appends whatever it returns without inspection.
