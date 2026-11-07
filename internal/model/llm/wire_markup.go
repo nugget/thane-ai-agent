@@ -102,8 +102,8 @@ func (s WireScan) Found() bool { return s.Markup != "" }
 // call's data and never a call of its own, whatever either grammar.
 // One exception follows from the Qwen grammar: a parameter value ends
 // at the next <function= or <tool_call> tag, because a call cut off
-// before the next call is the likelier reading, so such a tag always
-// begins a call.
+// before the next call is the likelier reading, so such a tag inside a
+// Qwen value begins a call.
 func ScanWire(content, reasoning string, offered []string) WireScan {
 	if f, ok := scanWireText(content); ok {
 		return f.scan(content, WireLocationContent, offered)
@@ -119,12 +119,13 @@ func ScanWire(content, reasoning string, offered []string) WireScan {
 // and cut-off JSON calls, and Harmony recipients. Every candidate costs
 // a parse over its span, so an adversarial or runaway text with
 // thousands of calls would otherwise make a detection pass quadratic.
-// Only call-shaped markup is a candidate: named JSON data never is,
-// and the JSON and Harmony detectors skip what sits inside their own
-// closed calls' arguments. A detector cannot see another grammar's
-// arguments, though, so markup quoted there is charged too, and a real
-// call is hidden only behind this many earlier pieces of markup of its
-// own kind, wherever they sit. Real replies carry a handful of calls.
+// Only call-shaped markup is a candidate: named JSON data never is, and
+// the JSON detector skips objects inside its own closed calls. Other
+// nested markup is charged, Harmony recipients quoted in a Harmony
+// value and markup quoted in another grammar's arguments alike, so a
+// real call is hidden only behind this many earlier pieces of markup
+// of its own kind, wherever they sit. Real replies carry a handful of
+// calls.
 const maxWireCandidates = 16
 
 // wireFinding is one detector's view of a call before it is reduced to
@@ -148,8 +149,9 @@ type wireCandidate struct {
 	// opening brace, <function= or <tool_call> tag, or recipient.
 	anchor int
 	// data are the spans holding the call's argument data: a JSON
-	// call's object, a Harmony argument object, or Qwen parameter
-	// values. A span cut off by the end of the text runs to its end.
+	// call's object, a Harmony argument value, or Qwen parameter
+	// values. A value that never closes runs as far as its grammar
+	// lets it, at most to the end of the text.
 	data []textRange
 }
 

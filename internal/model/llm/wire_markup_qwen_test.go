@@ -136,6 +136,11 @@ func TestParseQwenXMLValueSpans(t *testing.T) {
 			want: []string{"\nx\n", "\ny\n"},
 		},
 		{
+			name: "values after a broken parameter header",
+			text: "<function=note_add>\n<parameter=a\n<parameter=text>\ny\n</parameter>\n</function>",
+			want: []string{"\ny\n"},
+		},
+		{
 			name: "values after free text in the body",
 			text: "<function=note_add>\njunk\n<parameter=text>\ny\n</parameter>\n</function>",
 			want: []string{"\ny\n"},

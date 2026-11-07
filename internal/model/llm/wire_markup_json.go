@@ -18,8 +18,10 @@ import (
 // result or tool list costs nothing, even when "arguments" appears
 // deeper inside it or as a value, so no amount of it can hide a later
 // call. Objects nested in a closed call are its data and are skipped.
-// Those inside a cut-off call are examined: where a cut-off call ends
-// is a guess, and the scan excludes what truly lies in its data.
+// Closed objects inside a cut-off candidate are examined, because where
+// a cut-off call ends is a guess and the scan excludes what truly lies
+// in its data. Past the candidate limit no cut-off call contributes
+// data, so closed objects inside those are skipped instead.
 func jsonCallCandidates(text string) []wireCandidate {
 	if !strings.Contains(text, `"name"`) {
 		return nil
@@ -27,8 +29,15 @@ func jsonCallCandidates(text string) []wireCandidate {
 	closed, unclosed := braceSpans(text)
 	cutOffs := cutOffCalls(text, closed, unclosed)
 	var out []wireCandidate
-	skipUntil, attempts := -1, 0
+	uncounted := cutOffs[min(len(cutOffs), maxWireCandidates):]
+	skipUntil, attempts, c := -1, 0, 0
 	for _, sp := range closed {
+		for c < len(uncounted) && sp.start >= uncounted[c].end {
+			c++
+		}
+		if c < len(uncounted) && sp.start > uncounted[c].start {
+			continue
+		}
 		if sp.start < skipUntil || sp.nameKey < 0 || !sp.argued {
 			continue
 		}
@@ -332,40 +341,20 @@ func noteObjectKey(obj *openObject, text string, start, end int) {
 	}
 }
 
-// jsonNameKeyOffsets returns the ascending offsets of every quoted
-// "name" key, meaning "name" followed by a colon.
-func jsonNameKeyOffsets(text string) []int {
-	var out []int
-	for pos := 0; ; {
-		i := strings.Index(text[pos:], `"name"`)
-		if i < 0 {
-			return out
-		}
-		at := pos + i
-		pos = at + len(`"name"`)
-		if rest := strings.TrimLeft(text[pos:], " \t\r\n"); strings.HasPrefix(rest, ":") {
-			out = append(out, at)
-		}
-	}
-}
-
-// looseJSONName reads the string value of the first "name" key in s
-// without requiring the surrounding JSON to parse, so a truncated or
-// invalid call still reports whether it named an offered tool. Callers
-// pass s starting at the call's own top-level key.
+// looseJSONName reads the string value of the "name" key that s
+// starts with, without requiring the surrounding JSON to parse, so a
+// truncated or invalid call still reports whether it named an offered
+// tool. Callers pass s from the call's own top-level key.
 func looseJSONName(s string) string {
-	offsets := jsonNameKeyOffsets(s)
-	if len(offsets) == 0 {
-		return ""
-	}
-	rest := strings.TrimLeft(s[offsets[0]+len(`"name"`):], " \t\r\n")
+	rest := strings.TrimLeft(strings.TrimPrefix(s, `"name"`), " \t\r\n")
 	rest = strings.TrimLeft(strings.TrimPrefix(rest, ":"), " \t\r\n")
-	if !strings.HasPrefix(rest, `"`) {
+	end, closed := jsonStringEnd(rest)
+	if !closed {
 		return ""
 	}
-	end := strings.IndexByte(rest[1:], '"')
-	if end < 0 {
+	var name string
+	if json.Unmarshal([]byte(rest[:end]), &name) != nil {
 		return ""
 	}
-	return rest[1 : 1+end]
+	return name
 }

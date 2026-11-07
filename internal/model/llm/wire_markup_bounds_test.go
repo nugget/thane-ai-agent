@@ -133,11 +133,53 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupHarmony, true, true, false),
 		},
 		{
-			// Recipients quoted in a closed argument value are skipped
-			// rather than charged against the candidate limit.
-			name:    "a recipient after a closed value quoting many recipients",
-			content: `to=functions.note_add {"t":"` + strings.Repeat(`to=functions.x {} `, maxWireCandidates) + `", bad} to=functions.get_state {}`,
+			name:    "recipients quoted in a closed harmony value are its data",
+			content: `to=functions.note_add {"t":"` + strings.Repeat(`to=functions.x {} `, 3) + `", bad} to=functions.get_state {}`,
 			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "a recipient after one quoted in a JSON string",
+			content: `{"name":"note_add","arguments":"see to=functions.x"} to=functions.get_state {"entity_id":"light.kitchen"}`,
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			// The nested recipient's value is read with its quotes paired
+			// the wrong way, so it closes past the next real recipient.
+			name:    "a recipient after one quoted in an unclosed harmony value",
+			content: "to=functions.note_add {\"text\":\"to=functions.x {\"\nto=functions.note_add {\"text\":\"}\"}",
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "prose quoting a recipient before a call",
+			content: "I'll use \"to=functions.get_state\" instead.\n" + qwenGetState,
+			want:    scan(WireMarkupQwenXML, true, true, true),
+		},
+		{
+			name:    "an end token in a string ends an unclosed harmony value",
+			content: "to=functions.note_add {\"text\":\"hi<|call|>\n<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"Paris\"}<|call|>",
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "a tag outside a string ends an unclosed harmony value",
+			content: "to=functions.note_add {\"x\": 1<|channel|>" + qwenGetState,
+			want:    scan(WireMarkupQwenXML, true, true, true),
+		},
+		{
+			name:    "a recipient's message ending before any arguments",
+			content: `<|channel|>commentary to=functions.get_state <|constrain|>json<|message|><|call|><|start|>assistant<|channel|>final<|message|>{"done":true}`,
+			want:    scan(WireMarkupHarmony, false, true, false),
+		},
+		{
+			name:    "JSON call in a qwen value after a broken parameter header",
+			content: "<function=note_add>\n<parameter=a\n<parameter=text>\n" + jsonCall + "\n</parameter>\n</function>",
+			want:    scan(WireMarkupQwenXML, false, true, false),
+		},
+		{
+			// Past the candidate limit a cut-off call marks no data, so
+			// the objects inside it are skipped instead.
+			name:    "a closed call nested in a cut-off call past the limit",
+			content: strings.Repeat("{\"name\":\"a\",\"arguments\":{}\n", maxWireCandidates) + `{"name":"loop_create","arguments":{"name":"get_state","arguments":{}}`,
+			want:    scan(WireMarkupJSONCall, false, false, false),
 		},
 		// A malformed call is named by its own top-level key.
 		{

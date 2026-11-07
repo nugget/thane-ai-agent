@@ -23,12 +23,12 @@ var harmonyHeaderTokens = []string{"<|start|>", "<|channel|>", "assistant", "com
 var harmonyEndTokens = []string{"<|call|>", "<|end|>", "<|return|>", "<|start|>"}
 
 // harmonyCandidates finds to=functions.NAME recipients and judges the
-// JSON argument object that follows each. A recipient inside an earlier
-// recipient's closed arguments is that call's data, so the search
-// resumes past them. Past a value that never closed it resumes after
-// the name instead: where such a value ends is a guess, and a guess
-// made inside another call's data could swallow a later real call. The
-// scan still excludes what lies inside it.
+// JSON argument object that follows each. The search resumes right
+// after each name, never past its value: a value is read from wherever
+// its recipient sits, even inside another call's string, where its
+// quotes pair up the wrong way and its end can land past a real
+// recipient. Recipients nested in a value are examined, and the scan
+// excludes them as that value's data.
 func harmonyCandidates(text string) []wireCandidate {
 	var out []wireCandidate
 	for pos := 0; len(out) < maxWireCandidates; {
@@ -44,10 +44,12 @@ func harmonyCandidates(text string) []wireCandidate {
 }
 
 // parseHarmonyCall reads the recipient at anchor and its argument
-// value. The call is well-formed only when that value is a JSON object
-// that closes; any JSON value, whatever its type, is the call's data.
-// It also returns where the search for the next recipient resumes:
-// past a closed value, or after the name.
+// value, and returns where the search for the next recipient resumes.
+// The call is well-formed only when the value is a JSON object that
+// closes; an array is the call's data but never well-formed. A quote
+// after the name is not read as a string value: prose quoting a
+// recipient is far likelier than stringified Harmony arguments, and
+// reading the rest of that prose as a string would hide later calls.
 func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
 	c := wireCandidate{
 		wireFinding: wireFinding{markup: WireMarkupHarmony, start: markupStart(text, anchor, harmonyHeaderTokens)},
@@ -71,19 +73,16 @@ func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
 		return c, nameEnd
 	}
 	open := nameEnd + at
-	if b := text[open]; b != '{' && b != '[' && b != '"' {
+	if b := text[open]; b != '{' && b != '[' {
 		return c, nameEnd
 	}
 	end, closed := harmonyValueEnd(text, open)
 	c.data = []textRange{{open + 1, end}}
-	if !closed {
-		return c, nameEnd
-	}
-	if text[open] == '{' {
+	if closed && text[open] == '{' {
 		var obj map[string]any
 		c.wellFormed = json.Unmarshal([]byte(text[open:end]), &obj) == nil
 	}
-	return c, end
+	return c, nameEnd
 }
 
 // harmonyArgsStart returns the offset in window where a recipient's
@@ -94,7 +93,8 @@ func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
 // begins at the first byte that is none of those, so json[...] begins
 // at its bracket rather than at an object inside it, and a token quoted
 // inside the value stays in the value. It returns -1 when the window
-// holds nothing but header.
+// holds nothing but header, or when an end token closes the
+// recipient's message first: a value after it belongs to a later one.
 func harmonyArgsStart(window string) int {
 	for pos := 0; pos < len(window); {
 		switch c := window[pos]; {
@@ -102,7 +102,7 @@ func harmonyArgsStart(window string) int {
 			pos++
 		case strings.HasPrefix(window[pos:], "<|"):
 			end := strings.Index(window[pos:], "|>")
-			if end < 0 {
+			if end < 0 || hasAnyPrefix(window[pos:], harmonyEndTokens) {
 				return -1
 			}
 			pos += end + len("|>")
@@ -114,11 +114,11 @@ func harmonyArgsStart(window string) int {
 }
 
 // harmonyValueEnd returns the offset just past the JSON value opening
-// at text[open], a brace, bracket or quote, and whether it closed. A
-// value that never closes ends where its message does: at an end token
-// anywhere, or, outside a string, at another special token or a next
-// recipient, neither of which JSON can hold. Only failing those, it
-// runs to the end of the text.
+// at text[open], a brace or bracket, and whether it closed. A value
+// that never closes ends where its message does: at an end token
+// anywhere, or, outside a string, at a '<' (a special token or another
+// grammar's tag, neither of which JSON can hold there) or at a next
+// recipient. Only failing those, it runs to the end of the text.
 func harmonyValueEnd(text string, open int) (int, bool) {
 	depth, inString, escaped := 0, false, false
 	for i := open; i < len(text); i++ {
@@ -134,9 +134,6 @@ func harmonyValueEnd(text string, open int) (int, bool) {
 				escaped = true
 			case c == '"':
 				inString = false
-				if depth == 0 {
-					return i + 1, true
-				}
 			}
 			continue
 		}
@@ -149,8 +146,7 @@ func harmonyValueEnd(text string, open int) (int, bool) {
 			if depth--; depth <= 0 {
 				return i + 1, true
 			}
-		case c == '<' && strings.HasPrefix(text[i:], "<|"),
-			c == 't' && strings.HasPrefix(text[i:], harmonyRecipient):
+		case c == '<', c == 't' && strings.HasPrefix(text[i:], harmonyRecipient):
 			return i, false
 		}
 	}

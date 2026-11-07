@@ -447,6 +447,7 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"bare tool_call tags", func(n int) string { return strings.Repeat("<tool_call>{", n) }},
 		{"harmony recipients", func(n int) string { return strings.Repeat("to=functions.a {", n) }},
 		{"empty tool_call tags", func(n int) string { return strings.Repeat("<tool_call></tool_call>", n) }},
+		{"cut-off calls", func(n int) string { return strings.Repeat(`{"name":"a","arguments":{}`, n) }},
 		{"qwen calls in a JSON call's arguments", func(n int) string {
 			return `{"name":"a","arguments":"` + strings.Repeat("<function=b></function>", n) + `"}`
 		}},
