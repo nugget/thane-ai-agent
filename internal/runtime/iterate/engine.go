@@ -660,17 +660,16 @@ func latestUpstreamRequestID(iters []IterationRecord) string {
 	return ""
 }
 
-// peakInputTokens returns the largest single-call input token count among
-// the recorded iterations. It reads the records rather than tracking a
-// running maximum beside totalInput so the two can never disagree: every
-// Result site already derives from this slice, and a call that failed
-// before producing a record contributes no usage to either number.
+// peakInputTokens returns the largest single-call prompt among the
+// recorded iterations, cached tokens included (see [PromptTokens]). It
+// reads the records rather than tracking a running maximum beside
+// totalInput so the two can never disagree: every Result site already
+// derives from this slice, and a call that failed before producing a
+// record contributes no usage to either number.
 func peakInputTokens(iters []IterationRecord) int {
 	peak := 0
 	for _, it := range iters {
-		if it.InputTokens > peak {
-			peak = it.InputTokens
-		}
+		peak = max(peak, PromptTokens(it.InputTokens, it.CacheCreationInputTokens, it.CacheReadInputTokens))
 	}
 	return peak
 }

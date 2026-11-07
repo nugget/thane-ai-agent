@@ -53,6 +53,18 @@ type IterationRecord struct {
 	BreakReason                string
 }
 
+// PromptTokens returns the size of one model call's whole prompt. Token
+// usage reports the prompt in three disjoint parts: input is the
+// uncached tail, cacheCreation is what the call wrote to the prompt
+// cache, and cacheRead is what the cache served. Anthropic's
+// input_tokens excludes both cache counts, so input alone shrinks as
+// caching improves while the prompt stays the same size. The per-TTL
+// cache-write counts break down cacheCreation and must not be added
+// again.
+func PromptTokens(input, cacheCreation, cacheRead int) int {
+	return input + cacheCreation + cacheRead
+}
+
 // Result is the outcome of an [Engine.Run] execution.
 type Result struct {
 	// Content is the final text response from the model.
@@ -81,10 +93,13 @@ type Result struct {
 	// compared against a context window.
 	InputTokens int
 
-	// PeakInputTokens is the largest single-call input token count among
-	// the iterations — the closest this turn came to the model's context
-	// limit, and the only one of the two that is comparable to a context
-	// window. Zero when no iteration reported usage.
+	// PeakInputTokens is the largest single-call prompt among the
+	// iterations, measured by [PromptTokens]: uncached input plus cache
+	// writes plus cache reads. It is the closest this turn came to the
+	// model's context limit, and the only input figure comparable to a
+	// context window. Counting only InputTokens would understate a
+	// well-cached call by everything the cache served. Zero when no
+	// iteration reported usage.
 	PeakInputTokens int
 
 	// OutputTokens is the cumulative output token count across all iterations.

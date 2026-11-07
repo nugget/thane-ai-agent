@@ -474,10 +474,11 @@ type IterationResult struct {
 	// model call this iteration made — the iteration's input spend, not
 	// the size of any one prompt.
 	InputTokens int
-	// PeakInputTokens is the largest single call's input token count in
-	// this iteration. Compare this against ContextWindow; InputTokens
-	// sums the system prompt and tool definitions once per model call
-	// and so exceeds the window long before any prompt approaches it.
+	// PeakInputTokens is the largest single call's whole prompt in this
+	// iteration: uncached input plus cache writes plus cache reads.
+	// Compare this against ContextWindow; InputTokens sums the system
+	// prompt and tool definitions once per model call and so exceeds the
+	// window long before any prompt approaches it.
 	PeakInputTokens int
 	// OutputTokens is the number of output tokens produced.
 	OutputTokens int
@@ -534,11 +535,11 @@ type IterationSnapshot struct {
 	// InputTokens consumed by this iteration, summed over every model
 	// call it made.
 	InputTokens int `json:"input_tokens,omitempty"`
-	// PeakInputTokens is the largest single model call within this
-	// iteration — the figure to compare against ContextWindow. Summing
-	// the calls counts the system prompt and tool definitions once per
-	// call, so InputTokens outruns the window without any prompt
-	// approaching it.
+	// PeakInputTokens is the largest single model call's whole prompt
+	// within this iteration, cached tokens included — the figure to
+	// compare against ContextWindow. Summing the calls counts the system
+	// prompt and tool definitions once per call, so InputTokens outruns
+	// the window without any prompt approaching it.
 	PeakInputTokens int `json:"peak_input_tokens,omitempty"`
 	// OutputTokens produced by this iteration.
 	OutputTokens int `json:"output_tokens,omitempty"`
@@ -660,9 +661,11 @@ type Status struct {
 	// in total, summed over every model call it made. It is a spend
 	// figure, not a prompt size.
 	LastInputTokens int `json:"last_input_tokens,omitempty"`
-	// LastPeakInputTokens is the largest single model call within that
-	// iteration — how close the turn actually came to the context
-	// window, and the figure ContextFillPct is derived from.
+	// LastPeakInputTokens is the largest single model call's whole
+	// prompt within that iteration, cached tokens included — how close
+	// the turn actually came to the context window, and the figure
+	// ContextFillPct is derived from. A prompt served from the cache
+	// fills the window as much as one sent fresh.
 	LastPeakInputTokens int `json:"last_peak_input_tokens,omitempty"`
 	// LastOutputTokens is the output token count from the most recent iteration.
 	LastOutputTokens int `json:"last_output_tokens,omitempty"`

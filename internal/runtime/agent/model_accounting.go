@@ -132,6 +132,9 @@ func (a *modelCallAccounting) persist(ctx context.Context) {
 	}
 }
 
+// applyTotals replaces the engine's totals with the recorded calls, so
+// retries and recovery calls count. Spend sums every call; the peak is
+// the largest single call's whole prompt (see [iterate.PromptTokens]).
 func (a *modelCallAccounting) applyTotals(result *iterate.Result) {
 	if result == nil {
 		return
@@ -141,7 +144,7 @@ func (a *modelCallAccounting) applyTotals(result *iterate.Result) {
 	for _, r := range a.calls {
 		result.InputTokens += r.InputTokens
 		result.OutputTokens += r.OutputTokens
-		result.PeakInputTokens = max(result.PeakInputTokens, r.InputTokens)
+		result.PeakInputTokens = max(result.PeakInputTokens, iterate.PromptTokens(r.InputTokens, r.CacheCreationInputTokens, r.CacheReadInputTokens))
 		result.CacheCreationInputTokens += r.CacheCreationInputTokens
 		result.CacheCreation5mInputTokens += r.CacheCreation5mInputTokens
 		result.CacheCreation1hInputTokens += r.CacheCreation1hInputTokens

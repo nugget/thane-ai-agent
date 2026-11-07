@@ -134,10 +134,12 @@ type LoopView struct {
 	TotalInputTokens  *int `json:"total_input_tokens"`
 	TotalOutputTokens *int `json:"total_output_tokens"`
 	LastInputTokens   *int `json:"last_input_tokens"`
-	// LastPeakInputTokens is the largest single model call of the last
-	// turn. ContextFillPct is this over ContextWindow — never
-	// LastInputTokens, which sums the whole turn and would report a
-	// five-call turn as five times as full as the same prompt sent once.
+	// LastPeakInputTokens is the whole prompt of the largest single
+	// model call of the last turn, cached tokens included (as
+	// iterate.PromptTokens counts it). ContextFillPct is this over
+	// ContextWindow — never LastInputTokens, which sums the whole turn
+	// and would report a five-call turn as five times as full as the
+	// same prompt sent once.
 	LastPeakInputTokens *int `json:"last_peak_input_tokens"`
 	ContextWindow       *int `json:"context_window"`
 	ContextFillPct      *int `json:"context_fill_pct"`

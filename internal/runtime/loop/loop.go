@@ -251,9 +251,11 @@ type Loop struct {
 	totalInputTokens  int
 	totalOutputTokens int
 	lastInputTokens   int
-	// lastPeakInputTokens is the largest single model call of the most
-	// recent turn. It is the only token figure comparable to
-	// contextWindow; lastInputTokens sums every call in the turn.
+	// lastPeakInputTokens is the whole prompt of the largest single
+	// model call of the most recent turn, cached tokens included (as
+	// iterate.PromptTokens counts it). It is the only token figure
+	// comparable to contextWindow; lastInputTokens sums every call in
+	// the turn.
 	lastPeakInputTokens int
 	lastOutputTokens    int
 	contextWindow       int

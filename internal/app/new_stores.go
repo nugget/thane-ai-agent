@@ -485,6 +485,7 @@ func (a *App) initStores(s *newState) error {
 		BatchSize:       10,
 		ModelPreference: cfg.Archive.MetadataModel,
 		IdleTimeout:     time.Duration(idleTimeoutMinutes) * time.Minute,
+		OnIdleClose:     archiveAdapter.ForgetSession,
 	}
 	summaryWorker := memory.NewSummarizerWorker(archiveStore, a.auxiliaryUsageClient("session_summary"), rtr, logger, summarizerCfg)
 	a.summaryWorker = summaryWorker

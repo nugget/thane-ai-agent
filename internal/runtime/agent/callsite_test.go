@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -270,7 +272,9 @@ func TestRun_StampsCallSite(t *testing.T) {
 // it, too, goes out without tools. The loaded instance
 // has no id, so the retry returns through the loop's own client where
 // the recorder can see it; the direct-instance branch is handed the same
-// stamped context.
+// stamped context. The response line carries the iteration's request
+// estimate only when the retry resent that request: a retry that dropped
+// the tools answered a smaller one.
 func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 	t.Parallel()
 
@@ -290,6 +294,9 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 		// the model no tools at all.
 		noTools bool
 		want    []llm.CallSite
+		// responseEstimate says whether the llm response line must
+		// carry est_request_tokens.
+		responseEstimate bool
 	}{
 		{
 			name:               "refreshed window retries with tools",
@@ -300,6 +307,7 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 				{Iteration: 0, Kind: llm.CallKindIteration},
 				{Iteration: 0, Kind: llm.CallKindContextRecovery},
 			},
+			responseEstimate: true,
 		},
 		{
 			name:               "refreshed window on a tool-less turn is not the tool-free kind",
@@ -311,6 +319,7 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 				{Iteration: 0, Kind: llm.CallKindIteration},
 				{Iteration: 0, Kind: llm.CallKindContextRecovery},
 			},
+			responseEstimate: true,
 		},
 		{
 			name:            "window at maximum retries without tools",
@@ -417,7 +426,9 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 			loop.UseModelRegistry(runtime.Registry())
 			loop.UseModelRuntime(runtime)
 
-			resp, err := loop.Run(context.Background(), &Request{
+			var logs lockedBuffer
+			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)))
+			resp, err := loop.Run(ctx, &Request{
 				Model: "deepslate/google/gemma-3-4b",
 				Messages: []Message{{
 					Role:    "user",
@@ -432,6 +443,27 @@ func TestRun_StampsContextRecoveryCallSite(t *testing.T) {
 				t.Fatalf("resp.Content = %q, want ok", resp.Content)
 			}
 			assertCallSites(t, rec.sites(), tt.want)
+
+			call, ok := logs.records(t, "llm call")[0]
+			if !ok {
+				t.Fatal("no llm call line for iteration 0")
+			}
+			response, ok := logs.records(t, "llm response")[0]
+			if !ok {
+				t.Fatal("no llm response line for iteration 0")
+			}
+			_, hasEstimate := response["est_request_tokens"]
+			switch {
+			case tt.responseEstimate && !hasEstimate:
+				t.Error("llm response line lacks est_request_tokens for a retry that resent the request")
+			case tt.responseEstimate:
+				if got, want := intAttr(t, response, "est_request_tokens"), intAttr(t, call, "est_request_tokens"); got != want {
+					t.Errorf("response est_request_tokens = %d, want the llm call line's %d", got, want)
+				}
+			case hasEstimate:
+				t.Errorf("response est_request_tokens = %v, want none for a retry that dropped the tools",
+					response["est_request_tokens"])
+			}
 		})
 	}
 }

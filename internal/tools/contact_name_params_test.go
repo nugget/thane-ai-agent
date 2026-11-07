@@ -1,14 +1,8 @@
 package tools
 
 import (
-	"log/slog"
 	"strings"
 	"testing"
-
-	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
-	"github.com/nugget/thane-ai-agent/internal/platform/database"
-	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 )
 
 // TestContactNameRuleTeachesResolution pins what the shared name rule
@@ -83,22 +77,7 @@ func TestContactNameParametersTeachResolution(t *testing.T) {
 // in-memory record store.
 func newTestEscalationRegistry(t *testing.T) *Registry {
 	t.Helper()
-	db, err := database.OpenMemory()
-	if err != nil {
-		t.Fatalf("database.Open: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	records, err := notifications.NewRecordStore(db, slog.Default())
-	if err != nil {
-		t.Fatalf("NewRecordStore: %v", err)
-	}
-	resolver := &mockNotifyContacts{contact: &contacts.Contact{ID: uuid.New(), FormattedName: "Alice"}}
 	reg := NewEmptyRegistry()
-	reg.SetEscalationTools(EscalationDeps{
-		Router:     notifications.NewNotificationRouter(resolver, records, slog.Default()),
-		Records:    records,
-		Dispatcher: notifications.NewCallbackDispatcher(records, nil, nil, "test-thane", slog.Default()),
-		Waiter:     notifications.NewResponseWaiter(),
-	})
+	reg.SetEscalationTools(newTestHumanEscalationDeps(t))
 	return reg
 }

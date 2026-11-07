@@ -225,7 +225,7 @@ becoming default context clutter.
 | `send_notification` | Provider-agnostic fire-and-forget notification. |
 | `request_human_decision` | Actionable notification with a human-in-the-loop callback. |
 | `request_human_escalation` | Escalate to a human with a synchronous response wait. |
-| `request_ai_escalation` | Escalate to another agent/model with a synchronous response wait. |
+| `request_ai_escalation` | Ask a frontier-model advisor for judgment. Registered only when an advisor is wired; none is yet, so no loop is offered it. |
 | `resolve_actionable` | Mark an actionable notification as resolved. |
 
 ## `memory` — persistent facts and working memory

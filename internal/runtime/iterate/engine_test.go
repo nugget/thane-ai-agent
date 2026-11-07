@@ -1226,6 +1226,31 @@ func TestPeakInputTokens(t *testing.T) {
 			in:   []IterationRecord{{InputTokens: 40000}, {InputTokens: 12000}},
 			want: 40000,
 		},
+		{
+			// Anthropic reports only the uncached tail as input, so a
+			// warm call's prompt is mostly cache reads.
+			name: "warm call counts cache reads",
+			in:   []IterationRecord{{InputTokens: 300, CacheReadInputTokens: 40000}},
+			want: 40300,
+		},
+		{
+			// The per-TTL counts break down the creation total and are
+			// not a second helping of it.
+			name: "cold call counts cache writes once",
+			in: []IterationRecord{{
+				InputTokens: 200, CacheCreationInputTokens: 38000,
+				CacheCreation5mInputTokens: 8000, CacheCreation1hInputTokens: 30000,
+			}},
+			want: 38200,
+		},
+		{
+			name: "whole prompt, not uncached tail, picks the peak",
+			in: []IterationRecord{
+				{InputTokens: 5000},
+				{InputTokens: 400, CacheCreationInputTokens: 1000, CacheReadInputTokens: 30000},
+			},
+			want: 31400,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1375,5 +1400,100 @@ func TestEngineSkipsRecoveryWhenBudgetSpent(t *testing.T) {
 	}
 	if result.OutputTokens > 600 {
 		t.Errorf("output tokens = %d, want no generation beyond the overshooting one", result.OutputTokens)
+	}
+}
+
+// cachedResponse sets the prompt-cache usage of a scripted response.
+// InputTokens stays the uncached tail, as Anthropic reports it.
+func cachedResponse(resp *llm.ChatResponse, input, creation, read int) *llm.ChatResponse {
+	resp.InputTokens = input
+	resp.CacheCreationInputTokens = creation
+	resp.CacheReadInputTokens = read
+	return resp
+}
+
+// TestEngine_PeakCountsCachedPrompt pins that a run's peak is the whole
+// prompt of its largest call on every Result path, including the
+// force-text recovery call, which is recorded after the partial result
+// was built. Spend (InputTokens) stays the uncached sum.
+func TestEngine_PeakCountsCachedPrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		maxIterations int
+		responses     func() []*llm.ChatResponse
+		wantPeak      int
+		wantInput     int
+		wantIters     int
+		wantExhausted bool
+	}{
+		{
+			name: "uncached call",
+			responses: func() []*llm.ChatResponse {
+				return []*llm.ChatResponse{cachedResponse(textResponse("done"), 24000, 0, 0)}
+			},
+			wantPeak: 24000, wantInput: 24000, wantIters: 1,
+		},
+		{
+			name: "warm call with a small uncached tail",
+			responses: func() []*llm.ChatResponse {
+				return []*llm.ChatResponse{cachedResponse(textResponse("done"), 300, 0, 40000)}
+			},
+			wantPeak: 40300, wantInput: 300, wantIters: 1,
+		},
+		{
+			name: "creation-heavy cold call",
+			responses: func() []*llm.ChatResponse {
+				return []*llm.ChatResponse{cachedResponse(textResponse("done"), 200, 38000, 0)}
+			},
+			wantPeak: 38200, wantInput: 200, wantIters: 1,
+		},
+		{
+			name: "warm call outranks a larger uncached call",
+			responses: func() []*llm.ChatResponse {
+				return []*llm.ChatResponse{
+					cachedResponse(toolCallResponse(makeToolCall("search", nil)), 5000, 0, 0),
+					cachedResponse(textResponse("done"), 400, 0, 30000),
+				}
+			},
+			wantPeak: 30400, wantInput: 5400, wantIters: 2,
+		},
+		{
+			name:          "force-text recovery call is the cached peak",
+			maxIterations: 1,
+			responses: func() []*llm.ChatResponse {
+				return []*llm.ChatResponse{
+					cachedResponse(toolCallResponse(makeToolCall("search", nil)), 300, 0, 20000),
+					cachedResponse(textResponse("forced"), 900, 1000, 25000),
+				}
+			},
+			wantPeak: 26900, wantInput: 1200, wantIters: 2, wantExhausted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mock := &mockLLM{responses: tt.responses()}
+			cfg := baseCfg(mock, &mockExecutor{results: map[string]string{}})
+			cfg.MaxIterations = tt.maxIterations
+			if cfg.MaxIterations == 0 {
+				cfg.MaxIterations = 5
+			}
+			result, err := (&Engine{}).Run(context.Background(), cfg, baseMessages())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if result.PeakInputTokens != tt.wantPeak {
+				t.Errorf("PeakInputTokens = %d, want %d", result.PeakInputTokens, tt.wantPeak)
+			}
+			if result.InputTokens != tt.wantInput {
+				t.Errorf("InputTokens = %d, want %d (spend stays the uncached sum)", result.InputTokens, tt.wantInput)
+			}
+			if len(result.Iterations) != tt.wantIters || result.Exhausted != tt.wantExhausted {
+				t.Errorf("iterations = %d exhausted = %t, want %d and %t", len(result.Iterations), result.Exhausted, tt.wantIters, tt.wantExhausted)
+			}
+		})
 	}
 }

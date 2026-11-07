@@ -2283,6 +2283,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Estimate system prompt size for cost logging.
 	systemTokens := len(llmMessages[0].Content) / 4 // rough char-to-token ratio
+	// The estimate of the request the current iteration sends, set when
+	// the iteration starts and read when its response arrives so the two
+	// INFO lines can be compared.
+	var iterEstimate requestEstimate
 
 	// Check if memory store supports tool call recording.
 	recorder, hasRecorder := l.memory.(ToolCallRecorder)
@@ -2448,7 +2452,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
+		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, toolDefs []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 			if l.archiver != nil {
 				iterationSessions[i] = l.archiver.EnsureSession(convID)
@@ -2485,23 +2489,42 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot)
 
+			// est_tokens is the legacy message-text-only figure, kept
+			// for one release so new rows compare with old ones.
+			// est_request_tokens is the whole request — messages,
+			// tool-call arguments and tool schemas — and is the one to
+			// read against the response's input_tokens.
 			iterMsgTokens := 0
 			for _, m := range msgs {
 				iterMsgTokens += len(m.Content) / 4
 			}
-			iterLog.Info("llm call",
+			iterEstimate = estimateRequest(msgs, toolDefs)
+			llmErr.requestReplaced = false
+			callAttrs := []any{
 				"kind", events.KindLLMCall,
 				"iteration", i,
 				"model", currentModel,
 				"message_count", len(msgs),
 				"est_tokens", iterMsgTokens,
 				"system_tokens", systemTokens,
-			)
+				"est_request_tokens", iterEstimate.total(),
+				"est_tool_tokens", iterEstimate.Tools,
+				"est_tool_call_tokens", iterEstimate.ToolCalls,
+			}
+			// The section map is the Run's baseline for comparing one
+			// deploy's prompt with another's. Repeating it on every
+			// iteration would only multiply the line's size.
+			if i == 0 {
+				if sections, ok := systemSectionBytes(msgs); ok {
+					callAttrs = append(callAttrs, sections)
+				}
+			}
+			iterLog.Info("llm call", callAttrs...)
 			if stream != nil {
 				effectiveTools := effectiveToolNames()
 				startData := map[string]any{
 					"request_id":      requestID,
-					"est_tokens":      iterMsgTokens + systemTokens,
+					"est_tokens":      iterEstimate.total(),
 					"messages":        len(msgs),
 					"iteration":       i,
 					"tools":           len(effectiveTools),
@@ -2550,18 +2573,36 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				llmErr.recoveryAnswered = false
 			}
 			iterLog := logging.Logger(iterCtx)
-			iterLog.Info("llm response",
+			// Anthropic's input_tokens leaves out what the cache wrote
+			// and served, so prompt_tokens is the measured figure to
+			// set against est_request_tokens.
+			respAttrs := []any{
 				"kind", events.KindLLMResponse,
 				"iteration", i,
 				"model", llmResp.Model,
 				"input_tokens", llmResp.InputTokens,
+				"cache_creation_input_tokens", llmResp.CacheCreationInputTokens,
+				"cache_read_input_tokens", llmResp.CacheReadInputTokens,
+				"prompt_tokens", iterate.PromptTokens(llmResp.InputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens),
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
 				"stop_reason", llmResp.StopReason,
 				"tool_call_source", string(llmResp.ToolCallSource),
 				"text_tool_action", string(llmResp.TextToolAction),
 				"profile", profile,
-			)
+			}
+			// The estimate is attached only when the response answers
+			// the request it describes. The error handler reports when
+			// it answered something else instead; see
+			// llmErrorOutcome.requestReplaced. The force-text call that
+			// closes an exhausted turn answers no iteration's request
+			// either: it resends the messages without the tools, and
+			// no iteration starts to estimate it.
+			site, _ := llm.CallSiteFromContext(iterCtx)
+			if !llmErr.requestReplaced && site.Kind != llm.CallKindForceText {
+				respAttrs = append(respAttrs, "est_request_tokens", iterEstimate.total())
+			}
+			iterLog.Info("llm response", respAttrs...)
 		},
 
 		// Error handling: timeout retry, recovery model, failover.
@@ -2849,6 +2890,11 @@ type llmErrorOutcome struct {
 	// interaction profile rendered the prompt it answers. The response
 	// callback clears it as it reads it.
 	recoveryAnswered bool
+	// requestReplaced is set when the handler's response answers a
+	// request other than the iteration's own messages and tools, or
+	// is canned text no call produced. Run clears it as each iteration
+	// starts.
+	requestReplaced bool
 }
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements
@@ -2940,6 +2986,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					// timeout recovery.
 					outcome.timeoutRecovered = true
 					outcome.recoveryAnswered = true
+					outcome.requestReplaced = true
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
 						Message: llm.Message{Role: "assistant", Content: prompts.TimeoutRecoveryEmpty},
@@ -2951,6 +2998,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				}
 				outcome.timeoutRecovered = true
 				outcome.recoveryAnswered = true
+				outcome.requestReplaced = true
 				return resp, l.recoveryModel, nil
 			}
 			// No recovery model — return a static fallback response
@@ -2958,6 +3006,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
 			outcome.timeoutRecovered = true
 			outcome.recoveryAnswered = true
+			outcome.requestReplaced = true
 			used := toolsUsedFromMessages(msgs)
 			names := make([]string, 0, len(used))
 			for name := range used {
@@ -2989,7 +3038,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		}
 
 		if explicitModelRequested {
-			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream); handled {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, client, model, err, msgs, toolDefs, stream, outcome); handled {
 				if recoveryErr != nil {
 					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
 					return nil, "", recoveryErr
