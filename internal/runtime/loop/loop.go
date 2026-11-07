@@ -75,11 +75,12 @@ type Request struct {
 	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
 
 	// PullInput, when set, is polled by the runner's engine at every
-	// iteration boundary and at turn closure to merge newly-arrived
-	// conversation input into this live turn (#1221). The loop builds it
-	// over its mailbox with delta-gating and a drain budget; the engine
-	// appends whatever it returns as user-role messages. Nil disables
-	// mid-turn input. Runtime-only.
+	// iteration boundary and, when an iteration and enough output budget
+	// remain to answer what it returns, at turn closure to merge
+	// newly-arrived conversation input into this live turn (#1221). The
+	// loop builds it over its mailbox with delta-gating and a drain
+	// budget; the engine appends whatever it returns as user-role
+	// messages. Nil disables mid-turn input. Runtime-only.
 	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
 
 	// TargetKey names the document a tool call writes, so the runner's

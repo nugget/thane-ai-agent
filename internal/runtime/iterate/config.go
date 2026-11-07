@@ -137,6 +137,18 @@ type Config struct {
 	// proceeds with them in context. This is the seam that merges
 	// newly-arrived conversation input into a live turn (#1221): a long
 	// tool-heavy turn becomes aware of messages that arrive while it works.
+	//
+	// It is polled once more when an iteration ends in a text reply,
+	// another iteration remains, and the output allowance left under
+	// MaxOutputTokens is at least what that reply spent. A non-empty return
+	// there holds the turn open: the reply joins history without reaching
+	// OnTextResponse, the input follows it, and the next iteration answers
+	// both. If a later reply comes back empty with nothing newer to stand
+	// in, the run returns the held reply instead of FallbackContent. When
+	// either condition fails the poll is skipped, so the reply closes the
+	// turn and input that arrived while it was composed stays with the
+	// caller.
+	//
 	// Nil disables mid-turn input. The callback owns delta-gating (return
 	// only what is new) and any per-turn drain budget (return empty once
 	// spent); the engine appends whatever it returns without inspection.
@@ -158,15 +170,25 @@ type Config struct {
 	DeferMixedText bool
 
 	// NudgeOnEmpty enables empty-response nudging: when the model
-	// returns no content after tool iterations, inject NudgePrompt to
-	// give it one more chance to produce text. Agent sets true.
+	// returns no content and left no deferred text, inject NudgePrompt to
+	// give it one more chance to produce text. The nudge is tried once per
+	// run, and only while another iteration remains to answer it. An
+	// empty reply on the last iteration with nothing to stand in and the
+	// nudge still untried ends the run as exhausted, like any run that runs
+	// out of iterations. Once the nudge was tried, an empty reply with
+	// nothing to stand in gets FallbackContent on any iteration, the last
+	// included, and the run is not exhausted. Agent sets true.
 	NudgeOnEmpty bool
 
 	// NudgePrompt is the user-role message injected on empty responses.
 	NudgePrompt string
 
-	// FallbackContent is the static text returned when the model fails
-	// to produce content even after nudging.
+	// FallbackContent is the static text a run returns when it has no
+	// reply to give. An empty response gets it only when NudgeOnEmpty is
+	// set, the nudge was already tried, and nothing the model wrote
+	// earlier can stand in (neither deferred text nor a reply held at
+	// closure; see PullInput). A run the output budget ends without text,
+	// or whose force-text recovery fails or comes back empty, gets it too.
 	FallbackContent string
 
 	// ReplyAwaited reports that someone is waiting on this turn's final
@@ -190,6 +212,24 @@ type Config struct {
 func (c Config) outputBudgetExhausted(totalOutput int) bool {
 	return (c.MaxOutputTokens > 0 && totalOutput >= c.MaxOutputTokens) ||
 		(c.CheckBudget != nil && c.CheckBudget(totalOutput))
+}
+
+// closureHoldBlocker names what rules out holding the turn open after
+// iteration i ended in a text reply that cost replyTokens to write, with
+// totalOutput spent so far: "last_iteration" when no iteration remains to
+// answer pulled input, "output_budget" when the allowance left under
+// MaxOutputTokens is smaller than that reply. For text standing in for an
+// empty response, replyTokens is what the call that wrote it spent. It
+// returns "" when a hold may be taken.
+func (c Config) closureHoldBlocker(i, totalOutput, replyTokens int) string {
+	switch {
+	case i+1 >= c.MaxIterations:
+		return "last_iteration"
+	case c.MaxOutputTokens > 0 && c.MaxOutputTokens-totalOutput < replyTokens:
+		return "output_budget"
+	default:
+		return ""
+	}
 }
 
 // applyDefaults fills zero-valued fields with their defaults.
