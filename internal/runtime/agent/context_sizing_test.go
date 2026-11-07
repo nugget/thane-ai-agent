@@ -410,3 +410,60 @@ func TestRun_RequestEstimateMatchesWhatIsSent(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_ResponseLineReportsWholePrompt proves the response line
+// carries the measured whole prompt beside the estimate. Anthropic's
+// input_tokens leaves out what the cache wrote and served, so set
+// against est_request_tokens on its own it would make good caching
+// look like estimation error.
+func TestRun_ResponseLineReportsWholePrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                  string
+		input, creation, read int
+		wantPromptTokens      int
+	}{
+		{name: "provider that reports cache counts", input: 12, creation: 300, read: 4000, wantPromptTokens: 4312},
+		{name: "provider without cache counts", input: 4312, wantPromptTokens: 4312},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			loop := buildTestLoopWithLLM(&mockLLM{responses: []*llm.ChatResponse{{
+				Model:                    "test-model",
+				Message:                  llm.Message{Role: "assistant", Content: "done"},
+				InputTokens:              tt.input,
+				OutputTokens:             5,
+				CacheCreationInputTokens: tt.creation,
+				CacheReadInputTokens:     tt.read,
+			}}}, nil)
+			var logs lockedBuffer
+			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)))
+			if _, err := loop.Run(ctx, &Request{
+				Messages: []Message{{Role: "user", Content: "summarize the record"}},
+			}, nil); err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+
+			resp, ok := logs.records(t, "llm response")[0]
+			if !ok {
+				t.Fatal("no llm response line")
+			}
+			for key, want := range map[string]int{
+				"input_tokens":                tt.input,
+				"cache_creation_input_tokens": tt.creation,
+				"cache_read_input_tokens":     tt.read,
+				"prompt_tokens":               tt.wantPromptTokens,
+			} {
+				if got := intAttr(t, resp, key); got != want {
+					t.Errorf("%s = %d, want %d", key, got, want)
+				}
+			}
+			if _, ok := resp["est_request_tokens"]; !ok {
+				t.Error("llm response line lacks est_request_tokens")
+			}
+		})
+	}
+}

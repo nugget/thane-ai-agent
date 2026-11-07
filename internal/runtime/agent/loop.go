@@ -2545,11 +2545,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				})
 			}
 			iterLog := logging.Logger(iterCtx)
+			// Anthropic's input_tokens leaves out what the cache wrote
+			// and served, so prompt_tokens is the measured figure to
+			// set against est_request_tokens.
 			respAttrs := []any{
 				"kind", events.KindLLMResponse,
 				"iteration", i,
 				"model", llmResp.Model,
 				"input_tokens", llmResp.InputTokens,
+				"cache_creation_input_tokens", llmResp.CacheCreationInputTokens,
+				"cache_read_input_tokens", llmResp.CacheReadInputTokens,
+				"prompt_tokens", iterate.PromptTokens(llmResp.InputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens),
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
 			}

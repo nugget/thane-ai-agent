@@ -44,6 +44,18 @@ type IterationRecord struct {
 	BreakReason                string
 }
 
+// PromptTokens returns the size of one model call's whole prompt. Token
+// usage reports the prompt in three disjoint parts: input is the
+// uncached tail, cacheCreation is what the call wrote to the prompt
+// cache, and cacheRead is what the cache served. Anthropic's
+// input_tokens excludes both cache counts, so input alone shrinks as
+// caching improves while the prompt stays the same size. The per-TTL
+// cache-write counts break down cacheCreation and must not be added
+// again.
+func PromptTokens(input, cacheCreation, cacheRead int) int {
+	return input + cacheCreation + cacheRead
+}
+
 // Result is the outcome of an [Engine.Run] execution.
 type Result struct {
 	// Content is the final text response from the model.
