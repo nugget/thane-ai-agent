@@ -131,9 +131,14 @@ func TestParseQwenXMLValueSpans(t *testing.T) {
 			want: []string{"\n{\"name\":\"get_state\""},
 		},
 		{
-			name: "value running into the next parameter",
+			name: "value running into the next parameter, and the values after it",
 			text: "<function=note_add>\n<parameter=a>\nx\n<parameter=b>\ny\n</parameter>",
-			want: []string{"\nx\n"},
+			want: []string{"\nx\n", "\ny\n"},
+		},
+		{
+			name: "values after free text in the body",
+			text: "<function=note_add>\njunk\n<parameter=text>\ny\n</parameter>\n</function>",
+			want: []string{"\ny\n"},
 		},
 		{name: "unkeyed value", text: "<function=get_state>\n<parameter=>\nx\n</parameter>\n</function>", want: []string{"\nx\n"}},
 		{name: "cut-off header has no value", text: "<function=note_add>\n<parameter=te"},

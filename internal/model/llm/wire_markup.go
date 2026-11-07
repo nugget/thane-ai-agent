@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 )
@@ -99,8 +98,12 @@ func (s WireScan) Found() bool { return s.Markup != "" }
 // holds no markup at all, so a malformed call in content hides a
 // well-formed one in reasoning. Within a channel the first well-formed
 // call is described, or the first markup when none is well-formed.
-// Markup that begins inside another call's argument data, in any
-// grammar, is that call's data and never a call of its own.
+// Markup that begins inside another call's argument data is that
+// call's data and never a call of its own, whatever either grammar.
+// One exception follows from the Qwen grammar: a parameter value ends
+// at the next <function= or <tool_call> tag, because a call cut off
+// before the next call is the likelier reading, so such a tag always
+// begins a call.
 func ScanWire(content, reasoning string, offered []string) WireScan {
 	if f, ok := scanWireText(content); ok {
 		return f.scan(content, WireLocationContent, offered)
@@ -111,16 +114,17 @@ func ScanWire(content, reasoning string, offered []string) WireScan {
 	return WireScan{}
 }
 
-// maxWireCandidates bounds how many candidate calls each detector
-// examines in one text. Every candidate costs a parse over its span,
-// so an adversarial or runaway text with thousands of nested calls or
-// recipients would otherwise make a detection pass quadratic. Only
-// call-shaped markup is a candidate: a Qwen function or bare
-// <tool_call> tag, a Harmony recipient, or a JSON object with "name"
-// and "arguments" keys at its own top level. Named data is never one,
-// and a detector skips markup nested in its own grammar's calls, so a
-// real call is hidden only behind this many calls of its grammar
-// before it. Real replies carry a handful of calls.
+// maxWireCandidates bounds how many candidates of each kind a detector
+// examines in one text: Qwen functions, bare <tool_call> tags, closed
+// and cut-off JSON calls, and Harmony recipients. Every candidate costs
+// a parse over its span, so an adversarial or runaway text with
+// thousands of calls would otherwise make a detection pass quadratic.
+// Only call-shaped markup is a candidate: named JSON data never is,
+// and the JSON and Harmony detectors skip what sits inside their own
+// closed calls' arguments. A detector cannot see another grammar's
+// arguments, though, so markup quoted there is charged too, and a real
+// call is hidden only behind this many earlier pieces of markup of its
+// own kind, wherever they sit. Real replies carry a handful of calls.
 const maxWireCandidates = 16
 
 // wireFinding is one detector's view of a call before it is reduced to
@@ -149,14 +153,11 @@ type wireCandidate struct {
 	data []textRange
 }
 
-// insideCallData reports whether offset at lies inside any
-// candidate's argument data.
-func insideCallData(at int, cands []wireCandidate) bool {
-	for _, c := range cands {
-		for _, r := range c.data {
-			if r.start <= at && at < r.end {
-				return true
-			}
+// insideAny reports whether offset at lies inside any of spans.
+func insideAny(at int, spans []textRange) bool {
+	for _, r := range spans {
+		if r.start <= at && at < r.end {
+			return true
 		}
 	}
 	return false
@@ -186,8 +187,14 @@ func (f wireFinding) betterThan(other wireFinding) bool {
 // best one that is not another call's argument data. Detectors return
 // all the candidates they examine rather than stopping at their first
 // well-formed call, because only together can they tell that a call is
-// nested in another grammar's arguments. Each data span check walks a
-// bounded number of candidates, so the pass stays linear.
+// nested in another grammar's arguments.
+//
+// A call's data begins after its anchor, so in anchor order every
+// candidate is judged after any call whose data could hold it. Only
+// candidates that are calls contribute data: markup nested in a call's
+// arguments is that call's data and nothing more, so a cut-off span of
+// its own cannot reach past its container and hide a later call. The
+// candidates are bounded, so the pass stays linear in the data spans.
 func scanWireText(text string) (wireFinding, bool) {
 	if strings.TrimSpace(text) == "" {
 		return wireFinding{}, false
@@ -196,10 +203,16 @@ func scanWireText(text string) (wireFinding, bool) {
 	for _, detect := range []func(string) []wireCandidate{qwenXMLCandidates, jsonCallCandidates, harmonyCandidates} {
 		cands = append(cands, detect(text)...)
 	}
+	slices.SortStableFunc(cands, func(a, b wireCandidate) int { return a.anchor - b.anchor })
+	var data []textRange
 	var best wireFinding
 	found := false
 	for _, c := range cands {
-		if (!found || c.betterThan(best)) && !insideCallData(c.anchor, cands) {
+		if insideAny(c.anchor, data) {
+			continue
+		}
+		data = append(data, c.data...)
+		if !found || c.betterThan(best) {
 			best, found = c.wireFinding, true
 		}
 	}
@@ -209,15 +222,6 @@ func scanWireText(text string) (wireFinding, bool) {
 // jsonWrapperTokens are the wrappers a model puts around a JSON or XML
 // call. They belong to the markup, not to the prose before it.
 var jsonWrapperTokens = []string{"<tool_call>", "```json", "```tool", "```xml", "```", "["}
-
-// harmonyHeaderTokens are the Harmony header pieces that precede a
-// recipient, tokenised or with the special tokens stripped.
-var harmonyHeaderTokens = []string{"<|start|>", "<|channel|>", "assistant", "commentary"}
-
-// harmonyArgsHeaderTokens are the Harmony header pieces that may sit
-// between a recipient's name and its argument object, tokenised or
-// with the special tokens stripped.
-var harmonyArgsHeaderTokens = []string{"<|channel|>", "<|constrain|>", "<|message|>", "commentary", "analysis", "json"}
 
 // markupStart walks back from start over whitespace and wrapper tokens
 // and returns where the markup, wrappers included, begins.
@@ -236,98 +240,4 @@ func markupStart(text string, start int, tokens []string) int {
 			return start
 		}
 	}
-}
-
-const (
-	harmonyRecipient = "to=functions."
-	// harmonyArgsWindow bounds how far after the recipient name the
-	// argument object may start. The longest real gap is a
-	// "<|channel|>commentary <|constrain|>json<|message|>" header.
-	harmonyArgsWindow = 96
-)
-
-// harmonyCandidates finds to=functions.NAME recipients and judges the
-// JSON argument object that follows each. A recipient inside an earlier
-// recipient's arguments is that call's data, so the search resumes past
-// them.
-func harmonyCandidates(text string) []wireCandidate {
-	var out []wireCandidate
-	for pos := 0; len(out) < maxWireCandidates; {
-		i := strings.Index(text[pos:], harmonyRecipient)
-		if i < 0 {
-			break
-		}
-		c, next := parseHarmonyCall(text, pos+i)
-		out = append(out, c)
-		pos = next
-	}
-	return out
-}
-
-func parseHarmonyCall(text string, anchor int) (wireCandidate, int) {
-	c := wireCandidate{
-		wireFinding: wireFinding{markup: WireMarkupHarmony, start: markupStart(text, anchor, harmonyHeaderTokens)},
-		anchor:      anchor,
-	}
-	nameStart := anchor + len(harmonyRecipient)
-	nameEnd := nameStart
-	for nameEnd < len(text) && isHarmonyNameByte(text[nameEnd]) {
-		nameEnd++
-	}
-	c.name = text[nameStart:nameEnd]
-	rest := text[nameEnd:]
-	window := rest[:min(len(rest), harmonyArgsWindow)]
-	// Arguments after the next recipient are that recipient's, so an
-	// argument-less recipient stays malformed and cannot borrow them.
-	if next := strings.Index(window, harmonyRecipient); next >= 0 {
-		window = window[:next]
-	}
-	argsAt := harmonyArgsStart(window)
-	if c.name == "" || argsAt < 0 {
-		return c, nameEnd
-	}
-	open := nameEnd + argsAt
-	end, ok := balancedObjectEnd(text[open:])
-	if !ok {
-		c.data = []textRange{{open + 1, len(text)}}
-		return c, len(text)
-	}
-	c.data = []textRange{{open + 1, open + end}}
-	var obj map[string]any
-	c.wellFormed = json.Unmarshal([]byte(text[open:open+end]), &obj) == nil
-	return c, open + end
-}
-
-// harmonyArgsStart returns the offset in window of the argument
-// object's opening brace, where window is the text after a recipient's
-// name. Only whitespace and Harmony header pieces may come before it,
-// so the arguments are an object and not a value that merely contains
-// one, and header tokens quoted inside the arguments stay data. It
-// returns -1 when anything else comes first or no brace follows.
-func harmonyArgsStart(window string) int {
-	for pos := 0; pos < len(window); {
-		switch window[pos] {
-		case '{':
-			return pos
-		case ' ', '\t', '\r', '\n':
-			pos++
-			continue
-		}
-		tok := ""
-		for _, t := range harmonyArgsHeaderTokens {
-			if strings.HasPrefix(window[pos:], t) {
-				tok = t
-				break
-			}
-		}
-		if tok == "" {
-			return -1
-		}
-		pos += len(tok)
-	}
-	return -1
-}
-
-func isHarmonyNameByte(c byte) bool {
-	return c == '_' || c == '-' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
 }

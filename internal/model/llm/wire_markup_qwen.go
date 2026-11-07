@@ -14,9 +14,11 @@ const (
 	qwenParamClose    = "</parameter>"
 )
 
-// qwenXMLCall is one call parsed from Qwen3-coder XML markup. This is
-// the single grammar implementation for that markup: detection uses it
-// today, and recovery must reuse it so the two cannot drift.
+// qwenXMLCall is one call parsed from Qwen3-coder XML markup by
+// [parseQwenXMLFunction], the single grammar implementation for that
+// markup. Detection walks it one call at a time; anything else that
+// reads the markup, such as text-call recovery, must reuse it so the
+// two cannot drift.
 type qwenXMLCall struct {
 	// start is the offset of the <function= tag.
 	start int
@@ -24,9 +26,10 @@ type qwenXMLCall struct {
 	// params keep the model's order and its raw string values. Typing
 	// a value is the recovering caller's job, against the tool schema.
 	params []qwenXMLParam
-	// values are the spans of the parameter values in the text, in
-	// order, including a value the body cut off, which params omit.
-	// Markup inside them is argument data, never a call.
+	// values are the spans of every parameter value in the text, in
+	// order, including values params omits: one cut off, unkeyed, or
+	// after the point where the body stopped parsing. Markup inside
+	// them is argument data, never a call.
 	values []textRange
 	// complete means a readable header, a body of nothing but
 	// whitespace and parameters each closed by </parameter>, and the
@@ -44,9 +47,9 @@ type qwenXMLParam struct {
 }
 
 // parseQwenXMLCalls returns every <function=...> call in text, in
-// order, complete or not. Detection examines a bounded number of calls
-// with [parseQwenXMLFunction] instead, so it never parses past its
-// candidate limit; recovery, which needs every call, uses this.
+// order, complete or not, for a reader that needs them all. Detection
+// walks [parseQwenXMLFunction] itself instead, so it never parses past
+// its candidate limit.
 func parseQwenXMLCalls(text string) []qwenXMLCall {
 	var calls []qwenXMLCall
 	for pos := 0; ; {
@@ -99,37 +102,47 @@ func parseQwenXMLFunction(text string, open int) (qwenXMLCall, int) {
 // parseQwenXMLParams parses a function body, returning its parameters
 // and the body-relative spans of their values. It reports false when a
 // parameter header or value is cut off, a value runs into the next
-// <parameter= without its </parameter>, or non-whitespace text sits
-// outside the parameters: before the first, between two, or after the
-// last. That last case also covers prose that merely quotes a
-// <function=...> tag and runs to the end of the text. A value that is
-// cut off or unkeyed still has its span returned, since its text is
-// argument data all the same.
+// <parameter= without its </parameter>, a key is empty, or
+// non-whitespace text sits outside the parameters: before the first,
+// between two, or after the last. That last case also covers prose that
+// merely quotes a <function=...> tag and runs to the end of the text.
+// params stops at the first such fault, but values goes on to the end
+// of the body, since every value's text is argument data all the same.
 func parseQwenXMLParams(body string) ([]qwenXMLParam, []textRange, bool) {
 	var params []qwenXMLParam
 	var values []textRange
+	ok := true
 	for pos := 0; ; {
 		i := strings.Index(body[pos:], qwenParamOpen)
 		if i < 0 {
-			return params, values, strings.TrimSpace(body[pos:]) == ""
+			return params, values, ok && strings.TrimSpace(body[pos:]) == ""
 		}
 		if strings.TrimSpace(body[pos:pos+i]) != "" {
-			return params, values, false
+			ok = false
 		}
 		keyStart := pos + i + len(qwenParamOpen)
 		gt := strings.IndexAny(body[keyStart:], ">\n<")
-		if gt < 0 || body[keyStart+gt] != '>' {
+		if gt < 0 {
 			return params, values, false
+		}
+		if body[keyStart+gt] != '>' {
+			ok, pos = false, keyStart+gt
+			continue
 		}
 		key := strings.TrimSpace(body[keyStart : keyStart+gt])
 		valueStart := keyStart + gt + 1
 		valueEnd, closer := nextQwenToken(body, valueStart, qwenParamClose, qwenParamOpen)
 		values = append(values, textRange{valueStart, valueEnd})
 		if key == "" || closer != qwenParamClose {
-			return params, values, false
+			ok = false
 		}
-		params = append(params, qwenXMLParam{key: key, value: trimQwenValue(body[valueStart:valueEnd])})
-		pos = valueEnd + len(qwenParamClose)
+		if ok {
+			params = append(params, qwenXMLParam{key: key, value: trimQwenValue(body[valueStart:valueEnd])})
+		}
+		pos = valueEnd
+		if closer == qwenParamClose {
+			pos += len(qwenParamClose)
+		}
 	}
 }
 
@@ -188,7 +201,9 @@ func qwenXMLCandidates(text string) []wireCandidate {
 
 // bareToolCallCandidates returns, as malformed qwen_xml, up to
 // [maxWireCandidates] <tool_call> tags holding neither a function nor
-// a JSON object, as when the text is cut right after the tag. A tag
+// a JSON object, as when the text is cut right after the tag. They
+// compete with functions by position, so the earliest malformed markup
+// is the one described. A tag
 // holding a function is that function's wrapper, and one holding JSON
 // is left to the json_call detector. Tag bodies do not overlap, so the
 // walk stays linear however many tags it passes over.

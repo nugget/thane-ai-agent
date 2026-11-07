@@ -1,12 +1,16 @@
 package llm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestScanWireCallBounds pins where one call ends and the next can
 // begin: markup inside a call's argument data, in any grammar, is data;
-// a Harmony call's arguments must be an object of their own; a
-// malformed call is named by its own top-level key; and the earliest
-// malformed markup is described when nothing is well-formed.
+// data nested that way never reaches past its container; a Harmony
+// call's arguments are the value its header leads to; a malformed call
+// is named by its own top-level key; and the earliest malformed markup
+// is described when nothing is well-formed.
 func TestScanWireCallBounds(t *testing.T) {
 	t.Parallel()
 
@@ -15,6 +19,7 @@ func TestScanWireCallBounds(t *testing.T) {
 	}
 	stringified := scan(WireMarkupJSONCall, false, true, false)
 	stringified.StringifiedArgs = true
+	const qwenGetState = "<tool_call>\n<function=get_state>\n<parameter=entity_id>\nlight.kitchen\n</parameter>\n</function>\n</tool_call>"
 
 	tests := []struct {
 		name    string
@@ -34,8 +39,18 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupQwenXML, false, true, false),
 		},
 		{
+			name:    "JSON call in a qwen value after the body stopped parsing",
+			content: "<tool_call>\n<function=note_add>\n<parameter=title>\nx\n<parameter=text>\n" + jsonCall + "\n</parameter>\n</function>\n</tool_call>",
+			want:    scan(WireMarkupQwenXML, false, true, false),
+		},
+		{
 			name:    "qwen markup in a cut-off JSON call's arguments",
 			content: `{"name":"note_add","arguments":{"text":"<function=get_state></function>"}`,
+			want:    scan(WireMarkupJSONCall, false, true, false),
+		},
+		{
+			name:    "qwen markup in a second cut-off JSON call's arguments",
+			content: `{"name":"note_add","arguments":{}, {"name":"note_add","arguments":{"t":"<function=get_state></function>"}`,
 			want:    scan(WireMarkupJSONCall, false, true, false),
 		},
 		{
@@ -44,16 +59,54 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupHarmony, false, true, false),
 		},
 		{
+			name:    "qwen markup in harmony array arguments",
+			content: `to=functions.note_add json[{"text":"<function=get_state></function>"}]`,
+			want:    scan(WireMarkupHarmony, false, true, false),
+		},
+		{
 			name:    "harmony recipient in a cut-off harmony call's arguments",
 			content: `to=functions.unknown {"text":"to=functions.get_state {}"`,
 			want:    scan(WireMarkupHarmony, false, false, false),
 		},
+		// Nested data stays inside its container, so a separate call
+		// after the container is still found.
 		{
-			name:    "a call after another call's nested markup is still found",
+			name:    "a call after another call's nested markup",
 			content: `{"name":"note_add","arguments":"<function=get_state></function>"} ` + qwenCall,
 			want:    scan(WireMarkupQwenXML, true, true, true),
 		},
-		// Harmony arguments are an object, after header pieces only.
+		{
+			name:    "a call after a cut-off qwen value nested in a JSON string",
+			content: `{"name":"note_add","arguments":"<function=a><parameter=x>foo"} ` + jsonCall,
+			want:    scan(WireMarkupJSONCall, true, true, true),
+		},
+		{
+			name:    "a recipient after a cut-off harmony value nested in a JSON string",
+			content: `{"name":"note_add","arguments":"to=functions.x {"} to=functions.get_state {"entity_id":"light.kitchen"}`,
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "a call after a cut-off JSON object nested in a qwen value",
+			content: "<tool_call>\n<function=note_add>\n<parameter=text>\n{\"name\": \"get_state\", \"arguments\": {\n</function>\n</tool_call>\n" + qwenGetState,
+			want:    scan(WireMarkupQwenXML, true, true, true),
+		},
+		{
+			name:    "a JSON call after a malformed qwen call whose value holds a cut-off object",
+			content: "<function=note_add>\n<parameter=text>\n{\"name\":\"x\",\"arguments\":{\n</parameter>\nstray\n</function>\n" + jsonCall,
+			want:    scan(WireMarkupJSONCall, true, true, true),
+		},
+		// A harmony value that never closes ends with its message.
+		{
+			name:    "a recipient after unclosed harmony arguments",
+			content: "to=functions.note_add {\"x\": 1\nto=functions.get_state {\"entity_id\":\"light.kitchen\"}",
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		{
+			name:    "a tokenised call after one cut off before its call token",
+			content: "<|channel|>commentary to=functions.note_add <|constrain|>json<|message|>{\"text\":\"hi\"<|call|>\n<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json<|message|>{\"location\":\"Paris\"}<|call|>",
+			want:    scan(WireMarkupHarmony, true, true, true),
+		},
+		// Harmony arguments are the value the header leads to.
 		{
 			name:    "harmony array arguments holding an object",
 			content: `to=functions.get_weather json[{"location":"Paris"}]`,
@@ -65,9 +118,26 @@ func TestScanWireCallBounds(t *testing.T) {
 			want:    scan(WireMarkupHarmony, true, true, false),
 		},
 		{
-			name:    "harmony prose between the name and an object",
-			content: `to=functions.get_weather with {"location":"Paris"}`,
-			want:    scan(WireMarkupHarmony, false, true, false),
+			name:    "harmony code content type",
+			content: `<|channel|>commentary to=functions.get_weather code<|message|>{"location":"Paris"}<|call|>`,
+			want:    scan(WireMarkupHarmony, true, true, false),
+		},
+		{
+			name:    "harmony uppercase constraint",
+			content: `<|channel|>commentary to=functions.get_weather <|constrain|>JSON<|message|>{"location":"Paris"}<|call|>`,
+			want:    scan(WireMarkupHarmony, true, true, false),
+		},
+		{
+			name:    "harmony call on the analysis channel",
+			content: `<|start|>assistant<|channel|>analysis to=functions.get_weather <|constrain|>json<|message|>{"location":"Paris"}<|call|>`,
+			want:    scan(WireMarkupHarmony, true, true, false),
+		},
+		{
+			// Recipients quoted in a closed argument value are skipped
+			// rather than charged against the candidate limit.
+			name:    "a recipient after a closed value quoting many recipients",
+			content: `to=functions.note_add {"t":"` + strings.Repeat(`to=functions.x {} `, maxWireCandidates) + `", bad} to=functions.get_state {}`,
+			want:    scan(WireMarkupHarmony, true, true, true),
 		},
 		// A malformed call is named by its own top-level key.
 		{
@@ -90,6 +160,11 @@ func TestScanWireCallBounds(t *testing.T) {
 		{
 			name:    "a tool_call tag holding a function is that function's wrapper",
 			content: "Checking.\n<tool_call>\n<function=get_state",
+			want:    scan(WireMarkupQwenXML, false, true, true),
+		},
+		{
+			name:    "a tool_call tag holding a function after prose is still its wrapper",
+			content: "<tool_call>\nI will check.\n<function=get_state",
 			want:    scan(WireMarkupQwenXML, false, true, true),
 		},
 	}

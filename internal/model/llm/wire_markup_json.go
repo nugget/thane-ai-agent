@@ -8,15 +8,18 @@ import (
 )
 
 // jsonCallCandidates finds JSON objects carrying "name" and
-// "arguments" anywhere in text: closed objects first, then the first
-// object cut off at the end of the text.
+// "arguments" anywhere in text: closed objects first, then the objects
+// cut off at the end of the text, each examined up to
+// [maxWireCandidates].
 //
 // Only call-shaped closed objects, with both a "name" key and an
 // "arguments" key at their own top level, are parsed and charged
 // against [maxWireCandidates]. Named data such as a recapped tool
 // result or tool list costs nothing, even when "arguments" appears
 // deeper inside it or as a value, so no amount of it can hide a later
-// call. Objects nested in a call are its data and are skipped.
+// call. Objects nested in a closed call are its data and are skipped.
+// Those inside a cut-off call are examined: where a cut-off call ends
+// is a guess, and the scan excludes what truly lies in its data.
 func jsonCallCandidates(text string) []wireCandidate {
 	if !strings.Contains(text, `"name"`) {
 		return nil
@@ -24,14 +27,8 @@ func jsonCallCandidates(text string) []wireCandidate {
 	closed, unclosed := braceSpans(text)
 	cutOffs := cutOffCalls(text, closed, unclosed)
 	var out []wireCandidate
-	skipUntil, attempts, c := -1, 0, 0
+	skipUntil, attempts := -1, 0
 	for _, sp := range closed {
-		for c < len(cutOffs) && sp.start >= cutOffs[c].end {
-			c++
-		}
-		if c < len(cutOffs) && sp.start > cutOffs[c].start {
-			continue
-		}
 		if sp.start < skipUntil || sp.nameKey < 0 || !sp.argued {
 			continue
 		}
@@ -46,16 +43,15 @@ func jsonCallCandidates(text string) []wireCandidate {
 		out = append(out, wireCandidate{wireFinding: f, anchor: sp.start, data: []textRange{{sp.start + 1, sp.end}}})
 		skipUntil = sp.end
 	}
-	if len(cutOffs) > 0 {
-		first := cutOffs[0]
+	for _, co := range cutOffs[:min(len(cutOffs), maxWireCandidates)] {
 		out = append(out, wireCandidate{
 			wireFinding: wireFinding{
 				markup: WireMarkupJSONCall,
-				start:  markupStart(text, first.start, jsonWrapperTokens),
-				name:   looseJSONName(text[first.nameKey:]),
+				start:  markupStart(text, co.start, jsonWrapperTokens),
+				name:   looseJSONName(text[co.nameKey:]),
 			},
-			anchor: first.start,
-			data:   []textRange{{first.start + 1, first.end}},
+			anchor: co.start,
+			data:   []textRange{{co.start + 1, co.end}},
 		})
 	}
 	return out
@@ -334,21 +330,6 @@ func noteObjectKey(obj *openObject, text string, start, end int) {
 			obj.argsKey = end
 		}
 	}
-}
-
-// balancedObjectEnd returns the offset just past the object that opens
-// s, or false when s does not open with '{' or the object never closes.
-func balancedObjectEnd(s string) (int, bool) {
-	if s == "" || s[0] != '{' {
-		return 0, false
-	}
-	closed, _ := braceSpans(s)
-	for _, sp := range closed {
-		if sp.start == 0 {
-			return sp.end, true
-		}
-	}
-	return 0, false
 }
 
 // jsonNameKeyOffsets returns the ascending offsets of every quoted
