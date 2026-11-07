@@ -78,6 +78,8 @@ type Config struct {
 	// implement retry, failover, or recovery logic. Returning a non-nil
 	// ChatResponse and nil error means recovery succeeded; the returned
 	// model name replaces the current model for subsequent iterations.
+	// A handler that answers this one call from another model, leaving
+	// the run on its model, returns the model it was called with.
 	// Returning a nil response and non-nil error propagates the failure.
 	// ctx is the failed call's own context: it carries that call's
 	// [llm.CallSite] and, when the run has one, its output budget, so a

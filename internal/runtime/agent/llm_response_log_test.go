@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // lockedLogBuffer serializes handler writes so the log can be read
@@ -55,7 +58,9 @@ var errTestTimeout = errors.New("request timeout")
 // provenance: IterationRecord is not archived, so this line is what a
 // later count reads. It also pins the run's finish reason, which names
 // timeout_recovery only when timeout recovery supplied the reply the
-// run ended on.
+// run ended on. It pins the model each call was sent to, which timeout
+// recovery changes for its one reply and no other, and the model the
+// Response credits.
 func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 	t.Parallel()
 
@@ -65,9 +70,18 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 		systemPrompt string
 		// recoveryModel enables the timeout downshift.
 		recoveryModel string
-		responses     []*llm.ChatResponse
+		// pin, when set, holds the conversation to that model, and the
+		// request names no model of its own, so failover to the loop's
+		// default, claude-primary, stays in play.
+		pin       string
+		responses []*llm.ChatResponse
 		// errs fails the model call at that index instead of answering.
 		errs map[int]error
+		// wantDispatched is the model each call was sent to, in order.
+		wantDispatched []string
+		// wantModel is the model the Response credits, and the live
+		// request record with it.
+		wantModel string
 		// pullAfter, when nonzero, delivers one user message on the
 		// first input poll after that many model calls.
 		pullAfter int
@@ -100,7 +114,9 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"stop_reason": "stop", "tool_call_source": "text_fallback", "text_tool_action": "recovered", "profile": "anthropic_native"},
 				{"stop_reason": "end_turn", "tool_call_source": "", "text_tool_action": "", "profile": "anthropic_native"},
 			},
-			wantFinish: "stop",
+			wantDispatched: []string{"claude-primary", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
 		},
 		{
 			// A caller-supplied prompt is used verbatim, so no
@@ -111,12 +127,41 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				Model: "claude-primary", StopReason: "end_turn",
 				Message: llm.Message{Role: "assistant", Content: "Done."},
 			}},
-			want:       []map[string]any{{"stop_reason": "end_turn", "profile": ""}},
-			wantFinish: "stop",
+			want:           []map[string]any{{"stop_reason": "end_turn", "profile": ""}},
+			wantDispatched: []string{"claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
+		},
+		{
+			// A failover moves the run itself: the pinned model fails,
+			// the loop's default answers in its place, and the next
+			// iteration's prompt is rendered afresh for the default,
+			// whose profile differs from the pinned model's. The
+			// failover's own reply answered the prompt rendered for
+			// the pinned model.
+			name: "failover to a model with another profile",
+			pin:  "qwen-pinned",
+			responses: []*llm.ChatResponse{
+				nil,
+				accountingToolResponse(),
+				{
+					Model: "claude-primary", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Inspected after failover."},
+				},
+			},
+			errs: map[int]error{0: errors.New("provider unavailable")},
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "local_raw_text_tools"},
+				{"model": "claude-primary", "stop_reason": "end_turn", "profile": "anthropic_native"},
+			},
+			wantDispatched: []string{"qwen-pinned", "claude-primary", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
 		},
 		{
 			// The recovery model answers buildRecoveryPrompt, which no
-			// interaction profile rendered.
+			// interaction profile rendered. Its reply ends the turn, so
+			// the Response credits it.
 			name:          "timeout recovery model",
 			recoveryModel: "claude-recovery",
 			responses: []*llm.ChatResponse{
@@ -132,7 +177,9 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": ""},
 			},
-			wantFinish: "timeout_recovery",
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery"},
+			wantModel:      "claude-recovery",
+			wantFinish:     "timeout_recovery",
 		},
 		{
 			// When the recovery call itself fails, the reply is a
@@ -149,15 +196,19 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "claude-recovery", "stop_reason": "", "profile": ""},
 			},
-			wantFinish: "timeout_recovery",
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery"},
+			wantModel:      "claude-recovery",
+			wantFinish:     "timeout_recovery",
 		},
 		{
 			// Input arriving as the recovered reply closes holds the
-			// turn open, and the next call answers a prompt rendered
-			// afresh for the recovery model the engine switched to,
-			// whose profile differs from the primary's. Only the
-			// recovered reply goes without a profile. The model wrote
-			// the reply the turn ends on, so the run finishes as stop.
+			// turn open. Recovery answered that one reply only, so the
+			// follow-up goes back to the run's own model, not to the
+			// recovery model, whose profile differs, and answers a
+			// prompt rendered for the run's model. Only the recovered
+			// reply goes without a profile. The run's model wrote the
+			// reply the turn ends on, so the run finishes as stop and
+			// the Response credits that model.
 			name:          "timeout recovery then input at closure",
 			recoveryModel: "qwen-recovery",
 			responses: []*llm.ChatResponse{
@@ -168,7 +219,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 					Message: llm.Message{Role: "assistant", Content: "Inspected before the timeout."},
 				},
 				{
-					Model: "qwen-recovery", StopReason: "end_turn",
+					Model: "claude-primary", StopReason: "end_turn",
 					Message: llm.Message{Role: "assistant", Content: "Answered the follow-up."},
 				},
 			},
@@ -177,20 +228,48 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			want: []map[string]any{
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": ""},
-				{"model": "qwen-recovery", "stop_reason": "end_turn", "profile": "local_raw_text_tools"},
+				{"model": "claude-primary", "stop_reason": "end_turn", "profile": "anthropic_native"},
 			},
 			// The follow-up answers its own iteration's request again,
 			// though recovery replaced the one before it.
-			estimated:  []int{0, 2},
-			wantFinish: "stop",
+			estimated:      []int{0, 2},
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "qwen-recovery", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
+		},
+		{
+			// The canned text that stands in for a failed recovery
+			// call leaves the run on its own model too.
+			name:          "timeout recovery fails then input at closure",
+			recoveryModel: "qwen-recovery",
+			responses: []*llm.ChatResponse{
+				accountingToolResponse(),
+				nil, nil, nil, nil,
+				{
+					Model: "claude-primary", StopReason: "end_turn",
+					Message: llm.Message{Role: "assistant", Content: "Answered the follow-up."},
+				},
+			},
+			errs:      map[int]error{1: errTestTimeout, 2: errTestTimeout, 3: errTestTimeout, 4: errors.New("recovery unavailable")},
+			pullAfter: 5,
+			want: []map[string]any{
+				{"model": "claude-primary", "profile": "anthropic_native"},
+				{"model": "qwen-recovery", "stop_reason": "", "profile": ""},
+				{"model": "claude-primary", "stop_reason": "end_turn", "profile": "anthropic_native"},
+			},
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "qwen-recovery", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
 		},
 		{
 			// A recovery reply can carry tool calls, as when a runner
 			// recovers them from its text. Once they run out the
 			// iterations, the force-text call reports its response
-			// without starting an iteration, and it answers the prompt
-			// the primary's profile rendered. The run is exhausted, so
-			// it finishes with the reason it ran out.
+			// without starting an iteration. It goes to the run's own
+			// model, which wrote the reply the run ends on, and it
+			// answers the prompt that model's profile rendered. The
+			// run is exhausted, so it finishes with the reason it ran
+			// out.
 			name:          "timeout recovery with tool calls then force text",
 			recoveryModel: "claude-recovery",
 			maxIterations: 2,
@@ -204,7 +283,7 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 					return resp
 				}(),
 				{
-					Model: "claude-recovery", StopReason: "end_turn",
+					Model: "claude-primary", StopReason: "end_turn",
 					Message: llm.Message{Role: "assistant", Content: "Forced text."},
 				},
 			},
@@ -212,15 +291,20 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			want: []map[string]any{
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "claude-recovery", "profile": ""},
-				{"model": "claude-recovery", "stop_reason": "end_turn", "profile": "anthropic_native"},
+				{"model": "claude-primary", "stop_reason": "end_turn", "profile": "anthropic_native"},
 			},
-			wantFinish: iterate.ExhaustMaxIterations,
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     iterate.ExhaustMaxIterations,
 		},
 		{
 			// When that force-text call fails, the recovered response
 			// is the last one reported, but the run ends on the
 			// runtime's empty-response placeholder, not on it, so it
-			// still finishes with the reason it ran out.
+			// still finishes with the reason it ran out. The force-text
+			// call starts no iteration, so the Response credits the
+			// model of the last response the run reported, which is the
+			// recovery model's.
 			name:          "timeout recovery with tool calls then force text fails",
 			recoveryModel: "claude-recovery",
 			maxIterations: 2,
@@ -240,11 +324,14 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"model": "claude-recovery", "profile": ""},
 			},
-			wantFinish: iterate.ExhaustMaxIterations,
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery", "claude-primary"},
+			wantModel:      "claude-recovery",
+			wantFinish:     iterate.ExhaustMaxIterations,
 		},
 		{
 			// With no recovery model the reply is synthesized; no
-			// prompt at all produced it.
+			// prompt at all produced it, and no model wrote it, so the
+			// Response credits the run's own model.
 			name: "timeout static fallback",
 			responses: []*llm.ChatResponse{
 				accountingToolResponse(),
@@ -255,7 +342,9 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 				{"model": "claude-primary", "profile": "anthropic_native"},
 				{"stop_reason": "", "profile": ""},
 			},
-			wantFinish: "timeout_recovery",
+			wantDispatched: []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "timeout_recovery",
 		},
 		{
 			name:        "lightweight",
@@ -267,8 +356,10 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			want: []map[string]any{{"stop_reason": "max_tokens"}},
 			// The lite path offers no tools, so it has no provenance to
 			// report and no profile-rendered prompt.
-			wantAbsent: []string{"tool_call_source", "text_tool_action", "profile"},
-			wantFinish: "stop",
+			wantAbsent:     []string{"tool_call_source", "text_tool_action", "profile"},
+			wantDispatched: []string{"claude-primary"},
+			wantModel:      "claude-primary",
+			wantFinish:     "stop",
 		},
 	}
 	for _, tt := range tests {
@@ -276,8 +367,17 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			t.Parallel()
 			loop, _, _ := newAccountingTestLoop(t)
 			loop.recoveryModel = tt.recoveryModel
+			requestModel := "claude-primary"
+			if tt.pin != "" {
+				requestModel = ""
+				loop.conversationPins.set(tools.ConversationModelPin{
+					ConversationID: "provenance-log", Model: tt.pin, PinnedAt: time.Now(),
+				})
+			}
 			var calls int
-			loop.llm = accountingTestClient{call: func(context.Context, string, []map[string]any) (*llm.ChatResponse, error) {
+			var dispatched []string
+			loop.llm = accountingTestClient{call: func(_ context.Context, model string, _ []map[string]any) (*llm.ChatResponse, error) {
+				dispatched = append(dispatched, model)
 				if calls >= len(tt.responses) {
 					return nil, fmt.Errorf("unexpected model call %d", calls+1)
 				}
@@ -300,11 +400,13 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 					return []llm.Message{{Role: "user", Content: "And the tests?"}}
 				}
 			}
+			var live logging.RequestContent
+			loop.liveRequestRecorder = func(_ context.Context, content logging.RequestContent) { live = content }
 			logs := &lockedLogBuffer{}
 			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(logs, nil)))
 			resp, err := loop.Run(ctx, &Request{
 				ConversationID: "provenance-log",
-				Model:          "claude-primary",
+				Model:          requestModel,
 				SkipContext:    tt.lightweight,
 				SystemPrompt:   tt.systemPrompt,
 				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
@@ -316,6 +418,16 @@ func TestRun_LLMResponseLineCarriesProvenance(t *testing.T) {
 			}
 			if resp.FinishReason != tt.wantFinish {
 				t.Errorf("finish reason = %q, want %q", resp.FinishReason, tt.wantFinish)
+			}
+			if !slices.Equal(dispatched, tt.wantDispatched) {
+				t.Errorf("dispatched models = %v, want %v", dispatched, tt.wantDispatched)
+			}
+			if resp.Model != tt.wantModel {
+				t.Errorf("response model = %q, want %q", resp.Model, tt.wantModel)
+			}
+			// The lite path keeps no live request record.
+			if !tt.lightweight && live.Model != tt.wantModel {
+				t.Errorf("live request model = %q, want %q", live.Model, tt.wantModel)
 			}
 
 			lines := logs.records(t, "llm response")
