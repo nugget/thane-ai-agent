@@ -70,9 +70,12 @@ type Result struct {
 	// Content is the final text response from the model.
 	Content string
 
-	// Model is the model that produced the final response. It may
-	// differ from the initially configured model if error recovery
-	// or failover changed it.
+	// Model is the model the run was calling when it ended:
+	// [Config.Model], or the model an [Config.OnLLMError] handler last
+	// moved the run to, as failover does. A handler can answer one call
+	// from another model without moving the run, so Model need not name
+	// the model that wrote Content; each response's own model is on its
+	// [IterationRecord].
 	Model string
 
 	// UpstreamRequestID is the provider-side request ID of the final

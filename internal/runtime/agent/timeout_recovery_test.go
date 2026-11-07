@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 )
 
 // --- isTimeout tests ---
@@ -363,6 +365,57 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 
 	if !strings.Contains(resp.Content, "tool call") {
 		t.Errorf("static fallback should mention tool calls, got: %s", resp.Content)
+	}
+}
+
+// TestTimeoutRecovery_FailedRunKeepsRunModel pins the model a run that
+// failed after timeout recovery answered is recorded under. Recovery's
+// reply carried tool calls, the next call went back to the run's own
+// model and failed there, so the request record names that model, not
+// the recovery model whose response the run reported last.
+func TestTimeoutRecovery_FailedRunKeepsRunModel(t *testing.T) {
+	t.Parallel()
+
+	loop, _, _ := newAccountingTestLoop(t)
+	loop.recoveryModel = "claude-recovery"
+	failure := errors.New("provider unavailable")
+	var dispatched []string
+	loop.llm = accountingTestClient{call: func(_ context.Context, model string, _ []map[string]any) (*llm.ChatResponse, error) {
+		dispatched = append(dispatched, model)
+		switch len(dispatched) {
+		case 1:
+			return accountingToolResponse(), nil
+		case 2, 3, 4:
+			return nil, errTestTimeout
+		case 5:
+			resp := accountingToolResponse()
+			resp.Model = model
+			resp.Message.ToolCalls[0].ID = "recovery-call"
+			return resp, nil
+		case 6:
+			return nil, failure
+		default:
+			return nil, fmt.Errorf("unexpected model call %d", len(dispatched))
+		}
+	}}
+	var live logging.RequestContent
+	loop.liveRequestRecorder = func(_ context.Context, content logging.RequestContent) { live = content }
+
+	// The explicit model rules failover out, so the failure ends the run.
+	resp, err := loop.Run(context.Background(), &Request{
+		ConversationID: "failed-after-recovery",
+		Model:          "claude-primary",
+		Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
+	}, nil)
+	if resp != nil || !errors.Is(err, failure) {
+		t.Fatalf("Run = %+v, %v; want the failed call's error", resp, err)
+	}
+	want := []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery", "claude-primary"}
+	if !slices.Equal(dispatched, want) {
+		t.Errorf("dispatched models = %v, want %v", dispatched, want)
+	}
+	if live.Model != "claude-primary" {
+		t.Errorf("live request model = %q, want claude-primary", live.Model)
 	}
 }
 
