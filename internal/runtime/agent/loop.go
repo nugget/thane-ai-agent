@@ -165,9 +165,7 @@ type Response struct {
 	// change mid-run, unless timeout recovery supplied the last
 	// response the Run reported and the Run started no iteration after
 	// it. Then it is the recovery model, or the Run's own model for the
-	// static fallback that no model wrote. On the deferred-text path
-	// FinishReason describes, it is the model that returned the empty
-	// reply, though the text shipped is timeout recovery's.
+	// static fallback that no model wrote.
 	Model string `json:"model"`
 	// FinishReason says why the Run ended. It is the engine's exhaust
 	// reason (max_iterations, token_budget, illegal_tool and the like)
@@ -175,10 +173,7 @@ type Response struct {
 	// recovery supplied; "timeout_recovery" when the run did not run
 	// out and timeout recovery supplied the reply it ended on; and
 	// "stop" when the run neither ran out nor ended on a reply timeout
-	// recovery supplied, whoever wrote the text. On one path that text
-	// is still timeout recovery's: a recovered reply carrying tool
-	// calls has its text deferred, the reply the run ends on comes back
-	// empty, and the engine falls back to the deferred text.
+	// recovery supplied, whoever wrote the text.
 	FinishReason             string                              `json:"finish_reason"`
 	InputTokens              int                                 `json:"input_tokens,omitempty"`
 	PeakInputTokens          int                                 `json:"peak_input_tokens,omitempty"`
@@ -2831,17 +2826,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// still the reason worth reporting; every other exhaust reason ends
 	// the run on a force-text reply, a runtime placeholder, or no text.
 	// A run that ended on a reply finishes as timeout_recovery only when
-	// timeout recovery supplied that reply. Except on the one path
-	// below, the engine reports the reply a run ends on last, so
-	// finalRecovered describes it; a recovered reply that a later call
-	// followed, as when input arriving at closure holds the turn open,
-	// does not mark the run. The exception finishes as stop although
-	// recovery wrote its text. A recovered reply that carries tool calls
-	// has its text deferred; the recovery model is called without tools,
-	// so those calls were parsed out of its text, and the text deferred
-	// is prompts.TimeoutRecoveryEmpty. When the next reply comes back
-	// empty, the engine reports it and then ends the run on the deferred
-	// text.
+	// timeout recovery supplied that reply. The engine reports the reply
+	// a run ends on last, so finalRecovered describes it; a recovered
+	// reply that a later call followed, as when input arriving at
+	// closure holds the turn open, does not mark the run. When that last
+	// reply comes back empty, the engine can ship text from an earlier
+	// response in its place; the finish reason and the model credit
+	// still follow the last reported response, not the author of the
+	// text shipped, so a substituted recovered reply finishes as stop.
 	finishReason := "stop"
 	switch {
 	case iterResult.Exhausted:
@@ -2945,9 +2937,11 @@ type llmErrorOutcome struct {
 	// as each iteration starts, so a recovered reply that a later
 	// iteration's call followed no longer counts, even when that call
 	// ended the run without a response. The force-text call starts no
-	// iteration, so one that fails leaves it set. Run reads it to
-	// finish as timeout_recovery only when recovery wrote the reply the
-	// run ended on, and to credit that reply's model.
+	// iteration, but it never directly follows a recovered reply: it
+	// follows tool calls or an empty reply, and a recovered reply is
+	// neither. Run reads it to finish as timeout_recovery only when
+	// recovery wrote the reply the run ended on, and to credit that
+	// reply's model.
 	finalRecovered bool
 	// requestReplaced is set when the handler's response answers a
 	// request other than the iteration's own messages and tools, or
@@ -2992,11 +2986,43 @@ func (o *llmErrorOutcome) replyModel(runModel string) string {
 	return runModel
 }
 
+// dropRecoveryToolCalls removes the tool calls from resp, the recovery
+// model's reply, and logs what it removed. The recovery request offers
+// no tools and asks for a summary, but the reply can still carry calls:
+// a provider's text tool-call parse, OpenAI-compatible or Ollama, turns
+// a call the model wrote as text into a structured one under any name
+// when the request offered none. Returned to the engine, the calls
+// would run on its tool-call path against the run's tools, chosen by a
+// summarizer after the turn had already timed out. ToolCallSource names
+// the channel a response's calls arrived through, so it goes with them
+// and survives on the warning; TextToolAction stays, since it still
+// says what the fallback did to the reply's text. The Ollama provider
+// sets neither, so on its replies the warning's count and names alone
+// identify the calls.
+func dropRecoveryToolCalls(log *slog.Logger, resp *llm.ChatResponse, recoveryModel string) {
+	if len(resp.Message.ToolCalls) == 0 {
+		return
+	}
+	names := make([]string, 0, len(resp.Message.ToolCalls))
+	for _, tc := range resp.Message.ToolCalls {
+		names = append(names, tc.Function.Name)
+	}
+	log.Warn("dropped tool calls from timeout recovery reply",
+		"recovery_model", recoveryModel,
+		"dropped_tool_calls", len(names),
+		"dropped_tools", names,
+		"tool_call_source", string(resp.ToolCallSource),
+		"text_tool_action", string(resp.TextToolAction),
+	)
+	resp.Message.ToolCalls = nil
+	resp.ToolCallSource = ""
+}
+
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, timeout recovery, and failover logic.
 // Failover moves the run onto the fallback model. Timeout recovery
-// answers the failed call alone and leaves the run on the model it was
-// calling.
+// answers the failed call alone, with text and no tool calls, and
+// leaves the run on the model it was calling.
 func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, outcome *llmErrorOutcome) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
@@ -3064,6 +3090,9 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// arrives at closure or the force-text call, must go to the
 			// run's own model with the prompt its profile renders.
 			// recoveryReplied records which model the reply came from.
+			// The reply is text: the recovery model is asked for a
+			// summary with no tools, and dropRecoveryToolCalls removes
+			// any calls its reply carries anyway.
 			if l.recoveryModel != "" && len(toolsUsedFromMessages(msgs)) > 0 {
 				iterLog.Warn("retries exhausted, downshifting to recovery model",
 					"recovery_model", l.recoveryModel,
@@ -3097,6 +3126,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					}, model, nil
 				}
 				iterLog.Info("timeout recovery successful", "recovery_model", l.recoveryModel)
+				dropRecoveryToolCalls(iterLog, resp, l.recoveryModel)
 				if resp.Message.Content == "" {
 					resp.Message.Content = prompts.TimeoutRecoveryEmpty
 				}
