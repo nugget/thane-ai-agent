@@ -157,14 +157,20 @@ const storedHistoryGapThreshold = 30 * time.Minute
 
 // Response is the result of a single agent Run() call. It contains the
 // model's final content, token usage counters, and metadata about which
-// tools and capability tags were active during execution. Its
-// FinishReason says why the Run ended: "stop" when a model reply ended
-// it, the engine's exhaust reason (such as max_iterations or
-// token_budget) when the run ran out, or "timeout_recovery" when timeout
-// recovery supplied the reply it ended on.
+// tools and capability tags were active during execution.
 type Response struct {
-	Content                  string                              `json:"content"`
-	Model                    string                              `json:"model"`
+	Content string `json:"content"`
+	Model   string `json:"model"`
+	// FinishReason says why the Run ended. It is the engine's exhaust
+	// reason (max_iterations, token_budget, illegal_tool and the like)
+	// when the run ran out, even when it ran out on a reply timeout
+	// recovery supplied; "timeout_recovery" when the run did not run
+	// out and timeout recovery supplied the reply it ended on; and
+	// "stop" when the run neither ran out nor ended on a reply timeout
+	// recovery supplied, whoever wrote the text. On one path that text
+	// is still timeout recovery's: a recovered reply carrying tool
+	// calls has its text deferred, the reply the run ends on comes back
+	// empty, and the engine falls back to the deferred text.
 	FinishReason             string                              `json:"finish_reason"`
 	InputTokens              int                                 `json:"input_tokens,omitempty"`
 	PeakInputTokens          int                                 `json:"peak_input_tokens,omitempty"`
@@ -2803,10 +2809,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// still the reason worth reporting; every other exhaust reason ends
 	// the run on a force-text reply, a runtime placeholder, or no text.
 	// A run that ended on a reply finishes as timeout_recovery only when
-	// timeout recovery supplied that reply. The engine reports the reply
-	// a run ends on last, so finalRecovered describes it; a recovered
-	// reply that a later call followed, as when input arriving at
-	// closure holds the turn open, does not mark the run.
+	// timeout recovery supplied that reply. Except on the one path
+	// below, the engine reports the reply a run ends on last, so
+	// finalRecovered describes it; a recovered reply that a later call
+	// followed, as when input arriving at closure holds the turn open,
+	// does not mark the run. The exception finishes as stop although
+	// recovery wrote its text. A recovered reply that carries tool calls
+	// has its text deferred; the recovery model is called without tools,
+	// so those calls were parsed out of its text, and the text deferred
+	// is prompts.TimeoutRecoveryEmpty. When the next reply comes back
+	// empty, the engine reports it and then ends the run on the deferred
+	// text.
 	finishReason := "stop"
 	switch {
 	case iterResult.Exhausted:

@@ -124,17 +124,17 @@ func offersReplyHold(tools []loop.RuntimeTool) bool {
 }
 
 // finishReasonTimeoutRecovery is the agent's FinishReason for a turn
-// whose final text the runtime wrote after the model call timed out: the
-// static timeout notice, or a recovery model's summary of the work. The
-// signal package does not import the agent, so the value is mirrored
-// here; TestBridge_WakeTimeoutRecoveryThroughAgent pins it against the
-// real agent.
+// whose final reply timeout recovery supplied after the model call timed
+// out: the static timeout notice, or a recovery model's summary of the
+// work. The signal package does not import the agent, so the value is
+// mirrored here; TestBridge_WakeTimeoutRecoveryThroughAgent pins it
+// against the real agent.
 const finishReasonTimeoutRecovery = "timeout_recovery"
 
 // runtimeWroteFinalText reports whether a turn's final text came from
 // the runtime rather than from the model deciding what the thread should
-// see: a placeholder isRuntimeFallback recognises, or any text on a
-// timeout-recovered turn. A recovery model's summary is written for a
+// see: a placeholder isRuntimeFallback recognises, or a final reply
+// timeout recovery supplied. A recovery model's summary is written for a
 // user waiting on an answer, and no one on a wake turn is.
 func runtimeWroteFinalText(resp *loop.Response, requestFallback string) bool {
 	return resp.FinishReason == finishReasonTimeoutRecovery || isRuntimeFallback(resp.Content, requestFallback)
