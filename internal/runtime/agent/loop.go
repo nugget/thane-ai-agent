@@ -165,9 +165,7 @@ type Response struct {
 	// change mid-run, unless timeout recovery supplied the last
 	// response the Run reported and the Run started no iteration after
 	// it. Then it is the recovery model, or the Run's own model for the
-	// static fallback that no model wrote. On the deferred-text path
-	// FinishReason describes, it is the model that returned the empty
-	// reply, though the text shipped is timeout recovery's.
+	// static fallback that no model wrote.
 	Model string `json:"model"`
 	// FinishReason says why the Run ended. It is the engine's exhaust
 	// reason (max_iterations, token_budget, illegal_tool and the like)
@@ -175,10 +173,7 @@ type Response struct {
 	// recovery supplied; "timeout_recovery" when the run did not run
 	// out and timeout recovery supplied the reply it ended on; and
 	// "stop" when the run neither ran out nor ended on a reply timeout
-	// recovery supplied, whoever wrote the text. On one path that text
-	// is still timeout recovery's: a recovered reply carrying tool
-	// calls has its text deferred, the reply the run ends on comes back
-	// empty, and the engine falls back to the deferred text.
+	// recovery supplied, whoever wrote the text.
 	FinishReason             string                              `json:"finish_reason"`
 	InputTokens              int                                 `json:"input_tokens,omitempty"`
 	PeakInputTokens          int                                 `json:"peak_input_tokens,omitempty"`
@@ -2831,17 +2826,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// still the reason worth reporting; every other exhaust reason ends
 	// the run on a force-text reply, a runtime placeholder, or no text.
 	// A run that ended on a reply finishes as timeout_recovery only when
-	// timeout recovery supplied that reply. Except on the one path
-	// below, the engine reports the reply a run ends on last, so
-	// finalRecovered describes it; a recovered reply that a later call
-	// followed, as when input arriving at closure holds the turn open,
-	// does not mark the run. The exception finishes as stop although
-	// recovery wrote its text. A recovered reply that carries tool calls
-	// has its text deferred; the recovery model is called without tools,
-	// so those calls were parsed out of its text, and the text deferred
-	// is prompts.TimeoutRecoveryEmpty. When the next reply comes back
-	// empty, the engine reports it and then ends the run on the deferred
-	// text.
+	// timeout recovery supplied that reply. The engine reports the reply
+	// a run ends on last, so finalRecovered describes it; a recovered
+	// reply that a later call followed, as when input arriving at
+	// closure holds the turn open, does not mark the run. When that last
+	// reply comes back empty, the engine can fill it with text a model
+	// wrote beside earlier tool calls, but never with recovery's text:
+	// dropRecoveryToolCalls leaves a recovered reply no tool calls to
+	// defer it beside.
 	finishReason := "stop"
 	switch {
 	case iterResult.Exhausted:
@@ -2945,9 +2937,11 @@ type llmErrorOutcome struct {
 	// as each iteration starts, so a recovered reply that a later
 	// iteration's call followed no longer counts, even when that call
 	// ended the run without a response. The force-text call starts no
-	// iteration, so one that fails leaves it set. Run reads it to
-	// finish as timeout_recovery only when recovery wrote the reply the
-	// run ended on, and to credit that reply's model.
+	// iteration, but it never directly follows a recovered reply: it
+	// follows tool calls or an empty reply, and a recovered reply is
+	// neither. Run reads it to finish as timeout_recovery only when
+	// recovery wrote the reply the run ended on, and to credit that
+	// reply's model.
 	finalRecovered bool
 	// requestReplaced is set when the handler's response answers a
 	// request other than the iteration's own messages and tools, or
