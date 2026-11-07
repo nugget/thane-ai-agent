@@ -2992,11 +2992,41 @@ func (o *llmErrorOutcome) replyModel(runModel string) string {
 	return runModel
 }
 
+// dropRecoveryToolCalls removes the tool calls from resp, the recovery
+// model's reply, and logs what it removed. The recovery request offers
+// no tools and asks for a summary, but the reply can still carry calls:
+// an OpenAI-compatible provider's text fallback recovers a call the
+// model wrote as text under any name when the request offered none.
+// Returned to the engine, the calls would run on its tool-call path
+// against the run's tools, chosen by a summarizer after the turn had
+// already timed out. ToolCallSource names the channel a response's
+// calls arrived through, so it goes with them and survives on the
+// warning; TextToolAction stays, since it still says what the fallback
+// did to the reply's text.
+func dropRecoveryToolCalls(log *slog.Logger, resp *llm.ChatResponse, recoveryModel string) {
+	if len(resp.Message.ToolCalls) == 0 {
+		return
+	}
+	names := make([]string, 0, len(resp.Message.ToolCalls))
+	for _, tc := range resp.Message.ToolCalls {
+		names = append(names, tc.Function.Name)
+	}
+	log.Warn("dropped tool calls from timeout recovery reply",
+		"recovery_model", recoveryModel,
+		"dropped_tool_calls", len(names),
+		"dropped_tools", names,
+		"tool_call_source", string(resp.ToolCallSource),
+		"text_tool_action", string(resp.TextToolAction),
+	)
+	resp.Message.ToolCalls = nil
+	resp.ToolCallSource = ""
+}
+
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, timeout recovery, and failover logic.
 // Failover moves the run onto the fallback model. Timeout recovery
-// answers the failed call alone and leaves the run on the model it was
-// calling.
+// answers the failed call alone, with text and no tool calls, and
+// leaves the run on the model it was calling.
 func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, client llm.Client, req *Request, outcome *llmErrorOutcome) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
 	explicitModelRequested := strings.TrimSpace(req.Model) != ""
 
@@ -3064,6 +3094,9 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// arrives at closure or the force-text call, must go to the
 			// run's own model with the prompt its profile renders.
 			// recoveryReplied records which model the reply came from.
+			// The reply is text: the recovery model is asked for a
+			// summary with no tools, and dropRecoveryToolCalls removes
+			// any calls its reply carries anyway.
 			if l.recoveryModel != "" && len(toolsUsedFromMessages(msgs)) > 0 {
 				iterLog.Warn("retries exhausted, downshifting to recovery model",
 					"recovery_model", l.recoveryModel,
@@ -3097,6 +3130,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					}, model, nil
 				}
 				iterLog.Info("timeout recovery successful", "recovery_model", l.recoveryModel)
+				dropRecoveryToolCalls(iterLog, resp, l.recoveryModel)
 				if resp.Message.Content == "" {
 					resp.Message.Content = prompts.TimeoutRecoveryEmpty
 				}

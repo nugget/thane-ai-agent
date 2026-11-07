@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/prompts"
 	"github.com/nugget/thane-ai-agent/internal/platform/logging"
 	"github.com/nugget/thane-ai-agent/internal/runtime/iterate"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // --- isTimeout tests ---
@@ -372,31 +377,21 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 
 // TestTimeoutRecovery_LaterCallKeepsRunModel pins the model a run is
 // recorded under when a call after timeout recovery's reply ends it.
-// Recovery answered one call, and the next went back to the run's own
-// model and ended the run there, by failing or by spending the rest of
-// the output budget. The request record, and the Response when the run
-// completes, name that model, not the recovery model whose response the
-// run reported last.
+// Recovery answered one call, input arriving at closure held the turn
+// open, and the next call went back to the run's own model and ended
+// the run there, by failing or by spending the rest of the output
+// budget. The request record, and the Response when the run completes,
+// name that model, not the recovery model whose response the run
+// reported last.
 func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 	t.Parallel()
 
 	failure := errors.New("provider unavailable")
-	recoveredToolCall := func(model string) *llm.ChatResponse {
-		resp := accountingToolResponse()
-		resp.Model = model
-		resp.Message.ToolCalls[0].ID = "recovery-call"
-		return resp
-	}
 	tests := []struct {
 		name string
 		// maxOutputTokens is the request's output budget; zero is
 		// none.
 		maxOutputTokens int
-		// recovered is the recovery model's reply to the fifth call.
-		recovered func(model string) *llm.ChatResponse
-		// pullAtClosure delivers one user message as the recovered
-		// reply closes, which holds the turn open.
-		pullAtClosure bool
 		// laterOutputTokens is what the sixth call, on the run's own
 		// model, spends before it fails with laterErr.
 		laterOutputTokens int
@@ -408,30 +403,14 @@ func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 		{
 			// The explicit request model rules failover out, so the
 			// failure ends the run.
-			name:      "fails after recovered tool calls",
-			recovered: recoveredToolCall,
-			laterErr:  failure,
-			wantErr:   failure,
+			name:     "fails answering input at closure",
+			laterErr: failure,
+			wantErr:  failure,
 		},
 		{
-			name:            "spends the budget answering input at closure",
-			maxOutputTokens: 50,
-			recovered: func(model string) *llm.ChatResponse {
-				return &llm.ChatResponse{
-					Model: model, StopReason: "end_turn", OutputTokens: 20,
-					Message: llm.Message{Role: "assistant", Content: "Recovered."},
-				}
-			},
-			pullAtClosure:     true,
-			laterOutputTokens: 20,
-			laterErr:          errors.New("stream reset"),
-			wantFinish:        iterate.ExhaustTokenBudget,
-		},
-		{
-			name:              "spends the budget after recovered tool calls",
+			name:              "spends the budget answering input at closure",
 			maxOutputTokens:   50,
-			recovered:         recoveredToolCall,
-			laterOutputTokens: 30,
+			laterOutputTokens: 20,
 			laterErr:          errors.New("stream reset"),
 			wantFinish:        iterate.ExhaustTokenBudget,
 		},
@@ -450,7 +429,10 @@ func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 				case 2, 3, 4:
 					return nil, errTestTimeout
 				case 5:
-					return tt.recovered(model), nil
+					return &llm.ChatResponse{
+						Model: model, StopReason: "end_turn", OutputTokens: 20,
+						Message: llm.Message{Role: "assistant", Content: "Recovered."},
+					}, nil
 				case 6:
 					if tt.laterOutputTokens > 0 {
 						return &llm.ChatResponse{Model: model, OutputTokens: tt.laterOutputTokens}, tt.laterErr
@@ -460,16 +442,13 @@ func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 					return nil, fmt.Errorf("unexpected model call %d", len(dispatched))
 				}
 			}}
-			var pullInput func(context.Context) []llm.Message
-			if tt.pullAtClosure {
-				delivered := false
-				pullInput = func(context.Context) []llm.Message {
-					if delivered || len(dispatched) < 5 {
-						return nil
-					}
-					delivered = true
-					return []llm.Message{{Role: "user", Content: "And the tests?"}}
+			delivered := false
+			pullInput := func(context.Context) []llm.Message {
+				if delivered || len(dispatched) < 5 {
+					return nil
 				}
+				delivered = true
+				return []llm.Message{{Role: "user", Content: "And the tests?"}}
 			}
 			var live logging.RequestContent
 			loop.liveRequestRecorder = func(_ context.Context, content logging.RequestContent) { live = content }
@@ -509,6 +488,162 @@ func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 				t.Errorf("content = %q, want the empty-response fallback", resp.Content)
 			}
 		})
+	}
+}
+
+// TestTimeoutRecovery_ReplyToolCallsDoNotRun pins that a timeout
+// recovery reply runs no tool calls. The recovery request offers no
+// tools, but its reply can still carry calls: an OpenAI-compatible
+// runner's text fallback recovers a call the model wrote as text under
+// any name when the request offered none, and the engine would run it
+// against the run's tools, on a summarizer's word, after the turn had
+// already timed out. The reply keeps its own text, or takes
+// TimeoutRecoveryEmpty when the fallback consumed it, and still ends
+// the turn as timeout recovery's. The response line reports what the
+// fallback did, and a warning keeps the dropped calls' provenance.
+func TestTimeoutRecovery_ReplyToolCallsDoNotRun(t *testing.T) {
+	t.Parallel()
+
+	sendReport := llm.ToolCall{ID: "recovery-call"}
+	sendReport.Function.Name = "send_report"
+	sendReport.Function.Arguments = map[string]any{}
+
+	tests := []struct {
+		name string
+		// reply is the recovery model's message, which goes through the
+		// text fallback with the recovery request's tool names, as an
+		// OpenAI-compatible runner's reply does.
+		reply       llm.Message
+		wantContent string
+		// wantResponse is the recovered reply's llm response line.
+		wantResponse map[string]any
+		// wantDropped is the warning that records the dropped calls.
+		wantDropped map[string]any
+	}{
+		{
+			name:        "call written as text",
+			reply:       llm.Message{Role: "assistant", Content: `{"name":"send_report","arguments":{}}`},
+			wantContent: prompts.TimeoutRecoveryEmpty,
+			wantResponse: map[string]any{
+				"tool_calls": float64(0), "tool_call_source": "", "text_tool_action": "recovered", "profile": "",
+			},
+			wantDropped: map[string]any{
+				"dropped_tool_calls": float64(1), "tool_call_source": "text_fallback", "text_tool_action": "recovered",
+			},
+		},
+		{
+			name: "structured call beside text",
+			reply: llm.Message{
+				Role: "assistant", Content: "Inspected the source; sending the report.",
+				ToolCalls: []llm.ToolCall{sendReport},
+			},
+			wantContent: "Inspected the source; sending the report.",
+			wantResponse: map[string]any{
+				"tool_calls": float64(0), "tool_call_source": "", "text_tool_action": "none", "profile": "",
+			},
+			wantDropped: map[string]any{
+				"dropped_tool_calls": float64(1), "tool_call_source": "native", "text_tool_action": "none",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			loop, _, _ := newAccountingTestLoop(t)
+			loop.recoveryModel = "claude-recovery"
+			var ran atomic.Bool
+			loop.tools.Register(&tools.Tool{
+				Name: "send_report", Description: "Send the operator a report.",
+				Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
+				Handler: func(context.Context, map[string]any) (string, error) {
+					ran.Store(true)
+					return "report sent", nil
+				},
+			})
+			var dispatched []string
+			loop.llm = accountingTestClient{call: func(_ context.Context, model string, defs []map[string]any) (*llm.ChatResponse, error) {
+				dispatched = append(dispatched, model)
+				switch len(dispatched) {
+				case 1:
+					return accountingToolResponse(), nil
+				case 2, 3, 4:
+					return nil, errTestTimeout
+				case 5:
+					if len(defs) != 0 {
+						t.Errorf("recovery request offered %d tools, want none", len(defs))
+					}
+					resp := &llm.ChatResponse{Model: model, StopReason: "stop", Message: tt.reply}
+					llm.ApplyTextToolCallFallback(resp, llm.ExtractToolNames(defs), llm.DefaultToolCallTextProfile())
+					return resp, nil
+				default:
+					// Answer anything the run sends after recovery, so a
+					// run that ran the calls ends and shows it.
+					return &llm.ChatResponse{
+						Model: model, StopReason: "end_turn",
+						Message: llm.Message{Role: "assistant", Content: "Answered after the recovery reply."},
+					}, nil
+				}
+			}}
+			logs := &lockedLogBuffer{}
+			ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(logs, nil)))
+
+			resp, err := loop.Run(ctx, &Request{
+				ConversationID: "recovery-tool-calls",
+				Model:          "claude-primary",
+				Messages:       []Message{{Role: "user", Content: "Inspect the source."}},
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ran.Load() {
+				t.Error("send_report ran from the timeout recovery reply")
+			}
+			want := []string{"claude-primary", "claude-primary", "claude-primary", "claude-primary", "claude-recovery"}
+			if !slices.Equal(dispatched, want) {
+				t.Errorf("dispatched models = %v, want %v", dispatched, want)
+			}
+			if resp.Content != tt.wantContent {
+				t.Errorf("content = %q, want %q", resp.Content, tt.wantContent)
+			}
+			if resp.FinishReason != "timeout_recovery" {
+				t.Errorf("finish reason = %q, want timeout_recovery", resp.FinishReason)
+			}
+			if resp.Model != "claude-recovery" {
+				t.Errorf("response model = %q, want claude-recovery", resp.Model)
+			}
+
+			lines := logs.records(t, "llm response")
+			if len(lines) != 2 {
+				t.Fatalf("llm response lines = %d, want 2: %v", len(lines), lines)
+			}
+			assertLogFields(t, "recovered reply's llm response line", lines[1], tt.wantResponse)
+			dropped := logs.records(t, "dropped tool calls from timeout recovery reply")
+			if len(dropped) != 1 {
+				t.Fatalf("dropped tool call warnings = %d, want 1", len(dropped))
+			}
+			wantDropped := maps.Clone(tt.wantDropped)
+			wantDropped["level"] = "WARN"
+			wantDropped["recovery_model"] = "claude-recovery"
+			wantDropped["dropped_tools"] = []any{"send_report"}
+			assertLogFields(t, "dropped tool call warning", dropped[0], wantDropped)
+		})
+	}
+}
+
+// assertLogFields reports each field of want that rec, a decoded JSON
+// log record named what, lacks or holds a different value for.
+func assertLogFields(t *testing.T, what string, rec, want map[string]any) {
+	t.Helper()
+	for key, value := range want {
+		got, ok := rec[key]
+		if !ok {
+			t.Errorf("%s missing %q: %v", what, key, rec)
+			continue
+		}
+		if !reflect.DeepEqual(got, value) {
+			t.Errorf("%s %s = %v, want %v", what, key, got, value)
+		}
 	}
 }
 
