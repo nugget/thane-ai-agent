@@ -430,7 +430,9 @@ func TestWireScanJSONShape(t *testing.T) {
 // to its length. Quadruple the input and a linear scan takes about four
 // times as long, where anything quadratic takes sixteen; the bound sits
 // between them, so the machine and the race detector cancel in the
-// ratio and only a change in complexity trips it.
+// ratio and only a change in complexity trips it. Time is the process's
+// CPU time, which a busy machine does not inflate the way it inflates
+// wall-clock time for the larger, longer runs.
 func TestScanWireScalesLinearly(t *testing.T) {
 	const (
 		base   = 5_000
@@ -448,6 +450,7 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		{"harmony recipients", func(n int) string { return strings.Repeat("to=functions.a {", n) }},
 		{"empty tool_call tags", func(n int) string { return strings.Repeat("<tool_call></tool_call>", n) }},
 		{"cut-off calls", func(n int) string { return strings.Repeat(`{"name":"a","arguments":{}`, n) }},
+		{"call-shaped objects in a row", func(n int) string { return strings.Repeat(`{"name":"a","arguments":[1]} `, n) }},
 		{"qwen calls in a JSON call's arguments", func(n int) string {
 			return `{"name":"a","arguments":"` + strings.Repeat("<function=b></function>", n) + `"}`
 		}},
@@ -470,15 +473,14 @@ func TestScanWireScalesLinearly(t *testing.T) {
 		}},
 	}
 	// The fastest of several runs of each size, the sizes interleaved, so
-	// a scheduler hiccup or a busy stretch on a shared CI runner slows
-	// both alike instead of landing on the large runs and faking a slope.
+	// what contention CPU time still feels slows both alike.
 	measure := func(small, large string) (time.Duration, time.Duration) {
 		best := [2]time.Duration{math.MaxInt64, math.MaxInt64}
 		for range 5 {
 			for i, text := range []string{small, large} {
-				start := time.Now()
+				start := processCPUTime(t)
 				ScanWire(text, text, wireOffered)
-				best[i] = min(best[i], time.Since(start))
+				best[i] = min(best[i], processCPUTime(t)-start)
 			}
 		}
 		return max(best[0], time.Microsecond), max(best[1], time.Microsecond)
