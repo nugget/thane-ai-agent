@@ -822,6 +822,14 @@ func TestEngine_EmptyResponseStandIn(t *testing.T) {
 			wantNudges:    1,
 		},
 		{
+			name:          "nudge spent, then empty on the last iteration: fallback, not exhausted",
+			maxIterations: 2,
+			responses:     []*llm.ChatResponse{textResponse(""), textResponse("")},
+			wantContent:   fallback,
+			wantCalls:     2,
+			wantNudges:    1,
+		},
+		{
 			name:          "nudging disabled: held reply ships",
 			maxIterations: 3,
 			noNudge:       true,

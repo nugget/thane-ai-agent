@@ -172,10 +172,12 @@ type Config struct {
 	// NudgeOnEmpty enables empty-response nudging: when the model
 	// returns no content and left no deferred text, inject NudgePrompt to
 	// give it one more chance to produce text. The nudge is tried once per
-	// run, and only while another iteration remains to answer it; an empty
-	// reply on the last iteration with nothing to stand in ends the run as
-	// exhausted instead, like any run that runs out of iterations. Agent
-	// sets true.
+	// run, and only while another iteration remains to answer it. An
+	// empty reply on the last iteration with nothing to stand in and the
+	// nudge still untried ends the run as exhausted, like any run that runs
+	// out of iterations. Once the nudge was tried, an empty reply with
+	// nothing to stand in gets FallbackContent on any iteration, the last
+	// included, and the run is not exhausted. Agent sets true.
 	NudgeOnEmpty bool
 
 	// NudgePrompt is the user-role message injected on empty responses.
