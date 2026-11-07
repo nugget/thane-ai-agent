@@ -2830,10 +2830,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// a run ends on last, so finalRecovered describes it; a recovered
 	// reply that a later call followed, as when input arriving at
 	// closure holds the turn open, does not mark the run. When that last
-	// reply comes back empty, the engine can fill it with text a model
-	// wrote beside earlier tool calls, but never with recovery's text:
-	// dropRecoveryToolCalls leaves a recovered reply no tool calls to
-	// defer it beside.
+	// reply comes back empty, the engine can ship text from an earlier
+	// response in its place; the finish reason and the model credit
+	// still follow the last reported response, not the author of the
+	// text shipped, so a substituted recovered reply finishes as stop.
 	finishReason := "stop"
 	switch {
 	case iterResult.Exhausted:
