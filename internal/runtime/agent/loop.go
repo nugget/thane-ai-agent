@@ -1849,6 +1849,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
+			"stop_reason", llmResp.StopReason,
 			"elapsed_ms", time.Since(startTime).Milliseconds(),
 		)
 
@@ -1998,13 +1999,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	var systemPrompt string
 	var systemSections []llm.PromptSection
+	// promptProfile names the interaction profile that rendered the
+	// system prompt now in the message history. It is set wherever the
+	// prompt is rendered, and stays empty for a caller-supplied prompt,
+	// which is used verbatim.
+	var promptProfile string
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
 		// Keep caller text in the section representation before appending
 		// context usage; providers that render sections must receive both.
 		systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 	} else {
-		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, llm.DefaultModelInteractionProfile())
+		defaultProfile := llm.DefaultModelInteractionProfile()
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, defaultProfile)
+		promptProfile = defaultProfile.Name
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
@@ -2157,7 +2165,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			systemPrompt = req.SystemPrompt
 			systemSections = []llm.PromptSection{{Name: "CUSTOM SYSTEM PROMPT", Content: systemPrompt}}
 		} else {
-			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, l.modelInteractionProfileForModel(model))
+			profile := l.modelInteractionProfileForModel(model)
+			systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, profile)
+			promptProfile = profile.Name
 		}
 		updateSystemMessage()
 		usageInfo.TokenCount = estimateLLMMessagesContextTokens(llmMessages)
@@ -2456,7 +2466,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use for callers
 			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, l.modelInteractionProfileForModel(currentModel))
+				profile := l.modelInteractionProfileForModel(currentModel)
+				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, profile)
+				promptProfile = profile.Name
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				// Providers may render Sections instead of Content, so refresh
@@ -2544,6 +2556,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					},
 				})
 			}
+			// The profile is the one that rendered the prompt this call
+			// answered, which follows the dispatched model and can change
+			// mid-turn. It is empty when no profile rendered that prompt:
+			// a caller-supplied SystemPrompt is used verbatim, and a
+			// timeout-recovered reply answered buildRecoveryPrompt or was
+			// synthesized without a call. The handler marks that one
+			// reply, and reading the mark clears it, so a later call in
+			// the same turn, such as one answering input that arrived at
+			// closure, keeps its profile. IterationRecord is not
+			// archived, so this line is the durable record of how each
+			// call's tool calls arrived.
+			profile := promptProfile
+			if llmErr.recoveryAnswered {
+				profile = ""
+				llmErr.recoveryAnswered = false
+			}
 			iterLog := logging.Logger(iterCtx)
 			// Anthropic's input_tokens leaves out what the cache wrote
 			// and served, so prompt_tokens is the measured figure to
@@ -2558,12 +2586,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"prompt_tokens", iterate.PromptTokens(llmResp.InputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens),
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),
+				"stop_reason", llmResp.StopReason,
+				"tool_call_source", string(llmResp.ToolCallSource),
+				"text_tool_action", string(llmResp.TextToolAction),
+				"profile", profile,
 			}
 			// The estimate is attached only when the response answers
 			// the request it describes. The error handler reports when
 			// it answered something else instead; see
-			// llmErrorOutcome.requestReplaced.
-			if !llmErr.requestReplaced {
+			// llmErrorOutcome.requestReplaced. The force-text call that
+			// closes an exhausted turn answers no iteration's request
+			// either: it resends the messages without the tools, and
+			// no iteration starts to estimate it.
+			site, _ := llm.CallSiteFromContext(iterCtx)
+			if !llmErr.requestReplaced && site.Kind != llm.CallKindForceText {
 				respAttrs = append(respAttrs, "est_request_tokens", iterEstimate.total())
 			}
 			iterLog.Info("llm response", respAttrs...)
@@ -2848,6 +2884,12 @@ type llmErrorOutcome struct {
 	// the model the Run asked, and makes the Run's finish reason
 	// timeout_recovery.
 	timeoutRecovered bool
+	// recoveryAnswered is set when timeout recovery supplied the
+	// response the engine reports next: an answer to
+	// buildRecoveryPrompt, or canned text no call produced, so no
+	// interaction profile rendered the prompt it answers. The response
+	// callback clears it as it reads it.
+	recoveryAnswered bool
 	// requestReplaced is set when the handler's response answers a
 	// request other than the iteration's own messages and tools, or
 	// is canned text no call produced. Run clears it as each iteration
@@ -2939,7 +2981,11 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 						"error", recoveryErr,
 						"recovery_model", l.recoveryModel,
 					)
-					// Return a static recovery response as content.
+					// Return a static recovery response as content. It
+					// answered no prompt, and the turn still ended in
+					// timeout recovery.
+					outcome.timeoutRecovered = true
+					outcome.recoveryAnswered = true
 					outcome.requestReplaced = true
 					return &llm.ChatResponse{
 						Model:   l.recoveryModel,
@@ -2951,6 +2997,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					resp.Message.Content = prompts.TimeoutRecoveryEmpty
 				}
 				outcome.timeoutRecovered = true
+				outcome.recoveryAnswered = true
 				outcome.requestReplaced = true
 				return resp, l.recoveryModel, nil
 			}
@@ -2958,6 +3005,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// so the user sees something rather than an error.
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
 			outcome.timeoutRecovered = true
+			outcome.recoveryAnswered = true
 			outcome.requestReplaced = true
 			used := toolsUsedFromMessages(msgs)
 			names := make([]string, 0, len(used))

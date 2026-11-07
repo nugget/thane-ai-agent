@@ -29,7 +29,16 @@ type IterationRecord struct {
 	// and warrants operator visibility — surfacing it here lets agent
 	// loops and trace dashboards react without reaching into provider
 	// internals.
-	StopReason                 string
+	StopReason string
+	// ToolCallSource is the channel this iteration's tool calls arrived
+	// through, as llm.ChatResponse.ToolCallSource reports it. Empty
+	// when the iteration made no calls or its provider does not report
+	// the channel.
+	ToolCallSource llm.ToolCallSource
+	// TextToolAction is what the provider's text fallback did to this
+	// iteration's response, as llm.ChatResponse.TextToolAction reports
+	// it. Empty when the provider does not run the fallback.
+	TextToolAction             llm.TextToolAction
 	InputTokens                int
 	OutputTokens               int
 	CacheCreationInputTokens   int

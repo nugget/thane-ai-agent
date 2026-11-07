@@ -491,6 +491,12 @@ func openAICompatContentText(v any) string {
 	}
 }
 
+// applyTextToolFallback runs the text fallback, which records where the
+// response's tool calls came from, and then fills in missing call IDs.
+// The source is decided before IDs are generated, so calls decoded from
+// the structured field stay native even when
+// ensureOpenAICompatToolCallID had to invent their IDs: an ID's shape is
+// never evidence of provenance.
 func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) error {
 	if resp == nil {
 		return nil

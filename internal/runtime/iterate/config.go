@@ -67,7 +67,11 @@ type Config struct {
 	OnIterationStart func(ctx context.Context, iteration int, currentModel string, msgs []llm.Message, toolDefs []map[string]any)
 
 	// OnLLMResponse fires after each successful LLM call, before tool
-	// execution. Use it for logging and emitting stream events.
+	// execution. Use it for logging and emitting stream events. For an
+	// iteration's call ctx carries no call site; for the force-text
+	// call that closes an exhausted run, which starts no iteration, it
+	// carries the [llm.CallKindForceText] call site, so a caller can
+	// tell a response that answers no iteration's request.
 	OnLLMResponse func(ctx context.Context, resp *llm.ChatResponse, iteration int)
 
 	// OnLLMError is called when an LLM ChatStream call fails. It may

@@ -467,3 +467,55 @@ func TestRun_ResponseLineReportsWholePrompt(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_ForceTextResponseOmitsEstimate proves the force-text call that
+// closes an exhausted turn reports no request estimate. It resends the
+// messages without the tools and starts no iteration, so the last
+// iteration's estimate, tool schemas included, does not describe it.
+func TestRun_ForceTextResponseOmitsEstimate(t *testing.T) {
+	t.Parallel()
+
+	toolResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role:      "assistant",
+			ToolCalls: []llm.ToolCall{sizingToolCall("call-1", "lookup", map[string]any{"query": "q"})},
+		},
+		InputTokens: 100, OutputTokens: 10,
+	}
+	forced := &llm.ChatResponse{
+		Model:       "test-model",
+		Message:     llm.Message{Role: "assistant", Content: "done"},
+		InputTokens: 120, OutputTokens: 5,
+	}
+	loop := buildTestLoopWithLLM(&mockLLM{responses: []*llm.ChatResponse{toolResp, forced}}, nil)
+	loop.tools.Register(&tools.Tool{
+		Name:        "lookup",
+		Description: strings.Repeat("Look up a record by key. ", 200),
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}},
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	var logs lockedBuffer
+	ctx := logging.WithLogger(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if _, err := loop.Run(ctx, &Request{
+		Messages:      []Message{{Role: "user", Content: "look up the record"}},
+		MaxIterations: 1,
+	}, nil); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	responses := logs.records(t, "llm response")
+	if _, ok := responses[0]["est_request_tokens"]; !ok {
+		t.Error("iteration 0's response line lacks est_request_tokens")
+	}
+	forcedLine, ok := responses[1]
+	if !ok {
+		t.Fatalf("no response line for the force-text call: %v", responses)
+	}
+	if v, ok := forcedLine["est_request_tokens"]; ok {
+		t.Errorf("force-text response line carries est_request_tokens = %v; it answered no iteration's request", v)
+	}
+}
