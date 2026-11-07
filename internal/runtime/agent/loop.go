@@ -2989,14 +2989,16 @@ func (o *llmErrorOutcome) replyModel(runModel string) string {
 // dropRecoveryToolCalls removes the tool calls from resp, the recovery
 // model's reply, and logs what it removed. The recovery request offers
 // no tools and asks for a summary, but the reply can still carry calls:
-// an OpenAI-compatible provider's text fallback recovers a call the
-// model wrote as text under any name when the request offered none.
-// Returned to the engine, the calls would run on its tool-call path
-// against the run's tools, chosen by a summarizer after the turn had
-// already timed out. ToolCallSource names the channel a response's
-// calls arrived through, so it goes with them and survives on the
-// warning; TextToolAction stays, since it still says what the fallback
-// did to the reply's text.
+// a provider's text tool-call parse, OpenAI-compatible or Ollama, turns
+// a call the model wrote as text into a structured one under any name
+// when the request offered none. Returned to the engine, the calls
+// would run on its tool-call path against the run's tools, chosen by a
+// summarizer after the turn had already timed out. ToolCallSource names
+// the channel a response's calls arrived through, so it goes with them
+// and survives on the warning; TextToolAction stays, since it still
+// says what the fallback did to the reply's text. The Ollama provider
+// sets neither, so on its replies the warning's count and names alone
+// identify the calls.
 func dropRecoveryToolCalls(log *slog.Logger, resp *llm.ChatResponse, recoveryModel string) {
 	if len(resp.Message.ToolCalls) == 0 {
 		return

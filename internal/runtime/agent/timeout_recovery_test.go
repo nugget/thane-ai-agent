@@ -493,14 +493,15 @@ func TestTimeoutRecovery_LaterCallKeepsRunModel(t *testing.T) {
 
 // TestTimeoutRecovery_ReplyToolCallsDoNotRun pins that a timeout
 // recovery reply runs no tool calls. The recovery request offers no
-// tools, but its reply can still carry calls: an OpenAI-compatible
-// runner's text fallback recovers a call the model wrote as text under
-// any name when the request offered none, and the engine would run it
-// against the run's tools, on a summarizer's word, after the turn had
-// already timed out. The reply keeps its own text, or takes
-// TimeoutRecoveryEmpty when the fallback consumed it, and still ends
-// the turn as timeout recovery's. The response line reports what the
-// fallback did, and a warning keeps the dropped calls' provenance.
+// tools, but its reply can still carry calls: a provider's text
+// tool-call parse, OpenAI-compatible or Ollama, recovers a call the
+// model wrote as text under any name when the request offered none,
+// and the engine would run it against the run's tools, on a
+// summarizer's word, after the turn had already timed out. The reply
+// keeps its own text, or takes TimeoutRecoveryEmpty when the parse
+// consumed it, and still ends the turn as timeout recovery's. The
+// response line reports what the fallback did, and a warning keeps the
+// dropped calls' provenance, which the Ollama provider does not record.
 func TestTimeoutRecovery_ReplyToolCallsDoNotRun(t *testing.T) {
 	t.Parallel()
 
@@ -513,7 +514,10 @@ func TestTimeoutRecovery_ReplyToolCallsDoNotRun(t *testing.T) {
 		// reply is the recovery model's message, which goes through the
 		// text fallback with the recovery request's tool names, as an
 		// OpenAI-compatible runner's reply does.
-		reply       llm.Message
+		reply llm.Message
+		// ollama parses reply as the Ollama provider does instead, which
+		// records neither a tool-call source nor a text tool action.
+		ollama      bool
 		wantContent string
 		// wantResponse is the recovered reply's llm response line.
 		wantResponse map[string]any
@@ -545,6 +549,18 @@ func TestTimeoutRecovery_ReplyToolCallsDoNotRun(t *testing.T) {
 				"dropped_tool_calls": float64(1), "tool_call_source": "native", "text_tool_action": "none",
 			},
 		},
+		{
+			name:        "call written as text to Ollama",
+			reply:       llm.Message{Role: "assistant", Content: `{"name":"send_report","arguments":{}}`},
+			ollama:      true,
+			wantContent: prompts.TimeoutRecoveryEmpty,
+			wantResponse: map[string]any{
+				"tool_calls": float64(0), "tool_call_source": "", "text_tool_action": "", "profile": "",
+			},
+			wantDropped: map[string]any{
+				"dropped_tool_calls": float64(1), "tool_call_source": "", "text_tool_action": "",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -574,7 +590,16 @@ func TestTimeoutRecovery_ReplyToolCallsDoNotRun(t *testing.T) {
 						t.Errorf("recovery request offered %d tools, want none", len(defs))
 					}
 					resp := &llm.ChatResponse{Model: model, StopReason: "stop", Message: tt.reply}
-					llm.ApplyTextToolCallFallback(resp, llm.ExtractToolNames(defs), llm.DefaultToolCallTextProfile())
+					names := llm.ExtractToolNames(defs)
+					if !tt.ollama {
+						llm.ApplyTextToolCallFallback(resp, names, llm.DefaultToolCallTextProfile())
+						return resp, nil
+					}
+					// The Ollama provider's parse, which keeps no
+					// provenance on the response.
+					if parsed := llm.ParseTextToolCalls(resp.Message.Content, names, llm.DefaultToolCallTextProfile()); len(parsed) > 0 {
+						resp.Message.ToolCalls, resp.Message.Content = parsed, ""
+					}
 					return resp, nil
 				default:
 					// Answer anything the run sends after recovery, so a
