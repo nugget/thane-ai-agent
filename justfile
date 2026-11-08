@@ -62,8 +62,8 @@ default:
 [doc("Regenerate go:embed inputs (talents, core loops, persona) and config.example.yaml")]
 [group('build')]
 generate:
-    go generate ./internal/model/talents/ ./internal/app/coreloops/ ./cmd/thane/
     go generate ./internal/platform/config/...
+    go generate ./internal/model/talents/ ./internal/app/coreloops/ ./cmd/thane/
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
