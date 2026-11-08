@@ -24,7 +24,7 @@ func replyingShrinker(text string, calls *int) *documentfacets.Shrinker {
 	return &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(context.Context, string, documentfacets.Field) (string, error) {
+		Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) {
 			*calls++
 			return text, nil
 		},
@@ -201,7 +201,7 @@ func TestDocWriteLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			shrinker := &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-				Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return reply, nil },
+				Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return reply, nil },
 			}
 			args := tt.args
 			args.StatusLine = statusOverrun

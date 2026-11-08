@@ -15,14 +15,14 @@ import (
 )
 
 // shrinkReply scripts one call of a fake Shrink.
-type shrinkReply func(ctx context.Context, text string, field Field) (string, error)
+type shrinkReply func(ctx context.Context, text string, field Field, limits string) (string, error)
 
 func reply(text string) shrinkReply {
-	return func(context.Context, string, Field) (string, error) { return text, nil }
+	return func(context.Context, string, Field, string) (string, error) { return text, nil }
 }
 
 func replyErr(err error) shrinkReply {
-	return func(context.Context, string, Field) (string, error) { return "", err }
+	return func(context.Context, string, Field, string) (string, error) { return "", err }
 }
 
 // wordsOf returns n copies of word separated by single spaces.
@@ -34,6 +34,7 @@ func wordsOf(n int, word string) string {
 type shrinkCall struct {
 	text     string
 	field    Field
+	limits   string
 	deadline time.Duration
 }
 
@@ -46,13 +47,13 @@ func scriptedShrinker(replies ...shrinkReply) (*Shrinker, *[]shrinkCall, *bytes.
 	return &Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
-		Shrink: func(ctx context.Context, text string, field Field) (string, error) {
-			call := shrinkCall{text: text, field: field}
+		Shrink: func(ctx context.Context, text string, field Field, limits string) (string, error) {
+			call := shrinkCall{text: text, field: field, limits: limits}
 			if deadline, ok := ctx.Deadline(); ok {
 				call.deadline = time.Until(deadline)
 			}
 			*calls = append(*calls, call)
-			return replies[min(len(*calls), len(replies))-1](ctx, text, field)
+			return replies[min(len(*calls), len(replies))-1](ctx, text, field, limits)
 		},
 	}, calls, logs
 }
@@ -152,8 +153,8 @@ func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 					if err != nil {
 						t.Fatalf("Fit() error = %v, want the shortened payload", err)
 					}
-					if len(*calls) != 1 || (*calls)[0].field.Key != field.Key || (*calls)[0].field.Budget() != field.Budget() || (*calls)[0].text != *item.value(&sent) {
-						t.Fatalf("shrink calls = %+v, want one with the sent text and the %s field", *calls, field.Key)
+					if len(*calls) != 1 || (*calls)[0].field.Key != field.Key || (*calls)[0].limits != limit.unit.count(limit.limit) || (*calls)[0].text != *item.value(&sent) {
+						t.Fatalf("shrink calls = %+v, want one with the sent text, the %s field and the limit %s", *calls, field.Key, limit.unit.count(limit.limit))
 					}
 					if value := *item.value(&got); value != limit.fits {
 						t.Fatalf("%s = %q, want the shortened text", field.Key, value)
@@ -195,6 +196,9 @@ func TestFitShortensAProjectionOverBothLimitsOnce(t *testing.T) {
 	}
 	if len(*calls) != 2 || got.StatusLine != "Short." {
 		t.Fatalf("Fit() = %q after %d calls, want the second reply, since the first is within 20 words but over 180 characters", got.StatusLine, len(*calls))
+	}
+	if limits := (*calls)[0].limits; limits != "20 words and 180 characters" {
+		t.Errorf("shrink asked for %q, want both limits the text broke", limits)
 	}
 	want := Shortened{Projection: "status_line", Limit: "20 words", Sent: "22 words", Saved: "1 word", SavedText: "Short."}
 	if len(shortened) != 1 || !sameShortened(shortened[0], want) {
@@ -304,7 +308,7 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 
 	sent := validShrinkPayload()
 	sent.StatusLine = wordsOf(statusLineMaxWords+1, "s")
-	waits := func(ctx context.Context, _ string, _ Field) (string, error) {
+	waits := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
@@ -454,7 +458,7 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			// A reply refused with its text, as app wiring refuses one cut
 			// off at the output cap, keeps that text in the record.
 			name: "a reply refused with its text",
-			replies: []shrinkReply{func(context.Context, string, Field) (string, error) {
+			replies: []shrinkReply{func(context.Context, string, Field, string) (string, error) {
 				return "Status OK, but cut", errors.New("the reply stopped at the 240-token output bound")
 			}},
 			want: []map[string]any{

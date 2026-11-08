@@ -493,7 +493,10 @@ stores nothing and reports every violation together. An over-budget projection
 carries its overage, in the unit of the limit it broke, and a fix sized to it:
 rewording for a gap within a tenth of the limit or 30 characters (five words
 for `status_line`, whose budget is 20 words), whichever is larger, and removing
-whole items past that. The error names no retry count.
+whole items past that. A status line within its words but past its
+180-character backstop is refused in characters. One over both is refused in
+words alone, with a cut large enough to clear both. The error names no retry
+count.
 
 `doc_body_write` is the narrow exception for a document intentionally kept as
 one undifferentiated Markdown body. It still uses managed-root policy,

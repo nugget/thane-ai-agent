@@ -7,7 +7,9 @@ import (
 
 // TestWordCountSplitsOnWhitespaceOnly pins how a word budget counts: runs
 // between whitespace, so the punctuation-joined times, identifiers and
-// ranges a status line is full of each count once, as a writer counts them.
+// ranges a status line is full of each count once, as a writer counts them,
+// and a run with no letter or digit, such as a spaced dash, counts not at
+// all.
 func TestWordCountSplitsOnWhitespaceOnly(t *testing.T) {
 	t.Parallel()
 
@@ -24,6 +26,9 @@ func TestWordCountSplitsOnWhitespaceOnly(t *testing.T) {
 		{text: "hyphen-joined em—dashed words", want: 3},
 		{text: "no-break space and narrow space", want: 5},
 		{text: "café naïve 東京", want: 3},
+		{text: "panel clean — baselines steady", want: 4},
+		{text: "printer · toner | desk & lobby -> done / later", want: 6},
+		{text: "🚀 launch — #1630 v0.10.4", want: 3},
 	} {
 		if got := WordCount(tt.text); got != tt.want {
 			t.Errorf("WordCount(%q) = %d, want %d", tt.text, got, tt.want)
@@ -69,6 +74,37 @@ func TestEachProjectionNamesItsBudget(t *testing.T) {
 	if scaffold := DefaultContract().RenderScaffold(); !strings.Contains(scaffold, "one standalone line of what is true right now, <=20 words)") ||
 		!strings.Contains(scaffold, "<=500 characters)") || strings.Contains(scaffold, "<=180") {
 		t.Errorf("scaffold = %q, want each placeholder to name the budget a writer is told", scaffold)
+	}
+}
+
+// TestWordCutClearsBothLimits generates status lines over their words and
+// past the backstop, of every word length from short to long, and checks
+// the refusal names a word cut that, taken from the line, fits both limits:
+// the word count, and the characters at the line's own word length.
+func TestWordCutClearsBothLimits(t *testing.T) {
+	t.Parallel()
+
+	field, _ := FieldByKey(string(StatusLine))
+	for words := statusLineMaxWords + 1; words <= statusLineMaxWords+10; words++ {
+		for length := 5; length <= 16; length++ {
+			line := wordsOf(words, strings.Repeat("w", length))
+			over := field.overBudget(line)
+			if over == nil || over.unit != unitWords {
+				t.Fatalf("%d words of %d: overBudget = %+v, want a word violation", words, length, over)
+			}
+			if over.cut < words-statusLineMaxWords {
+				t.Fatalf("%d words of %d: cut %d is less than the word overage", words, length, over.cut)
+			}
+			if fits := wordsOf(words-over.cut, strings.Repeat("w", length)); field.overBudget(fits) != nil {
+				t.Errorf("%d words of %d: cutting %d leaves %d characters, still over", words, length, over.cut, len(fits))
+			}
+			if want := "at least " + unitWords.count(over.cut); !strings.Contains(over.Error(), want) {
+				t.Errorf("%d words of %d: refusal %q, want it to say %q", words, length, over, want)
+			}
+			if long := over.cut > words-statusLineMaxWords; long != strings.Contains(over.Error(), "its words run long") {
+				t.Errorf("%d words of %d: refusal %q; says its words run long = %v, want %v", words, length, over, !long, long)
+			}
+		}
 	}
 }
 

@@ -929,6 +929,13 @@ func declaredDocumentExists(ctx context.Context, docTools *documents.Tools, ref 
 	}
 }
 
+// seedProjectionProperty is one compact projection in output.initial or
+// output.migration, stating its budget as the loop's publish tool will.
+func seedProjectionProperty(name documentfacets.Name) map[string]any {
+	field, _ := documentfacets.FieldByKey(string(name))
+	return map[string]any{"type": "string", "description": strings.TrimSpace(field.BudgetClause())}
+}
+
 func facetContractsEqual(left, right documentfacets.Contract) bool {
 	if len(left.Facets) != len(right.Facets) {
 		return false
@@ -1090,9 +1097,9 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "object",
 						"description": "Optional first publish, written at create time in the same argument shape as the loop's generated publish tool: one key per declared facet plus full (all together, same budgets — over-budget values are rejected with the limit named), or just full for an unfaceted document; notes seeds the private working notes with your starting theory. You have just surveyed this domain, and the loop inheriting the document may run on a smaller model — author the first publish from what you observed instead of leaving a placeholder; the loop revises from live state at its first wake. Refused when the document already exists.",
 						"properties": map[string]any{
-							"status_line": map[string]any{"type": "string"},
-							"teaser":      map[string]any{"type": "string"},
-							"digest":      map[string]any{"type": "string"},
+							"status_line": seedProjectionProperty(documentfacets.StatusLine),
+							"teaser":      seedProjectionProperty(documentfacets.Teaser),
+							"digest":      seedProjectionProperty(documentfacets.Digest),
 							"full":        map[string]any{"type": "string"},
 							"notes":       map[string]any{"type": "string"},
 						},
@@ -1101,9 +1108,9 @@ func thaneLoopCreateSchema() map[string]any {
 						"type":        "object",
 						"description": "Explicitly migrate an existing output when replace=true changes its facet contract and the old loop is stopped. Supply only each newly declared compact projection; Go preserves the current full body and retained projections. Use an empty object when only removing facets or moving from faceted to body-only. Omit when the contract is unchanged or the document is new.",
 						"properties": map[string]any{
-							"status_line": map[string]any{"type": "string"},
-							"teaser":      map[string]any{"type": "string"},
-							"digest":      map[string]any{"type": "string"},
+							"status_line": seedProjectionProperty(documentfacets.StatusLine),
+							"teaser":      seedProjectionProperty(documentfacets.Teaser),
+							"digest":      seedProjectionProperty(documentfacets.Digest),
 						},
 					},
 				},

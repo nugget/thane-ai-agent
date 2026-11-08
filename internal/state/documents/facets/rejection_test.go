@@ -61,11 +61,26 @@ func TestValidateSizesTheLeverToTheOverage(t *testing.T) {
 			wantAbsent: []string{removeLever, "words"},
 		},
 		{
+			// The 30-character floor now governs only the backstop, where
+			// a tenth of the limit is 18.
+			name:       "thirty characters past the backstop is still rewordable",
+			mutate:     func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+30) },
+			want:       []string{"status_line is 210 characters", "(30 over)", rewordLever + " 30 characters"},
+			wantAbsent: []string{removeLever},
+		},
+		{
+			name:       "just past the character floor needs whole items removed",
+			mutate:     func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+31) },
+			want:       []string{"status_line is 211 characters", "(31 over)", removeLever + " totalling at least 31 characters"},
+			wantAbsent: []string{rewordLever},
+		},
+		{
 			// Cutting words is the repair a writer can count, and naming
-			// the backstop beside it would hand back a character target.
-			name:       "over both status line limits names only its words",
+			// the backstop beside it would hand back a character target,
+			// so the cut is sized to clear both: 4 of these words, not 2.
+			name:       "over both status line limits names only its words, cut to clear both",
 			mutate:     func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+2, "ninechars") },
-			want:       []string{"status_line is 22 words and the limit is 20 (2 over)"},
+			want:       []string{"status_line is 22 words and the limit is 20 (2 over), and its words run long", rewordLever + " 4 words"},
 			wantAbsent: []string{"characters", "180"},
 		},
 		{

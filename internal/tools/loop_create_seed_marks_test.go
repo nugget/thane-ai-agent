@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
@@ -76,4 +77,45 @@ func TestGuidedCreateMigrationRefusalMarksNoArgument(t *testing.T) {
 	if got := toolargs.RejectedArguments(err); got != nil {
 		t.Errorf("RejectedArguments() = %#v, want nil: the projections are nested under output.migration", got)
 	}
+}
+
+// TestGuidedCreateSeedPropertiesStateTheirBudgets pins that output.initial
+// and output.migration teach each compact projection's budget in the same
+// sentence the loop's publish tool will, so a model seeding a loop learns
+// status_line's word ceiling before a refusal teaches it.
+func TestGuidedCreateSeedPropertiesStateTheirBudgets(t *testing.T) {
+	rig := newCurateTestRig(t)
+	for _, seed := range []string{"initial", "migration"} {
+		properties := findSchemaProperties(rig.tool.Parameters, seed)
+		if properties == nil {
+			t.Fatalf("schema has no %s object with properties", seed)
+		}
+		for _, key := range []string{"status_line", "teaser", "digest"} {
+			field, _ := documentfacets.FieldByKey(key)
+			property, _ := properties[key].(map[string]any)
+			if got, want := property["description"], strings.TrimSpace(field.BudgetClause()); got != want {
+				t.Errorf("%s.%s description = %v, want %q", seed, key, got, want)
+			}
+		}
+	}
+}
+
+// findSchemaProperties returns the properties of the first object named key
+// anywhere in schema.
+func findSchemaProperties(schema any, key string) map[string]any {
+	node, ok := schema.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if child, ok := node[key].(map[string]any); ok {
+		if properties, ok := child["properties"].(map[string]any); ok {
+			return properties
+		}
+	}
+	for _, value := range node {
+		if found := findSchemaProperties(value, key); found != nil {
+			return found
+		}
+	}
+	return nil
 }

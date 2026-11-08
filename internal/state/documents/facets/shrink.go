@@ -21,11 +21,12 @@ const (
 type Shrinker struct {
 	// Model names the model Shrink calls, for the log.
 	Model string
-	// Shrink returns text rewritten to fit field's budget, named by
-	// [Field.Budget]. App wiring builds it from a model client; this package
-	// sees only the func. Text returned alongside an error is logged with it
-	// and never used.
-	Shrink func(ctx context.Context, text string, field Field) (string, error)
+	// Shrink returns text, field's value, rewritten to at most limits: the
+	// limits the text was refused over, such as "20 words", "180
+	// characters" or "20 words and 180 characters". App wiring builds it
+	// from a model client; this package sees only the func. Text returned
+	// alongside an error is logged with it and never used.
+	Shrink func(ctx context.Context, text string, field Field, limits string) (string, error)
 	// Logger receives the INFO records Fit's contract lists.
 	Logger *slog.Logger
 }
@@ -150,7 +151,7 @@ func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error)
 	for entry.attempts < shrinkAttempts {
 		entry.attempts++
 		callCtx, cancel := context.WithTimeout(ctx, shrinkAttemptTimeout)
-		candidate, err := s.Shrink(callCtx, entry.sent, field)
+		candidate, err := s.Shrink(callCtx, entry.sent, field, entry.over.ask())
 		cancel()
 		candidate = strings.TrimSpace(candidate)
 		over := field.overBudget(candidate)

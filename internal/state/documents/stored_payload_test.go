@@ -170,7 +170,7 @@ func keyShrinker(replies map[string]string) *documentfacets.Shrinker {
 	return &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(_ context.Context, _ string, field documentfacets.Field) (string, error) {
+		Shrink: func(_ context.Context, _ string, field documentfacets.Field, _ string) (string, error) {
 			return replies[field.Key], nil
 		},
 	}

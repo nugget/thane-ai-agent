@@ -3,6 +3,7 @@ package facets
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -30,14 +31,20 @@ func (u unit) measure(text string) int {
 	return utf8.RuneCountInString(text)
 }
 
-// WordCount counts text's words as [strings.Fields] splits them: runs of
-// characters between whitespace, so "14:30" and "kb:notes/a.md" are one
-// word each. That is how a writer counts its own line, so the count never
-// exceeds the words a model believes it wrote. Text in a script written
-// without spaces between words counts one word per run, so only a field's
-// character limit bounds it.
+// WordCount counts text's words as a writer counts its own line: the runs
+// of characters between whitespace ([strings.Fields]) that hold a letter
+// or a digit. So "14:30" and "kb:notes/a.md" are one word each, and a
+// spaced dash, bullet or ampersand is no word at all. Text in a script
+// written without spaces between words counts one word per run, so only a
+// field's character limit bounds it.
 func WordCount(text string) int {
-	return len(strings.Fields(text))
+	words := 0
+	for _, field := range strings.Fields(text) {
+		if strings.IndexFunc(field, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) >= 0 {
+			words++
+		}
+	}
+	return words
 }
 
 // Budget names the limit a writer is told for f, as "20 words" or "500
@@ -71,8 +78,9 @@ func (f Field) BudgetClause() string {
 // limits, or nil when it fits them all. A value over its word limit is
 // reported in words alone: cutting words is the repair a writer can count,
 // and naming the character backstop beside it would hand back the
-// character target the word limit replaces. The backstop is reported only
-// for a value within its words.
+// character target the word limit replaces. When it is past the backstop
+// too, the words it is told to cut are enough to clear both. The backstop
+// is reported only for a value within its words.
 func (f Field) overBudget(value string) *overBudget {
 	words, runes := WordCount(value), utf8.RuneCountInString(value)
 	switch {

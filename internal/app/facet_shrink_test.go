@@ -75,14 +75,14 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 
 	statusLine, _ := documentfacets.FieldByKey("status_line")
 	client := &shrinkTestClient{reply: llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, StopReason: "stop"}}
-	got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine)
+	got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words and 180 characters")
 	if err != nil || got != "Shorter." {
 		t.Fatalf("shrinkFacetText() = %q, %v; want the reply text", got, err)
 	}
 	if client.model != "edge/fast-model" || client.tools != nil || client.maxOutputTokens != 360 {
 		t.Errorf("call = model %q, tools %v, max output %d; want edge/fast-model, no tools, 360", client.model, client.tools, client.maxOutputTokens)
 	}
-	if len(client.messages) != 2 || client.messages[0].Role != "system" || !strings.Contains(client.messages[0].Content, "at most 20 words.") ||
+	if len(client.messages) != 2 || client.messages[0].Role != "system" || !strings.Contains(client.messages[0].Content, "at most 20 words and 180 characters.") ||
 		client.messages[1].Role != "user" || client.messages[1].Content != "A long status line." {
 		t.Errorf("messages = %+v, want the limit in the system turn and the text as the user turn", client.messages)
 	}
@@ -98,12 +98,12 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 		{Message: llm.Message{Content: "Short"}, OutputTokens: 360},
 	} {
 		client.reply = cutOff
-		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine); err == nil || got != "Short" {
+		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words"); err == nil || got != "Short" {
 			t.Errorf("cut-off reply %+v: shrinkFacetText() = %q, %v; want it refused with its text", cutOff, got, err)
 		}
 	}
 	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 359}
-	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine); err != nil || got != "Shorter." {
+	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words"); err != nil || got != "Shorter." {
 		t.Errorf("reply one token under the bound: shrinkFacetText() = %q, %v; want it kept", got, err)
 	}
 }
@@ -161,7 +161,7 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 			defer cancel()
 			client := &shrinkTestClient{reply: tt.reply, err: tt.err, blocks: tt.blocks}
 			statusLine, _ := documentfacets.FieldByKey("status_line")
-			_, err := shrinkFacetText(ctx, client, "edge/fast-model", "A long status line.", statusLine)
+			_, err := shrinkFacetText(ctx, client, "edge/fast-model", "A long status line.", statusLine, "20 words")
 			if err == nil {
 				t.Fatal("shrinkFacetText() error = nil, want a refusal")
 			}
@@ -187,7 +187,7 @@ func TestPublishToolSavesASmallOverrunShortened(t *testing.T) {
 	shrinker := &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return saved, nil },
+		Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return saved, nil },
 	}
 	app := &App{documentStore: store, documentTools: documents.NewTools(store, shrinker)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())

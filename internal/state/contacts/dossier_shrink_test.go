@@ -60,7 +60,7 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 			tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-				Shrink: func(context.Context, string, documentfacets.Field) (string, error) {
+				Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) {
 					calls++
 					return tt.reply, nil
 				},
@@ -297,7 +297,7 @@ func assertDossierShrinkOutcome(t *testing.T, tools *Tools, store *documents.Sto
 	shrinker := &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(_ context.Context, _ string, field documentfacets.Field) (string, error) {
+		Shrink: func(_ context.Context, _ string, field documentfacets.Field, _ string) (string, error) {
 			return replies[field.Key], nil
 		},
 	}
@@ -364,7 +364,7 @@ func TestUnshortenedDossierMeetsTheStoreAsBefore(t *testing.T) {
 		tools, contactID := newCitationTestTools(t)
 		store, _, _ := newDossierLifecycleStore(t, tools)
 		if configured {
-			shrinker := &documentfacets.Shrinker{Model: "fast-model", Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return "", nil }}
+			shrinker := &documentfacets.Shrinker{Model: "fast-model", Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return "", nil }}
 			docTools := documents.NewTools(store, shrinker)
 			tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, shrinker)
 		}
@@ -401,7 +401,7 @@ func TestWriteDossierLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			shrinker := &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-				Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return reply, nil },
+				Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return reply, nil },
 			}
 			docTools := documents.NewTools(store, shrinker)
 			write := docTools.WriteFaceted
