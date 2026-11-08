@@ -41,8 +41,11 @@ func (a *App) facetShrinker() *documentfacets.Shrinker {
 // refusal so the shrink log keeps it. A model that reasoned instead of
 // answering is refused with [thinkingOffFix], because nothing else shows
 // it: the writer's refusal stands just as when the text could not be
-// shortened. The client carries no sampling settings, so the deployment's
-// own defaults, temperature included, apply.
+// shortened. That holds whether it reached the bound or, on a slower
+// model, ran out the call's deadline first, which a model that answers
+// directly but too slowly for a long projection also does. The client
+// carries no sampling settings, so the deployment's own defaults,
+// temperature included, apply.
 func shrinkFacetText(ctx context.Context, client llm.Client, model, text string, limit int) (string, error) {
 	bound := 2 * limit
 	resp, err := client.Chat(llm.WithMaxOutputTokens(ctx, bound), model, []llm.Message{
@@ -51,6 +54,9 @@ func shrinkFacetText(ctx context.Context, client llm.Client, model, text string,
 	}, nil)
 	if errors.Is(err, llm.ErrReasoningOnly) {
 		return "", fmt.Errorf("%w; %s", err, thinkingOffFix)
+	}
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("%w; no answer arrived before the call's deadline: %s, and one that answers directly but slowly cannot shorten a long projection in time", err, thinkingOffFix)
 	}
 	if err != nil {
 		return "", err

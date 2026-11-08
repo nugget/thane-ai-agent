@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
@@ -21,6 +23,7 @@ import (
 type shrinkTestClient struct {
 	reply           llm.ChatResponse
 	err             error
+	blocks          bool
 	model           string
 	messages        []llm.Message
 	tools           []map[string]any
@@ -29,6 +32,10 @@ type shrinkTestClient struct {
 
 func (c *shrinkTestClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
 	c.model, c.messages, c.tools, c.maxOutputTokens = model, messages, tools, llm.MaxOutputTokensFromContext(ctx)
+	if c.blocks {
+		<-ctx.Done()
+		return nil, fmt.Errorf("request failed: %w", ctx.Err())
+	}
 	reply := c.reply
 	return &reply, c.err
 }
@@ -104,9 +111,11 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 // misconfiguration the outcome cannot show: a shrink model with thinking on
 // spends the output bound reasoning, so every shrink fails and the writer's
 // refusal stands exactly as when the text could not be shortened. Whether
-// the provider classifies the reply as reasoning-only or just reports an
-// empty answer at the bound, the refusal names the fix; a call that failed
-// for another reason, or a long answer cut off, does not.
+// the provider classifies the reply as reasoning-only, reports an empty
+// answer at the bound, or, on a model too slow to reach the bound, the
+// call runs out its deadline, the refusal names the fix; a call that failed
+// for another reason, including the turn being cancelled, or a long answer
+// cut off, does not.
 func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +124,8 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 		name      string
 		reply     llm.ChatResponse
 		err       error
+		blocks    bool
+		ctx       func() (context.Context, context.CancelFunc)
 		wantFix   bool
 		wantClass error
 	}{
@@ -124,12 +135,31 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 		{name: "empty answer spent the bound with no stop reason", reply: llm.ChatResponse{OutputTokens: 240}, wantFix: true},
 		{name: "long answer cut off", reply: llm.ChatResponse{Message: llm.Message{Content: "Short"}, StopReason: "length"}},
 		{name: "call failed", err: errors.New("connection refused")},
+		{
+			name: "no answer before the call's deadline", blocks: true, wantFix: true, wantClass: context.DeadlineExceeded,
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 10*time.Millisecond)
+			},
+		},
+		{
+			name: "turn cancelled mid-call", blocks: true, wantClass: context.Canceled,
+			ctx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				time.AfterFunc(10*time.Millisecond, cancel)
+				return ctx, cancel
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			client := &shrinkTestClient{reply: tt.reply, err: tt.err}
-			_, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120)
+			ctx, cancel := context.Background(), context.CancelFunc(func() {})
+			if tt.ctx != nil {
+				ctx, cancel = tt.ctx()
+			}
+			defer cancel()
+			client := &shrinkTestClient{reply: tt.reply, err: tt.err, blocks: tt.blocks}
+			_, err := shrinkFacetText(ctx, client, "edge/fast-model", "A long status line.", 120)
 			if err == nil {
 				t.Fatal("shrinkFacetText() error = nil, want a refusal")
 			}
