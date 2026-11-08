@@ -31,7 +31,8 @@ func (a *App) facetShrinker() *documentfacets.Shrinker {
 // shrinkFacetText makes one tool-free call asking model to shorten text,
 // bounded at two output tokens per allowed character. A reply that reached
 // that bound is refused, by its stop reason or, for a provider that reports
-// none (Ollama), by the tokens it spent. The client carries no sampling
+// none (Ollama), by the tokens it spent, and its text comes back with the
+// refusal so the shrink log keeps it. The client carries no sampling
 // settings, so the deployment's own defaults, temperature included, apply.
 func shrinkFacetText(ctx context.Context, client llm.Client, model, text string, limit int) (string, error) {
 	bound := 2 * limit
@@ -43,7 +44,7 @@ func shrinkFacetText(ctx context.Context, client llm.Client, model, text string,
 		return "", err
 	}
 	if resp.StopReason == "length" || resp.StopReason == "max_tokens" || resp.OutputTokens >= bound {
-		return "", fmt.Errorf("the reply stopped at the %d-token output bound", bound)
+		return resp.Message.Content, fmt.Errorf("the reply stopped at the %d-token output bound", bound)
 	}
 	return resp.Message.Content, nil
 }

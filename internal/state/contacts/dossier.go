@@ -148,6 +148,17 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 	canonicalized := canonicalizeDossierCitations(&payload)
 	sent := payload
 	payload, shortened, err := t.dossierShrinker.Fit(ctx, sent, func(payload documentfacets.Payload) error {
+		// Shortened text is judged as the store will save it, by the
+		// same checks the contacts-root validator runs on that stored
+		// body; the author's own text still meets the store's folding
+		// and that validator in Store.Write, as before.
+		if payload != sent {
+			stored, err := documents.StoredPayload(DossierRef(id), dossierOutputContract, payload)
+			if err != nil {
+				return err
+			}
+			payload = stored
+		}
 		var validationErrs []error
 		if err := dossierOutputContract.Validate(payload); err != nil {
 			validationErrs = append(validationErrs, err)
@@ -160,13 +171,6 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		}
 		if err := validateDossierEvidenceCitations(ctx, payload, t.dossierSessions); err != nil {
 			validationErrs = append(validationErrs, err)
-		}
-		// Only shortened text meets the store's prose guard here; the
-		// author's own text still meets it in Store.Write, as before.
-		if payload != sent {
-			if err := documents.ProseRefusal(DossierRef(id), dossierOutputContract, payload); err != nil {
-				validationErrs = append(validationErrs, err)
-			}
 		}
 		if len(validationErrs) > 0 {
 			return documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)

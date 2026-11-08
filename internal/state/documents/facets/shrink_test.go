@@ -375,6 +375,19 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			},
 		},
 		{
+			// A reply refused with its text, as app wiring refuses one cut
+			// off at the output cap, keeps that text in the record.
+			name: "a reply refused with its text",
+			replies: []shrinkReply{func(context.Context, string, int) (string, error) {
+				return "Status OK, but cut", errors.New("the reply stopped at the 240-token output bound")
+			}},
+			want: []map[string]any{
+				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_runes": 18.0, "new_text": "Status OK, but cut", "reason": "the reply stopped at the 240-token output bound"},
+				{"msg": rejected, "facet": "status_line", "attempts": 2.0, "new_text": "Status OK, but cut", "reason": "the reply stopped at the 240-token output bound"},
+				{"msg": failed, "facet": "status_line", "attempts": 2.0, "new_text": nil, "reason": "status_line was not shortened: the reply stopped at the 240-token output bound"},
+			},
+		},
+		{
 			name:    "a later projection fails",
 			mutate:  func(p *Payload) { p.Teaser = overTeaser },
 			replies: []shrinkReply{reply("Status OK."), replyErr(errors.New("upstream 503"))},

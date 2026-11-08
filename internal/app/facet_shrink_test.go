@@ -59,7 +59,8 @@ func TestFacetShrinkerIsOffUntilAModelIsConfigured(t *testing.T) {
 // structure (a digest may be a list; a single-line projection only reaches
 // a shrink already single-line), with the projection text as the user turn.
 // A reply cut off at the output bound is refused rather than saved, whether
-// the provider reports the stop reason or only the tokens it spent.
+// the provider reports the stop reason or only the tokens it spent, and its
+// text comes back with the refusal for the shrinker's rejected-reply log.
 func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 	t.Parallel()
 
@@ -87,8 +88,8 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 		{Message: llm.Message{Content: "Short"}, OutputTokens: 240},
 	} {
 		client.reply = cutOff
-		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err == nil {
-			t.Errorf("cut-off reply %+v: shrinkFacetText() = %q, want it refused", cutOff, got)
+		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err == nil || got != "Short" {
+			t.Errorf("cut-off reply %+v: shrinkFacetText() = %q, %v; want it refused with its text", cutOff, got, err)
 		}
 	}
 	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 239}

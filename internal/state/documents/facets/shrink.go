@@ -23,7 +23,8 @@ type Shrinker struct {
 	// Model names the model Shrink calls, for the log.
 	Model string
 	// Shrink returns text rewritten to at most limit characters. App wiring
-	// builds it from a model client; this package sees only the func.
+	// builds it from a model client; this package sees only the func. Text
+	// returned alongside an error is logged with it and never used.
 	Shrink func(ctx context.Context, text string, limit int) (string, error)
 	// Logger receives the INFO records Fit's contract lists.
 	Logger *slog.Logger
