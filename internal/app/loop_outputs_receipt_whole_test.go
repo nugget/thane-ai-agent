@@ -19,7 +19,7 @@ func TestOwnOutputDocReadTruncatedRecordsNoReceipt(t *testing.T) {
 	store, _ := newReceiptLoopOutputStore(t)
 	huge := strings.Repeat("Legacy content the owner never wrote through its tool. ", 3000) // ~165 KiB > ownOutputReadResultBytes
 	seedDocument(t, store, "core:office.md", huge)
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 	outputs := officeOutputs()
 	replace := buildLoopOutputTools(docTools, outputs)[0]
 	read := ownDocRead(docTools, outputs)

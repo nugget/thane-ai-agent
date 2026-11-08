@@ -25,7 +25,7 @@ func TestWriteDossierAsksForRefusalsAsErrors(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 	if _, err := tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
 		StatusLine: "Relationship is current and steady.",
@@ -66,7 +66,7 @@ func TestDossierRejectionSaysNothingWasWritten(t *testing.T) {
 				}
 				writer := &recordingDossierWriter{}
 				tools.ConfigureDossierRoot(true, true)
-				tools.ConfigureDossierDocuments(nil, writer.Write)
+				tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 				_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 					ContactID:  contact.ID.String(),
 					StatusLine: overBudget,

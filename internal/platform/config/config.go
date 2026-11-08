@@ -1759,6 +1759,14 @@ type ModelsConfig struct {
 	// listing the tools that were used.
 	RecoveryModel string `yaml:"recovery_model"`
 
+	// FacetShrinkModel is a fast model (a deployment ID or model name,
+	// like recovery_model) that shortens a faceted document projection
+	// written over its character limit by at most half. The shortened
+	// write must still pass every validation, or the original refusal
+	// stands. When empty, an over-budget projection is refused as
+	// written.
+	FacetShrinkModel string `yaml:"facet_shrink_model"`
+
 	// Available lists all models that Thane can route to. Each entry
 	// maps a model name to a provider and declares its capabilities.
 	Available []ModelConfig `yaml:"available"`

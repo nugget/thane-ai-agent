@@ -29,7 +29,7 @@ func TestPublishToolTeachesValidationRefusalAndBoundedDigest(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store, nil)}
 	hydrated, err := app.hydrateLoopOutputs(digestFacetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
@@ -66,7 +66,7 @@ func TestPublishToolValidationRefusalWritesNeitherHalf(t *testing.T) {
 	t.Parallel()
 
 	store, coreDir := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store, nil)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 	if err != nil {
 		t.Fatalf("hydrateLoopOutputs: %v", err)

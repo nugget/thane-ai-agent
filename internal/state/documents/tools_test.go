@@ -309,7 +309,7 @@ func TestToolsSectionFailsWhenResultTooLarge(t *testing.T) {
 		t.Fatalf("NewStore: %v", err)
 	}
 
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	got, err := tools.Section(context.Background(), SectionArgs{Ref: "kb:large.md"})
 	if err != nil {
 		t.Fatalf("Section() error = %v, want truncated preview payload", err)
@@ -350,7 +350,7 @@ Helpful nested note.
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	return NewTools(store)
+	return NewTools(store, nil)
 }
 
 // TestReadWithResultBudgetTinyBudgetDoesNotPanic pins the defensive

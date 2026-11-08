@@ -441,7 +441,7 @@ func TestContentResolver_Execute_Integration(t *testing.T) {
 
 		reg := NewEmptyRegistry()
 		reg.SetContentResolver(cr)
-		RegisterDocumentTools(reg, documents.NewTools(store))
+		RegisterDocumentTools(reg, documents.NewTools(store, nil))
 
 		got, err := reg.Execute(ctx, "doc_section", `{"ref":"kb:ideas.md"}`)
 		if err != nil {
@@ -477,7 +477,7 @@ func TestContentResolver_Execute_Integration(t *testing.T) {
 
 		reg := NewEmptyRegistry()
 		reg.SetContentResolver(cr)
-		RegisterDocumentTools(reg, documents.NewTools(store))
+		RegisterDocumentTools(reg, documents.NewTools(store, nil))
 
 		if _, err := reg.Execute(ctx, "doc_body_write", `{"ref":"kb:new.md","title":"New","body":"temp:draft"}`); err != nil {
 			t.Fatalf("Execute doc_body_write: %v", err)

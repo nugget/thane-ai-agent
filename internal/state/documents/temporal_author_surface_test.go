@@ -19,7 +19,7 @@ func TestDocReadKeepsRawTemplates(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	const template = "{{delta:2026-12-25}}"
 	body := "# Winter\n\nThe hard freeze lands " + template + ".\n"
 	if _, err := store.Write(context.Background(), WriteArgs{Ref: "kb:winter.md", Body: &body}); err != nil {
@@ -57,7 +57,7 @@ func TestPublishRoundTripsTemplatesByteExact(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	const template = "{{delta:2026-12-25}}"
 
 	if _, err := tools.Publish(context.Background(), PublishArgs{

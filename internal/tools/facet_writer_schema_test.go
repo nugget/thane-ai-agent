@@ -22,7 +22,7 @@ func contactDossierWriteToolForSchema(t *testing.T) *Tool {
 	}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, true)
-	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write)
+	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 	return registry.Get("contact_dossier_write")

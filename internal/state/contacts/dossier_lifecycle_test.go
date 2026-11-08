@@ -45,8 +45,8 @@ func newDossierLifecycleStore(t *testing.T, tools *Tools) (*documents.Store, *do
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	docTools := documents.NewTools(store)
-	tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted)
+	docTools := documents.NewTools(store, nil)
+	tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, nil)
 	return store, docTools, roots[DossierRootName]
 }
 

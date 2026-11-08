@@ -25,12 +25,25 @@ func rewordable(over, limit int) bool {
 	return over <= max(limit/rewordableOverageDivisor, minRewordableOverage)
 }
 
-// overBudgetError reports one projection that exceeds its rune budget: the
+// overBudget is one projection over its rune budget. It is a type rather
+// than text so [Shrinker.Fit] can tell a refusal made only of small overruns
+// from one carrying any other violation.
+type overBudget struct {
+	error
+	key          string
+	runes, limit int
+}
+
+func overBudgetError(key string, runes, limit int) error {
+	return &overBudget{error: overBudgetText(key, runes, limit), key: key, runes: runes, limit: limit}
+}
+
+// overBudgetText reports one projection that exceeds its rune budget: the
 // observed count, the limit, the overage, and the lever sized to that overage.
 // Naming only the limit teaches the wrong repair for a large overage — the
 // model rewords, lands still over, and resends — so a gap rewording rarely
 // closes says so and points at removing whole items instead.
-func overBudgetError(key string, runes, limit int) error {
+func overBudgetText(key string, runes, limit int) error {
 	over := runes - limit
 	if rewordable(over, limit) {
 		return fmt.Errorf("%s is %d characters and the limit is %d (%d over); reword to cut at least %s — a gap this small closes by tightening the phrasing without dropping content", key, runes, limit, over, characterCount(over))

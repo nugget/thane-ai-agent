@@ -43,7 +43,7 @@ func TestConfigureContactDossierDocuments_ResolvesCitedSessionPrefixes(t *testin
 
 	tools := contacts.NewTools(contactStore, nil)
 	tools.ConfigureDossierRoot(true, true)
-	configureContactDossierDocuments(tools, documents.NewTools(docStore), docStore, archive)
+	configureContactDossierDocuments(tools, documents.NewTools(docStore, nil), docStore, archive, nil)
 	_, err = tools.WriteDossier(ctx, contacts.DossierWriteArgs{
 		ContactID:  household.ID.String(),
 		StatusLine: "Current.",

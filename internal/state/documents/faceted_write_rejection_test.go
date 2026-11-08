@@ -59,7 +59,7 @@ func TestWriteFacetedRejectionSaysNothingWasWritten(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			store, kbDir := newMutationStore(t)
-			err := tt.write(NewTools(store))
+			err := tt.write(NewTools(store, nil))
 			if err == nil {
 				t.Fatal("invalid faceted write succeeded")
 			}

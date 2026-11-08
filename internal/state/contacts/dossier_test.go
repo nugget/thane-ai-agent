@@ -230,7 +230,7 @@ func TestWriteDossierRejectsSubjectUUIDInEveryProjection(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	id := contact.ID.String()
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
@@ -269,7 +269,7 @@ func TestWriteDossierRejectsSubjectNameInCompactProjections(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
@@ -308,7 +308,7 @@ func TestWriteDossierAllowsSubjectNameInStandaloneProjections(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
@@ -357,7 +357,7 @@ func TestWriteDossierRejectsEveryAmbiguousArchiveSessionCitation(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
@@ -441,7 +441,7 @@ func TestWriteDossierOwnsDocumentIdentityAndStructure(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	args := DossierWriteArgs{
 		ContactID:    contact.ID.String(),
@@ -501,7 +501,7 @@ func TestWriteDossierReportsAllProjectionViolationsBeforeWriting(t *testing.T) {
 	}
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
@@ -533,7 +533,7 @@ func TestWriteDossierRequiresCanonicalActiveContact(t *testing.T) {
 	tools := newTestTools(t)
 	writer := &recordingDossierWriter{}
 	tools.ConfigureDossierRoot(true, true)
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 	validPayload := DossierWriteArgs{
 		StatusLine: "Current.",
 		Teaser:     "Useful hook.",

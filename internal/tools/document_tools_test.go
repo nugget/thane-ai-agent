@@ -505,7 +505,7 @@ func newTestDocumentRegistry(t *testing.T) (*Registry, *documents.Store) {
 	}
 
 	reg := NewEmptyRegistry()
-	RegisterDocumentTools(reg, documents.NewTools(store))
+	RegisterDocumentTools(reg, documents.NewTools(store, nil))
 	return reg, store
 }
 

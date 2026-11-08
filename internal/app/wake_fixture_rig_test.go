@@ -256,7 +256,7 @@ func newWakeRig(t *testing.T, rs wakeRigSpec) *wakeRig {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	store, _ := newLoopOutputDocumentStore(t)
-	app := &App{documentStore: store, documentTools: documents.NewTools(store)}
+	app := &App{documentStore: store, documentTools: documents.NewTools(store, nil)}
 	spec, err := app.hydrateLoopOutputs(looppkg.Spec{
 		Name:       rs.name,
 		Enabled:    true,

@@ -177,7 +177,7 @@ func TestThaneCurate_RejectsInvalidKnobs(t *testing.T) {
 	}
 	reg := NewEmptyRegistry()
 	reg.ConfigureLoopIntentTools(LoopIntentToolDeps{
-		DocTools:   documents.NewTools(docStore),
+		DocTools:   documents.NewTools(docStore, nil),
 		Registry:   defRegistry,
 		CommitSpec: upsertCommitSpec(defRegistry),
 		LaunchDefinition: func(_ context.Context, _ string, _ looppkg.Launch) (looppkg.LaunchResult, error) {
@@ -242,7 +242,7 @@ func TestThaneCurate_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 
 	// Build an empty loop definition registry and capture launches.
 	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
@@ -478,7 +478,7 @@ func TestThaneCurate_RefusesToClobber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 
 	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
 	if err != nil {
@@ -549,7 +549,7 @@ func TestThaneCurate_RefusesToClobberDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 
 	// Pre-seed a document at the target ref via the same writer the
 	// tool uses; simulates a user-authored doc that the loop would
@@ -631,7 +631,7 @@ func TestThaneCurate_InstructionsFlowToProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 
 	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
 	if err != nil {
@@ -711,7 +711,7 @@ func TestThaneCurate_InstructionsOmitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 
 	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
 	if err != nil {
@@ -787,7 +787,7 @@ func newCurateTestRig(t *testing.T) *curateTestRig {
 	if err != nil {
 		t.Fatalf("documents.NewStore: %v", err)
 	}
-	docTools := documents.NewTools(docStore)
+	docTools := documents.NewTools(docStore, nil)
 	defRegistry, err := looppkg.NewDefinitionRegistry(nil)
 	if err != nil {
 		t.Fatalf("NewDefinitionRegistry: %v", err)

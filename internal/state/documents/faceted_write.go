@@ -59,7 +59,13 @@ type FacetedWriteArgs struct {
 	// PreviousWriteTools permits a trusted adapter to rename its own write
 	// surface while atomically migrating the document contract.
 	PreviousWriteTools []string `json:"-"`
+	// Shortened lists projections the adapter's own [documentfacets.Shrinker.Fit]
+	// shortened, reported in the result with any this write shortens.
+	Shortened []documentfacets.Shortened `json:"-"`
 }
+
+// shortenedWarning frames shortened_projections in a write's warnings.
+const shortenedWarning = "shortened_projections were a little over their character limit, so Go had a model shorten them before saving; each saved_text is exactly what is stored now, so treat it, not what you sent, as the current projection."
 
 // StructuredDocumentMutationError redirects a mutation to the tool that owns
 // the target document's complete logical state.
@@ -151,17 +157,24 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		}
 	}
 
-	var validationErrors []error
-	if err := args.Contract.Validate(args.Payload); err != nil {
-		validationErrors = append(validationErrors, err)
-	}
-	if args.Validate != nil {
-		if err := args.Validate(args.Payload); err != nil {
+	var shortened []documentfacets.Shortened
+	args.Payload, shortened, err = t.shrinker.Fit(ctx, args.Payload, func(payload documentfacets.Payload) error {
+		var validationErrors []error
+		if err := args.Contract.Validate(payload); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
-	}
-	if len(validationErrors) > 0 {
-		return "", documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
+		if args.Validate != nil {
+			if err := args.Validate(payload); err != nil {
+				validationErrors = append(validationErrors, err)
+			}
+		}
+		if len(validationErrors) > 0 {
+			return documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	body := args.Contract.Render(args.Payload)
@@ -186,6 +199,9 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	result, err := t.store.Write(ctx, writeArgs)
 	if result != nil {
 		result.Action = args.WriteTool
+		if result.Shortened = append(args.Shortened, shortened...); len(result.Shortened) > 0 {
+			result.Warnings = append(result.Warnings, shortenedWarning)
+		}
 	}
 	payload, err := t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
 	return deliverMutation(payload, err, args.RejectionIsError)

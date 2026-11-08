@@ -129,6 +129,8 @@ type MutationResult struct {
 	// fatal because the author still wrote something legible; the
 	// refusals live in typed errors.
 	Warnings []string `json:"warnings,omitempty"`
+	// Shortened lists the projections a faceted write saved shortened.
+	Shortened []documentfacets.Shortened `json:"-"`
 	// Revision advances the hidden read receipt after a successful mutation.
 	Revision string `json:"-"`
 }

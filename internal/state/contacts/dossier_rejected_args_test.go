@@ -87,7 +87,7 @@ func TestDossierRejectionMarksRejectedArguments(t *testing.T) {
 				write = (&recordingDossierWriter{}).Write
 			}
 			tools.ConfigureDossierRoot(true, true)
-			tools.ConfigureDossierDocuments(nil, write)
+			tools.ConfigureDossierDocuments(nil, write, nil)
 
 			args := valid
 			args.ContactID = contact.ID.String()

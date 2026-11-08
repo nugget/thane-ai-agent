@@ -313,7 +313,7 @@ func newIntakeTools(t *testing.T, policies map[string]RootPolicy) (*Tools, strin
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	return NewTools(store), kbDir
+	return NewTools(store, nil), kbDir
 }
 
 func containsString(values []string, want string) bool {

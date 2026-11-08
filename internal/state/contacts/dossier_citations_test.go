@@ -190,7 +190,7 @@ func TestWriteDossierResolvesArchiveSessionCitations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tools, contactID := newCitationTestTools(t)
 			writer := &recordingDossierWriter{}
-			tools.ConfigureDossierDocuments(nil, writer.Write)
+			tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 			archive := newFakeArchiveSessions()
 			if !tt.noResolver {
 				tools.ConfigureDossierArchiveSessions(archive.resolve)
@@ -285,7 +285,7 @@ func assertCitationWriteLanded(t *testing.T, result string, err error, writer *r
 func TestWriteDossierBoundsCitationLookups(t *testing.T) {
 	tools, contactID := newCitationTestTools(t)
 	writer := &recordingDossierWriter{}
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 	archive := newFakeArchiveSessions()
 	tools.ConfigureDossierArchiveSessions(archive.resolve)
 
@@ -543,7 +543,7 @@ func TestWriteDossierBoundsRefusalSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tools, contactID := newCitationTestTools(t)
 			writer := &recordingDossierWriter{}
-			tools.ConfigureDossierDocuments(nil, writer.Write)
+			tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 			tools.ConfigureDossierArchiveSessions(tt.resolve)
 
 			_, err := tools.WriteDossier(t.Context(), DossierWriteArgs{
@@ -652,7 +652,7 @@ func TestWriteDossierBoundsOneOversizedCitation(t *testing.T) {
 
 	tools, contactID := newCitationTestTools(t)
 	writer := &recordingDossierWriter{}
-	tools.ConfigureDossierDocuments(nil, writer.Write)
+	tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 
 	_, err := tools.WriteDossier(t.Context(), DossierWriteArgs{
 		ContactID:  contactID,

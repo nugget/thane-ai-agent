@@ -396,6 +396,7 @@ func (a *App) initChannels(s *newState) error {
 	// complements raw file tools by giving the model rooted discovery,
 	// structured search, and section retrieval when the exact path is not
 	// yet known.
+	shrinker := a.facetShrinker()
 	if s.resolver != nil {
 		documentRoots := buildDocumentRoots(s.resolver)
 		if len(documentRoots) > 0 {
@@ -408,7 +409,7 @@ func (a *App) initChannels(s *newState) error {
 				return fmt.Errorf("create document index: %w", err)
 			}
 			a.documentStore = docStore
-			a.documentTools = documents.NewTools(docStore)
+			a.documentTools = documents.NewTools(docStore, shrinker)
 			tools.RegisterDocumentTools(a.loop.Tools(), a.documentTools)
 			a.deferWorker("documents-index", func(ctx context.Context) error {
 				go docStore.RunRefresher(ctx)
@@ -450,7 +451,7 @@ func (a *App) initChannels(s *newState) error {
 			}
 		}
 	}
-	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore, a.archiveStore)
+	configureContactDossierDocuments(contactTools, a.documentTools, a.documentStore, a.archiveStore, shrinker)
 	a.loop.Tools().SetContactTools(contactTools)
 
 	var talentVerifier func(context.Context, string, string) error

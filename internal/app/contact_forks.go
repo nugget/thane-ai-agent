@@ -9,6 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/state/contacts"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/state/introspection"
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 )
@@ -203,13 +204,14 @@ func logContactForkFindings(ctx context.Context, store *contacts.Store, logger *
 // configureContactDossierDocuments hands the contact tools the document
 // tools a dossier is read and written through, the store-level presence
 // check the second-dossier refusal uses, and the archive lookup a
-// refused session-id citation resolves through. Without document tools,
-// dossier reads and writes stay unconfigured.
-func configureContactDossierDocuments(contactTools *contacts.Tools, docTools *documents.Tools, docStore *documents.Store, archive *memory.ArchiveStore) {
+// refused session-id citation resolves through, plus the shrinker a
+// dossier write refused only for small overruns retries through. Without
+// document tools, dossier reads and writes stay unconfigured.
+func configureContactDossierDocuments(contactTools *contacts.Tools, docTools *documents.Tools, docStore *documents.Store, archive *memory.ArchiveStore, shrinker *documentfacets.Shrinker) {
 	if contactTools == nil || docTools == nil {
 		return
 	}
-	contactTools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted)
+	contactTools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, shrinker)
 	contactTools.ConfigureDossierPresence(documentPresence(docStore))
 	contactTools.ConfigureDossierArchiveSessions(archiveSessionResolver(archive))
 }

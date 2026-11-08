@@ -78,7 +78,7 @@ func TestSearchDefaultOrchestratorSourcePermissions(t *testing.T) {
 			registry := tools.NewEmptyRegistry()
 			registry.SetArchiveStore(archive)
 			registry.SetWorkingMemoryStore(working)
-			tools.RegisterDocumentTools(registry, documents.NewTools(documentStore))
+			tools.RegisterDocumentTools(registry, documents.NewTools(documentStore, nil))
 			// The installed delegation front door activates the production gate.
 			registry.Register(&tools.Tool{Name: "thane_now"})
 			call := llm.ToolCall{ID: "search-call"}
