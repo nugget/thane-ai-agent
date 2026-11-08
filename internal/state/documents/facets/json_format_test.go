@@ -60,3 +60,27 @@ func TestJSONFacetStillHonorsTheOtherBudgets(t *testing.T) {
 		t.Errorf("error does not report the budget: %v", err)
 	}
 }
+
+// TestJSONStatusLineIsBudgetedInCharacters pins that a JSON-format
+// status_line drops the word limit, which means nothing for code-read JSON,
+// and is told and held to its character limit instead: spaced JSON past
+// twenty whitespace tokens fits, and one character past the limit does not.
+func TestJSONStatusLineIsBudgetedInCharacters(t *testing.T) {
+	contract := Contract{Facets: []Spec{{Name: StatusLine, Format: FormatJSON}}}
+	field := contract.Fields()[0]
+	if field.MaxWords != 0 || field.Budget() != "180 characters" || field.BudgetClause() != " Maximum 180 characters — a ceiling, not a target; compose comfortably under it." {
+		t.Fatalf("json status_line field = %+v, budget %q; want no word limit and 180 characters", field, field.Budget())
+	}
+	spaced := `{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7, "h": 8, "i": 9, "j": 10, "k": 11}`
+	if WordCount(spaced) <= statusLineMaxWords {
+		t.Fatalf("%q is not past the word limit", spaced)
+	}
+	if err := contract.Validate(Payload{StatusLine: spaced, Full: "# x\n"}); err != nil {
+		t.Errorf("Validate() refused spaced JSON within its characters: %v", err)
+	}
+	long := `{"reading":"` + strings.Repeat("x", statusLineMaxRunes-13) + `"}`
+	err := contract.Validate(Payload{StatusLine: long, Full: "# x\n"})
+	if err == nil || !strings.Contains(err.Error(), "status_line is 181 characters and the limit is 180") {
+		t.Errorf("Validate() = %v, want the 181-character JSON refused in characters", err)
+	}
+}

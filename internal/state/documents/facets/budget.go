@@ -33,7 +33,9 @@ func (u unit) measure(text string) int {
 // WordCount counts text's words as [strings.Fields] splits them: runs of
 // characters between whitespace, so "14:30" and "kb:notes/a.md" are one
 // word each. That is how a writer counts its own line, so the count never
-// exceeds the words a model believes it wrote.
+// exceeds the words a model believes it wrote. Text in a script written
+// without spaces between words counts one word per run, so only a field's
+// character limit bounds it.
 func WordCount(text string) int {
 	return len(strings.Fields(text))
 }

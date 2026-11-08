@@ -647,9 +647,10 @@ manually transcribed refs.
 `contact_dossier_write` is the canonical mutation door on a managed-writable
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
-layout in Go. Projection budgets are advertised in the schema, and one failed
-call stores nothing and reports every independently correctable projection
-violation together.
+layout in Go. Projection budgets are advertised in the schema, `status_line`'s
+in words; its 180-character backstop, which no ordinary line reaches, is named
+only by the refusal that enforces it. One failed call stores nothing and
+reports every independently correctable projection violation together.
 Generic document mutators reject the dossier and name
 `contact_dossier_write`; operator recovery remains available through Git
 history and direct repository administration rather than a second model-facing

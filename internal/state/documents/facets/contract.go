@@ -25,9 +25,11 @@ const (
 	statusLineMaxWords = 20
 	// statusLineMaxRunes bounds a status_line's length whatever its word
 	// count, because twenty words of long identifiers or URLs is not a
-	// status line any surface can show. Real status lines within twenty
-	// words have stayed under 140 characters, so 180 refuses only
-	// degenerate text.
+	// status line any surface can show. Lines written to a twenty-word
+	// budget run to about 150 characters, so 180 refuses only text like
+	// that; a line carrying several {{delta:...}} templates, each one long
+	// word, reaches it sooner. Writers are told the word limit alone, and
+	// a refusal names this one when a line breaks it.
 	statusLineMaxRunes = 180
 	teaserMaxRunes     = 500
 	digestMaxRunes     = 2048
@@ -109,6 +111,9 @@ func DefaultContract() Contract {
 }
 
 // Fields returns declared projections followed by full in canonical order.
+// A projection declared as JSON drops its word limit: words are a budget for
+// prose, and compact JSON is a single word, so its character limit is the
+// budget its writer is told.
 func (c Contract) Fields() []Field {
 	declared := make(map[Name]Spec, len(c.Facets))
 	for _, facet := range c.Facets {
@@ -123,6 +128,9 @@ func (c Contract) Fields() []Field {
 		if facet, ok := declared[item.name]; ok {
 			field := item.field
 			field.Format = facet.EffectiveFormat()
+			if field.Format == FormatJSON {
+				field.MaxWords = 0
+			}
 			fields = append(fields, field)
 		}
 	}

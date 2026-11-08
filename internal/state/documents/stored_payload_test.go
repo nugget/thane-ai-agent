@@ -226,7 +226,9 @@ func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 	t.Run("a JSON projection spaced with U+00A0", func(t *testing.T) {
 		t.Parallel()
 		jsonContract := documentfacets.Contract{Facets: []documentfacets.Spec{{Name: documentfacets.StatusLine, Format: documentfacets.FormatJSON}}}
-		sent := documentfacets.Payload{StatusLine: `{"state": "` + strings.TrimSpace(strings.Repeat("s ", 24)) + `"}`, Full: "Complete detail."}
+		// A JSON projection is budgeted in characters, so its overrun is
+		// one long value.
+		sent := documentfacets.Payload{StatusLine: `{"state":"` + strings.Repeat("s", 190) + `"}`, Full: "Complete detail."}
 		assertShrinkOutcome(t, jsonContract, sent, keyShrinker(map[string]string{"status_line": "{\"state\":\u00a0\"ok\"}"}), true)
 	})
 }
