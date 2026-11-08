@@ -25,7 +25,7 @@ type Shrinker struct {
 	// Shrink returns text rewritten to at most limit characters. App wiring
 	// builds it from a model client; this package sees only the func.
 	Shrink func(ctx context.Context, text string, limit int) (string, error)
-	// Logger receives one INFO record per shortened or abandoned projection.
+	// Logger receives the INFO records Fit's contract lists.
 	Logger *slog.Logger
 }
 
@@ -54,6 +54,10 @@ type Shortened struct {
 //     that payload and one [Shortened] per replaced projection; if anything
 //     failed, the original payload and refusal, so the model only ever reads
 //     errors about its own text.
+//  5. The operator keeps everything, at INFO: each Shrink reply not used,
+//     with its text and why, and one outcome per projection a shrink
+//     touched, with the text it was shortened to and, when the original
+//     refusal stands, the reason.
 func (s *Shrinker) Fit(ctx context.Context, payload Payload, validate func(Payload) error) (Payload, []Shortened, error) {
 	refusal := validate(payload)
 	var overruns []*overBudget
@@ -66,20 +70,18 @@ func (s *Shrinker) Fit(ctx context.Context, payload Payload, validate func(Paylo
 		entry := Shortened{Projection: over.key, Limit: over.limit, SentCharacters: over.runes, sent: strings.TrimSpace(*item.value(&adjusted))}
 		saved, err := s.shrink(ctx, item.field, &entry)
 		if err != nil {
-			s.log(ctx, "projection shrink failed; the original refusal stands", entry, slog.String("reason", err.Error()))
+			s.abandon(ctx, append(shortened, entry), fmt.Sprintf("%s was not shortened: %v", over.key, err))
 			return payload, nil, refusal
 		}
 		*item.value(&adjusted), entry.SavedText, entry.SavedCharacters = saved, saved, utf8.RuneCountInString(saved)
 		shortened = append(shortened, entry)
 	}
 	if err := validate(adjusted); err != nil {
-		for _, entry := range shortened {
-			s.log(ctx, "projection shrink failed; the original refusal stands", entry, slog.String("reason", "the shortened payload failed validation: "+err.Error()))
-		}
+		s.abandon(ctx, shortened, "the shortened payload failed validation: "+err.Error())
 		return payload, nil, refusal
 	}
 	for _, entry := range shortened {
-		s.log(ctx, "projection shortened to fit its budget", entry, slog.Int("new_runes", entry.SavedCharacters), slog.String("new_text", entry.SavedText))
+		s.log(ctx, "projection shortened to fit its budget", entry, entry.SavedText, "")
 	}
 	return adjusted, shortened, nil
 }
@@ -128,18 +130,35 @@ func (s *Shrinker) shrink(ctx context.Context, field Field, entry *Shortened) (s
 		default:
 			return candidate, nil
 		}
+		s.log(ctx, "projection shrink reply rejected", *entry, candidate, reason.Error())
 	}
 	return "", reason
 }
 
-func (s *Shrinker) log(ctx context.Context, msg string, entry Shortened, attrs ...slog.Attr) {
+// abandon logs the outcome of each projection a failed Fit touched.
+func (s *Shrinker) abandon(ctx context.Context, entries []Shortened, reason string) {
+	for _, entry := range entries {
+		s.log(ctx, "projection shrink failed; the original refusal stands", entry, entry.SavedText, reason)
+	}
+}
+
+// log writes one INFO record about entry, with newText, the text the shrink
+// model replied with, and reason when each is set.
+func (s *Shrinker) log(ctx context.Context, msg string, entry Shortened, newText, reason string) {
 	logger := s.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.LogAttrs(ctx, slog.LevelInfo, msg, append([]slog.Attr{
+	attrs := []slog.Attr{
 		slog.String("facet", entry.Projection), slog.Int("limit", entry.Limit),
 		slog.Int("original_runes", entry.SentCharacters), slog.String("model", s.Model),
 		slog.Int("attempts", entry.attempts), slog.String("original_text", entry.sent),
-	}, attrs...)...)
+	}
+	if newText != "" {
+		attrs = append(attrs, slog.Int("new_runes", utf8.RuneCountInString(newText)), slog.String("new_text", newText))
+	}
+	if reason != "" {
+		attrs = append(attrs, slog.String("reason", reason))
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, msg, attrs...)
 }

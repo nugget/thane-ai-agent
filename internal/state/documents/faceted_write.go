@@ -157,14 +157,22 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		}
 	}
 
+	sent := args.Payload
 	var shortened []documentfacets.Shortened
-	args.Payload, shortened, err = t.shrinker.Fit(ctx, args.Payload, func(payload documentfacets.Payload) error {
+	args.Payload, shortened, err = t.shrinker.Fit(ctx, sent, func(payload documentfacets.Payload) error {
 		var validationErrors []error
 		if err := args.Contract.Validate(payload); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 		if args.Validate != nil {
 			if err := args.Validate(payload); err != nil {
+				validationErrors = append(validationErrors, err)
+			}
+		}
+		// Only shortened text meets the store's prose guard here; the
+		// author's own text still meets it in Store.Write, as before.
+		if payload != sent {
+			if err := ProseRefusal(args.Ref, args.Contract, payload); err != nil {
 				validationErrors = append(validationErrors, err)
 			}
 		}
@@ -199,7 +207,13 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	result, err := t.store.Write(ctx, writeArgs)
 	if result != nil {
 		result.Action = args.WriteTool
-		if result.Shortened = append(args.Shortened, shortened...); len(result.Shortened) > 0 {
+		// The store saved the body with its glyph artifacts folded, so
+		// each saved_text is folded the same way to read as stored.
+		for _, entry := range append(args.Shortened, shortened...) {
+			entry.SavedText = normalizeGlyphArtifacts(entry.SavedText)
+			result.Shortened = append(result.Shortened, entry)
+		}
+		if len(result.Shortened) > 0 {
 			result.Warnings = append(result.Warnings, shortenedWarning)
 		}
 	}

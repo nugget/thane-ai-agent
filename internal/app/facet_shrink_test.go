@@ -55,8 +55,11 @@ func TestFacetShrinkerIsOffUntilAModelIsConfigured(t *testing.T) {
 }
 
 // TestShrinkFacetTextAsksOnceWithNoTools pins the call shape: one bounded,
-// tool-free request naming the limit, with the projection text as the user
-// turn, and a reply cut off at the output bound refused rather than saved.
+// tool-free request naming the limit and asking to keep the text's line
+// structure (a digest may be a list; a single-line projection only reaches
+// a shrink already single-line), with the projection text as the user turn.
+// A reply cut off at the output bound is refused rather than saved, whether
+// the provider reports the stop reason or only the tokens it spent.
 func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 	t.Parallel()
 
@@ -72,12 +75,25 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 		client.messages[1].Role != "user" || client.messages[1].Content != "A long status line." {
 		t.Errorf("messages = %+v, want the limit in the system turn and the text as the user turn", client.messages)
 	}
+	if system := client.messages[0].Content; !strings.Contains(system, "keep the text's line structure") || strings.Contains(system, "line breaks") {
+		t.Errorf("system turn = %q, want it to keep the line structure rather than forbid line breaks", system)
+	}
 
-	for _, reason := range []string{"length", "max_tokens"} {
-		client.reply.StopReason = reason
+	for _, cutOff := range []llm.ChatResponse{
+		{Message: llm.Message{Content: "Short"}, StopReason: "length"},
+		{Message: llm.Message{Content: "Short"}, StopReason: "max_tokens"},
+		// Ollama reports no stop reason; its token count still shows the
+		// reply spent the whole bound (thinking can, leaving a fragment).
+		{Message: llm.Message{Content: "Short"}, OutputTokens: 240},
+	} {
+		client.reply = cutOff
 		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err == nil {
-			t.Errorf("stop reason %q: shrinkFacetText() = %q, want the cut-off reply refused", reason, got)
+			t.Errorf("cut-off reply %+v: shrinkFacetText() = %q, want it refused", cutOff, got)
 		}
+	}
+	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 239}
+	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err != nil || got != "Shorter." {
+		t.Errorf("reply one token under the bound: shrinkFacetText() = %q, %v; want it kept", got, err)
 	}
 }
 

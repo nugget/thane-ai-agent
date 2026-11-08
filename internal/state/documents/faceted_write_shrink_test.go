@@ -29,15 +29,18 @@ func replyingShrinker(text string, calls *int) *documentfacets.Shrinker {
 // TestDocWriteSavesASmallOverrunShortened pins the generic writer's wiring:
 // a doc_write refused only for a status line a little over budget lands with
 // the shortened text, and its result gives the model the exact saved text
-// and both counts beside a warning that says what happened.
+// and both counts beside a warning that says what happened. The reply
+// carries a non-breaking hyphen the store folds to a plain one, so the
+// saved text reported is the one stored, not the one the model returned.
 func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 	t.Parallel()
 
-	const saved = "Printer online; two packages wait at the desk."
+	const reply = "Printer online and non\u2011stop; two packages wait at the desk."
+	const saved = "Printer online and non-stop; two packages wait at the desk."
 	store, kbDir := newMutationStore(t)
 	calls := 0
 	sent := strings.Repeat("s", 142)
-	result, err := NewTools(store, replyingShrinker(saved, &calls)).Publish(context.Background(), PublishArgs{
+	result, err := NewTools(store, replyingShrinker(reply, &calls)).Publish(context.Background(), PublishArgs{
 		Ref: "kb:status.md", StatusLine: sent, Full: "Complete detail.",
 	})
 	if err != nil {
@@ -65,7 +68,7 @@ func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 	}
 	got := decoded.Shortened[0]
 	if got.Projection != "status_line" || got.Limit != 120 || got.SentCharacters != 142 || got.SavedCharacters != len(saved) || got.SavedText != saved {
-		t.Errorf("shortened_projections[0] = %+v, want status_line 142 -> %d with the saved text", got, len(saved))
+		t.Errorf("shortened_projections[0] = %+v, want status_line 142 -> %d with the stored text %q", got, len(saved), saved)
 	}
 	if len(decoded.Warnings) != 1 || decoded.Warnings[0] != shortenedWarning {
 		t.Errorf("warnings = %q, want the shortened-projections note", decoded.Warnings)
@@ -100,6 +103,21 @@ func TestDocWriteRefusalIsUnchangedWhenShrinkCannotHelp(t *testing.T) {
 			name:  "another violation beside the overrun",
 			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "## Details\n\nsmuggled"},
 			reply: "Short.", wantCalls: 0,
+		},
+		{
+			// The store refuses a rendered delta in prose. One the shrink
+			// model wrote must come back as the model's own refusal, not
+			// as an error quoting text the model never sent.
+			name:  "the shrink result bakes in a rendered delta",
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."},
+			reply: "Printer online; toner due +5d, order confirmed by email.", wantCalls: 1,
+		},
+		{
+			// The store folds a non-breaking hyphen before its guard runs,
+			// so the check of shortened text folds it first too.
+			name:  "the shrink result bakes in a delta behind a glyph artifact",
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."},
+			reply: "Printer back online ‑2h after the outage.", wantCalls: 1,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

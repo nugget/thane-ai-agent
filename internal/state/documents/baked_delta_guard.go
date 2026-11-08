@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // bakedDeltaReportLimit caps how many findings a refusal or warning
@@ -100,4 +101,15 @@ func guardAuthoredProse(ref string, texts ...string) ([]string, error) {
 		"%s: stored prose carries a relative time that will not stay true (%s). "+
 			"Prefer {{delta:<absolute date or RFC3339 instant>}}, which re-renders on every read. Written as-is.",
 		ref, describeBakedDeltas(warn))}, nil
+}
+
+// ProseRefusal returns the refusal [Store.Write] gives the prose of the
+// faceted body payload renders to, or nil. A faceted writer adds it to the
+// validation it runs again on a shortened payload
+// ([documentfacets.Shrinker.Fit]), so prose the shrink model wrote that the
+// store would refuse returns the author's original refusal instead of an
+// error quoting text the author never sent.
+func ProseRefusal(ref string, contract documentfacets.Contract, payload documentfacets.Payload) error {
+	_, err := guardAuthoredProse(ref, normalizeGlyphArtifacts(contract.Render(payload)))
+	return err
 }

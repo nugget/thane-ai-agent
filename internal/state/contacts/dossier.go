@@ -146,7 +146,8 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Full:       args.Full,
 	}
 	canonicalized := canonicalizeDossierCitations(&payload)
-	payload, shortened, err := t.dossierShrinker.Fit(ctx, payload, func(payload documentfacets.Payload) error {
+	sent := payload
+	payload, shortened, err := t.dossierShrinker.Fit(ctx, sent, func(payload documentfacets.Payload) error {
 		var validationErrs []error
 		if err := dossierOutputContract.Validate(payload); err != nil {
 			validationErrs = append(validationErrs, err)
@@ -159,6 +160,13 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		}
 		if err := validateDossierEvidenceCitations(ctx, payload, t.dossierSessions); err != nil {
 			validationErrs = append(validationErrs, err)
+		}
+		// Only shortened text meets the store's prose guard here; the
+		// author's own text still meets it in Store.Write, as before.
+		if payload != sent {
+			if err := documents.ProseRefusal(DossierRef(id), dossierOutputContract, payload); err != nil {
+				validationErrs = append(validationErrs, err)
+			}
 		}
 		if len(validationErrs) > 0 {
 			return documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)

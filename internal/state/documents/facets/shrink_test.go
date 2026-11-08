@@ -263,8 +263,8 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 	if _, _, err := shrinker.Fit(context.Background(), sent, validate); err != nil {
 		t.Fatalf("Fit() error = %v", err)
 	}
-	if d := (*calls)[0].deadline; d <= 0 || d > shrinkAttemptTimeout {
-		t.Fatalf("shrink call deadline = %v, want one within %v", d, shrinkAttemptTimeout)
+	if d := (*calls)[0].deadline; d <= 0 || d > 5*time.Second {
+		t.Fatalf("shrink call deadline = %v, want one of at most five seconds", d)
 	}
 }
 
@@ -330,47 +330,103 @@ func TestFitWithoutAShrinkerIsTheWritersValidation(t *testing.T) {
 	}
 }
 
-// TestFitLogsEveryShrinkForTheOperator pins one INFO record per projection,
-// carrying both texts, on success and on failure.
+// logPrefix wants a log value that starts with it, for a reason that quotes
+// a whole refusal.
+type logPrefix string
+
+// TestFitLogsEveryShrinkForTheOperator pins what the operator keeps, since
+// choosing a shrink model needs the replies it rejected as much as the ones
+// it saved: every reply not used, with its text when it had one and why, and
+// one outcome per projection a shrink touched. A landed write logs each
+// saved text; when the original refusal stands, each projection logs the
+// text it had been shortened to, if any, and the reason.
 func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 	t.Parallel()
 
-	sent := validShrinkPayload()
-	sent.StatusLine = strings.Repeat("s", statusLineMaxRunes+22)
+	const (
+		saved    = "projection shortened to fit its budget"
+		rejected = "projection shrink reply rejected"
+		failed   = "projection shrink failed; the original refusal stands"
+	)
+	over := strings.Repeat("s", statusLineMaxRunes+22)
+	stillOver := strings.Repeat("r", statusLineMaxRunes+10)
+	overTeaser := strings.Repeat("t", teaserMaxRunes+40)
 	for _, tt := range []struct {
 		name    string
+		mutate  func(*Payload)
 		replies []shrinkReply
-		want    map[string]any
+		want    []map[string]any
 	}{
 		{
 			name:    "shortened",
 			replies: []shrinkReply{reply("Short.")},
-			want: map[string]any{
-				"level": "INFO", "msg": "projection shortened to fit its budget", "facet": "status_line", "limit": 120.0,
-				"original_runes": 142.0, "new_runes": 6.0, "model": "fast-model", "attempts": 1.0,
-				"original_text": sent.StatusLine, "new_text": "Short.",
+			want: []map[string]any{{
+				"level": "INFO", "msg": saved, "facet": "status_line", "limit": 120.0, "original_runes": 142.0, "model": "fast-model",
+				"attempts": 1.0, "original_text": over, "new_runes": 6.0, "new_text": "Short.", "reason": nil,
+			}},
+		},
+		{
+			name:    "every reply the model gave",
+			replies: []shrinkReply{reply(stillOver), replyErr(errors.New("upstream 503"))},
+			want: []map[string]any{
+				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_runes": 130.0, "new_text": stillOver, "reason": "the shortened text is 130 characters, still over 120"},
+				{"msg": rejected, "facet": "status_line", "attempts": 2.0, "new_text": nil, "reason": "upstream 503"},
+				{"msg": failed, "facet": "status_line", "attempts": 2.0, "original_text": over, "new_text": nil, "reason": "status_line was not shortened: upstream 503"},
 			},
 		},
 		{
-			name:    "failed",
-			replies: []shrinkReply{reply(""), replyErr(errors.New("upstream 503"))},
-			want: map[string]any{
-				"level": "INFO", "msg": "projection shrink failed; the original refusal stands", "facet": "status_line", "limit": 120.0,
-				"original_runes": 142.0, "model": "fast-model", "attempts": 2.0, "original_text": sent.StatusLine, "reason": "upstream 503",
+			name:    "a later projection fails",
+			mutate:  func(p *Payload) { p.Teaser = overTeaser },
+			replies: []shrinkReply{reply("Status OK."), replyErr(errors.New("upstream 503"))},
+			want: []map[string]any{
+				{"msg": rejected, "facet": "teaser", "attempts": 1.0, "reason": "upstream 503"},
+				{"msg": rejected, "facet": "teaser", "attempts": 2.0, "reason": "upstream 503"},
+				{"msg": failed, "facet": "status_line", "attempts": 1.0, "original_text": over, "new_runes": 10.0, "new_text": "Status OK.", "reason": "teaser was not shortened: upstream 503"},
+				{"msg": failed, "facet": "teaser", "attempts": 2.0, "original_text": overTeaser, "new_text": nil, "reason": "teaser was not shortened: upstream 503"},
+			},
+		},
+		{
+			name:    "the shortened payload fails validation",
+			replies: []shrinkReply{reply("## Details")},
+			want: []map[string]any{
+				{"msg": failed, "facet": "status_line", "attempts": 1.0, "new_text": "## Details", "reason": logPrefix("the shortened payload failed validation: test projections are invalid")},
 			},
 		},
 	} {
-		shrinker, _, logs := scriptedShrinker(tt.replies...)
-		validate, _ := writerValidate(nil)
-		_, _, _ = shrinker.Fit(context.Background(), sent, validate)
-		var record map[string]any
-		if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
-			t.Fatalf("%s: want exactly one JSON log record, got %s: %v", tt.name, logs, err)
-		}
-		for key, want := range tt.want {
-			if record[key] != want {
-				t.Errorf("%s: log %s = %v, want %v", tt.name, key, record[key], want)
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sent := validShrinkPayload()
+			sent.StatusLine = over
+			if tt.mutate != nil {
+				tt.mutate(&sent)
 			}
-		}
+			shrinker, _, logs := scriptedShrinker(tt.replies...)
+			validate, _ := writerValidate(nil)
+			_, _, _ = shrinker.Fit(context.Background(), sent, validate)
+			var records []map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("log line %q is not JSON: %v", line, err)
+				}
+				records = append(records, record)
+			}
+			if len(records) != len(tt.want) {
+				t.Fatalf("log = %s, want %d records", logs, len(tt.want))
+			}
+			for i, want := range tt.want {
+				for key, value := range want {
+					if prefix, ok := value.(logPrefix); ok {
+						if got, _ := records[i][key].(string); !strings.HasPrefix(got, string(prefix)) {
+							t.Errorf("record %d %s = %q, want it to start %q", i, key, got, prefix)
+						}
+						continue
+					}
+					if records[i][key] != value {
+						t.Errorf("record %d %s = %v, want %v", i, key, records[i][key], value)
+					}
+				}
+			}
+		})
 	}
 }

@@ -25,11 +25,15 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		teaser    string
+		reply     string
 		wantCalls int
 		wantSaved bool
 	}{
-		{name: "only the overrun", teaser: "Useful hook.", wantCalls: 1, wantSaved: true},
-		{name: "the overrun and the subject's name", teaser: "Dossier Person is a useful hook.", wantCalls: 0},
+		{name: "only the overrun", teaser: "Useful hook.", reply: saved, wantCalls: 1, wantSaved: true},
+		{name: "the overrun and the subject's name", teaser: "Dossier Person is a useful hook.", reply: saved, wantCalls: 0},
+		// The document store refuses a rendered delta in prose; one the
+		// shrink model wrote leaves the model's own refusal standing.
+		{name: "a shortened text the store would refuse", teaser: "Useful hook.", reply: "Steady collaborator; next call +5d, by phone.", wantCalls: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := func(contactID string) DossierWriteArgs {
@@ -53,7 +57,7 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 				Shrink: func(context.Context, string, int) (string, error) {
 					calls++
-					return saved, nil
+					return tt.reply, nil
 				},
 			})
 			result, err := tools.WriteDossier(context.Background(), args(contactID))
