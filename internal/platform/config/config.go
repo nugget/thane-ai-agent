@@ -1764,7 +1764,9 @@ type ModelsConfig struct {
 	// written over its character limit by at most half. The shortened
 	// write must still pass every validation, or the original refusal
 	// stands. When empty, an over-budget projection is refused as
-	// written.
+	// written. The model must answer without reasoning first: with
+	// thinking on it spends its output cap thinking and every shrink
+	// fails, so turn thinking off on its resource (chat_template_kwargs).
 	FacetShrinkModel string `yaml:"facet_shrink_model"`
 
 	// Available lists all models that Thane can route to. Each entry

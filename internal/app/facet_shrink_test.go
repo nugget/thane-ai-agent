@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 // shrinkTestClient records the one call a shrink makes and answers it.
 type shrinkTestClient struct {
 	reply           llm.ChatResponse
+	err             error
 	model           string
 	messages        []llm.Message
 	tools           []map[string]any
@@ -28,7 +30,7 @@ type shrinkTestClient struct {
 func (c *shrinkTestClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
 	c.model, c.messages, c.tools, c.maxOutputTokens = model, messages, tools, llm.MaxOutputTokensFromContext(ctx)
 	reply := c.reply
-	return &reply, nil
+	return &reply, c.err
 }
 
 func (c *shrinkTestClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
@@ -95,6 +97,49 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 239}
 	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err != nil || got != "Shorter." {
 		t.Errorf("reply one token under the bound: shrinkFacetText() = %q, %v; want it kept", got, err)
+	}
+}
+
+// TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering pins the one
+// misconfiguration the outcome cannot show: a shrink model with thinking on
+// spends the output bound reasoning, so every shrink fails and the writer's
+// refusal stands exactly as when the text could not be shortened. Whether
+// the provider classifies the reply as reasoning-only or just reports an
+// empty answer at the bound, the refusal names the fix; a call that failed
+// for another reason, or a long answer cut off, does not.
+func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) {
+	t.Parallel()
+
+	reasoningOnly := llm.WithErrorClass(llm.ErrReasoningOnly, errors.New("openai_compat produced only reasoning"))
+	tests := []struct {
+		name      string
+		reply     llm.ChatResponse
+		err       error
+		wantFix   bool
+		wantClass error
+	}{
+		{name: "provider classified it reasoning-only", err: reasoningOnly, wantFix: true, wantClass: llm.ErrReasoningOnly},
+		{name: "empty answer stopped by length", reply: llm.ChatResponse{StopReason: "length"}, wantFix: true},
+		{name: "blank answer stopped by max_tokens", reply: llm.ChatResponse{Message: llm.Message{Content: " \n"}, StopReason: "max_tokens"}, wantFix: true},
+		{name: "empty answer spent the bound with no stop reason", reply: llm.ChatResponse{OutputTokens: 240}, wantFix: true},
+		{name: "long answer cut off", reply: llm.ChatResponse{Message: llm.Message{Content: "Short"}, StopReason: "length"}},
+		{name: "call failed", err: errors.New("connection refused")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client := &shrinkTestClient{reply: tt.reply, err: tt.err}
+			_, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120)
+			if err == nil {
+				t.Fatal("shrinkFacetText() error = nil, want a refusal")
+			}
+			if got := strings.Contains(err.Error(), thinkingOffFix); got != tt.wantFix {
+				t.Errorf("error = %q; names the thinking fix = %v, want %v", err, got, tt.wantFix)
+			}
+			if tt.wantClass != nil && !errors.Is(err, tt.wantClass) {
+				t.Errorf("error = %v, want it to keep its %v class", err, tt.wantClass)
+			}
+		})
 	}
 }
 
