@@ -57,8 +57,9 @@ type Shortened struct {
 //     errors about its own text.
 //  5. The operator keeps everything, at INFO: each Shrink reply not used,
 //     with its text and why, and one outcome per projection a shrink
-//     touched, with the text it was shortened to and, when the original
-//     refusal stands, the reason.
+//     touched, with the text it was shortened to: here, with the reason,
+//     when the original refusal stands, and otherwise from [Shrinker.Report]
+//     once the writer knows whether the store saved it.
 func (s *Shrinker) Fit(ctx context.Context, payload Payload, validate func(Payload) error) (Payload, []Shortened, error) {
 	refusal := validate(payload)
 	var overruns []*overBudget
@@ -81,10 +82,19 @@ func (s *Shrinker) Fit(ctx context.Context, payload Payload, validate func(Paylo
 		s.abandon(ctx, shortened, "the shortened payload failed validation: "+err.Error())
 		return payload, nil, refusal
 	}
+	return adjusted, shortened, nil
+}
+
+// Report logs the outcome of writing a payload Fit shortened: each entry
+// saved, or, when err refused the write, not saved and why.
+func (s *Shrinker) Report(ctx context.Context, shortened []Shortened, err error) {
 	for _, entry := range shortened {
+		if err != nil {
+			s.log(ctx, "shortened projection not saved", entry, entry.SavedText, err.Error())
+			continue
+		}
 		s.log(ctx, "projection shortened to fit its budget", entry, entry.SavedText, "")
 	}
-	return adjusted, shortened, nil
 }
 
 // smallOverruns appends each over-budget violation in err's tree to found and

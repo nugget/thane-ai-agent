@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
@@ -210,6 +211,7 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	}
 	t.prepareWriteReceipt(&writeArgs)
 	result, err := t.store.Write(ctx, writeArgs)
+	t.shrinker.Report(ctx, shortened, err)
 	if result != nil {
 		result.Action = args.WriteTool
 		// The store saved the body with its glyph artifacts folded, and
@@ -290,10 +292,12 @@ func validateFacetedDocumentBody(body string, frontmatter map[string][]string) e
 }
 
 // StoredPayload returns payload as [Store.Write] would save it under ref,
-// or why the store would refuse it: the body payload renders to, with its
-// glyph artifacts folded and its prose guarded as the store does, parsed
-// back with contract. A body that does not render back to itself, the rule
-// validateFacetedDocumentBody applies, is refused here too.
+// or why the store's handling of the body would refuse it: the body payload
+// renders to, with its glyph artifacts folded and its prose guarded as the
+// store does, parsed back with contract. A body that does not render back
+// to itself, the rule validateFacetedDocumentBody applies, is refused here
+// too, and so is a projection that leaves a code fence open, since the
+// guard would skip every projection after it.
 //
 // A faceted writer runs all of its validation on this stored form of a
 // shortened payload ([documentfacets.Shrinker.Fit]) rather than on the
@@ -303,7 +307,12 @@ func validateFacetedDocumentBody(body string, frontmatter map[string][]string) e
 // reports, or returns byte for byte the refusal the same write returns with
 // no shrinker. Never a third: a reply the store would fold into a reserved
 // heading, a rendered delta or the subject's name cannot become a refusal
-// about text the author never sent.
+// about text the author never sent, nor open a fence that carries the
+// author's own rendered delta past the guard. Only a refusal the store
+// makes for something other than the body, a stale read, a placement rule
+// or a root closed to authoring, can take the place of the over-budget
+// refusal, and the author reads it as it would once it fixed the overrun
+// itself.
 func StoredPayload(ref string, contract documentfacets.Contract, payload documentfacets.Payload) (documentfacets.Payload, error) {
 	body := normalizeGlyphArtifacts(contract.Render(payload))
 	if _, err := guardAuthoredProse(ref, body); err != nil {
@@ -312,6 +321,11 @@ func StoredPayload(ref string, contract documentfacets.Contract, payload documen
 	stored := contract.Parse(body)
 	if contract.Render(stored) != strings.TrimSpace(body) {
 		return documentfacets.Payload{}, fmt.Errorf("%s would not read back as the projections written once its glyph artifacts are folded", ref)
+	}
+	for _, field := range contract.Fields() {
+		if text, _ := stored.ByKey(field.Key); promptfmt.LeavesFenceOpen(text) {
+			return documentfacets.Payload{}, fmt.Errorf("%s would leave a code fence open in %s, hiding the projections after it from the prose guard", ref, field.Key)
+		}
 	}
 	return stored, nil
 }

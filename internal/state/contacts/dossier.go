@@ -195,6 +195,7 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		// dossier, so an inline refusal would hide the loss.
 		RejectionIsError: true,
 	})
+	t.dossierShrinker.Report(ctx, shortened, err)
 	if err != nil {
 		return result, err
 	}

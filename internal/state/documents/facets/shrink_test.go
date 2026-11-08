@@ -337,14 +337,16 @@ type logPrefix string
 // TestFitLogsEveryShrinkForTheOperator pins what the operator keeps, since
 // choosing a shrink model needs the replies it rejected as much as the ones
 // it saved: every reply not used, with its text when it had one and why, and
-// one outcome per projection a shrink touched. A landed write logs each
-// saved text; when the original refusal stands, each projection logs the
-// text it had been shortened to, if any, and the reason.
+// one outcome per projection a shrink touched. Report logs each saved text
+// once the write lands, or why the store did not save it; when the original
+// refusal stands, Fit logs each projection's shortened text, if any, and the
+// reason.
 func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 	t.Parallel()
 
 	const (
 		saved    = "projection shortened to fit its budget"
+		unsaved  = "shortened projection not saved"
 		rejected = "projection shrink reply rejected"
 		failed   = "projection shrink failed; the original refusal stands"
 	)
@@ -352,10 +354,11 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 	stillOver := strings.Repeat("r", statusLineMaxRunes+10)
 	overTeaser := strings.Repeat("t", teaserMaxRunes+40)
 	for _, tt := range []struct {
-		name    string
-		mutate  func(*Payload)
-		replies []shrinkReply
-		want    []map[string]any
+		name     string
+		mutate   func(*Payload)
+		replies  []shrinkReply
+		writeErr error
+		want     []map[string]any
 	}{
 		{
 			name:    "shortened",
@@ -363,6 +366,15 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			want: []map[string]any{{
 				"level": "INFO", "msg": saved, "facet": "status_line", "limit": 120.0, "original_runes": 142.0, "model": "fast-model",
 				"attempts": 1.0, "original_text": over, "new_runes": 6.0, "new_text": "Short.", "reason": nil,
+			}},
+		},
+		{
+			name:     "shortened, then refused by the store",
+			replies:  []shrinkReply{reply("Short.")},
+			writeErr: errors.New("read kb:status.md before replacing its whole body"),
+			want: []map[string]any{{
+				"level": "INFO", "msg": unsaved, "facet": "status_line", "original_text": over, "new_text": "Short.",
+				"reason": "read kb:status.md before replacing its whole body",
 			}},
 		},
 		{
@@ -415,7 +427,8 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			}
 			shrinker, _, logs := scriptedShrinker(tt.replies...)
 			validate, _ := writerValidate(nil)
-			_, _, _ = shrinker.Fit(context.Background(), sent, validate)
+			_, shortened, _ := shrinker.Fit(context.Background(), sent, validate)
+			shrinker.Report(context.Background(), shortened, tt.writeErr)
 			var records []map[string]any
 			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 				var record map[string]any

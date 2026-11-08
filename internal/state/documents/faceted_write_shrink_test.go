@@ -3,6 +3,7 @@ package documents
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -135,6 +136,91 @@ func TestDocWriteRefusalIsUnchangedWhenShrinkCannotHelp(t *testing.T) {
 			}
 			if _, statErr := os.Stat(filepath.Join(kbDir, "status.md")); !os.IsNotExist(statErr) {
 				t.Fatalf("refused write left a document (stat err %v)", statErr)
+			}
+		})
+	}
+}
+
+// TestDocWriteLogsWhetherTheShortenedTextWasSaved pins the operator's record
+// of a shortened write against what the store did with it: one record per
+// shortened projection, written once the store has answered, saying the text
+// was saved, or that it was not and the store's reason. A refusal that has
+// nothing to do with the text, a placement rule or a read the loop has not
+// made, reaches the author exactly as it does once the author fixes the
+// overrun itself.
+func TestDocWriteLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
+	t.Parallel()
+
+	const reply = "Printer online."
+	for _, tt := range []struct {
+		name       string
+		store      func(t *testing.T) *Store
+		args       PublishArgs
+		wantMsg    string
+		wantReason string
+	}{
+		{
+			name:    "saved",
+			store:   func(t *testing.T) *Store { store, _ := newMutationStore(t); return store },
+			args:    PublishArgs{Ref: "kb:status.md", Full: "Complete detail."},
+			wantMsg: "projection shortened to fit its budget",
+		},
+		{
+			name:       "a placement rule refuses the ref",
+			store:      func(t *testing.T) *Store { store, _ := newMutationStoreForRoot(t, "dossiers"); return store },
+			args:       PublishArgs{Ref: "dossiers:nested/person.md", Full: "Complete detail."},
+			wantMsg:    "shortened projection not saved",
+			wantReason: "dossiers accepts direct-child refs only",
+		},
+		{
+			name: "no read on record for the loop",
+			store: func(t *testing.T) *Store {
+				_, store, _ := newReceiptLifecycleTools(t)
+				if _, err := NewTools(store, nil).Publish(context.Background(), PublishArgs{Ref: "projects:status.md", StatusLine: "Seed.", Full: "Seed detail."}); err != nil {
+					t.Fatalf("seed: %v", err)
+				}
+				return store
+			},
+			args:       PublishArgs{Ref: "projects:status.md", Full: "New detail.", ReceiptScope: "loop:other"},
+			wantMsg:    "shortened projection not saved",
+			wantReason: "read projects:status.md before replacing its whole body",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixed := tt.args
+			fixed.StatusLine = reply
+			wantResult, wantErr := NewTools(tt.store(t), nil).Publish(ctx, fixed)
+
+			var logs strings.Builder
+			shrinker := &documentfacets.Shrinker{
+				Model:  "fast-model",
+				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+				Shrink: func(context.Context, string, int) (string, error) { return reply, nil },
+			}
+			args := tt.args
+			args.StatusLine = strings.Repeat("s", 142)
+			result, err := NewTools(tt.store(t), shrinker).Publish(ctx, args)
+			if tt.wantReason != "" && (result != wantResult || fmt.Sprint(err) != fmt.Sprint(wantErr)) {
+				t.Errorf("Publish() = %s, %v; want what the author gets once it fixes the overrun itself: %s, %v", result, err, wantResult, wantErr)
+			}
+
+			var records []map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("log line %q is not JSON: %v", line, err)
+				}
+				records = append(records, record)
+			}
+			if len(records) != 1 {
+				t.Fatalf("log = %s, want one record for status_line", logs.String())
+			}
+			got := records[0]
+			reason, _ := got["reason"].(string)
+			if got["msg"] != tt.wantMsg || got["facet"] != "status_line" || got["new_text"] != reply || !strings.Contains(reason, tt.wantReason) || (tt.wantReason == "") != (reason == "") {
+				t.Errorf("log record = %v, want %q for status_line with new_text %q and a reason naming %q", got, tt.wantMsg, reply, tt.wantReason)
 			}
 		})
 	}

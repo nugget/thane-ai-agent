@@ -3,6 +3,7 @@ package contacts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -154,6 +155,9 @@ func dossierHostileReplies() []dossierHostileReply {
 		{name: "lines starting with #", reply: "# Heading\nBody line.\n#tag"},
 		{name: "a thematic break line", reply: "Above.\n---\nBelow."},
 		{name: "a fenced block with a delta in it", reply: "Intro.\n```\nlast seen +5d\n```\nOutro."},
+		{name: "an unterminated fence", reply: "Intro.\n```\ncode", refusedIn: everyDossierTarget},
+		{name: "a line that opens a fence and says something", reply: "~~~ Steady collaborator.", refusedIn: everyDossierTarget},
+		{name: "an unterminated fence beside the author's delta in full", reply: "Summary.\n```", full: "Detail: last call -3d by phone.", refusedIn: everyDossierTarget},
 		{name: "a blank-line run", reply: "First.\n\n\n\nSecond."},
 		{name: "CRLF line endings", reply: "First.\r\nSecond.\r\nThird."},
 		{name: "trailing spaces and tabs", reply: "First.   \n\tSecond."},
@@ -367,5 +371,62 @@ func TestUnshortenedDossierMeetsTheStoreAsBefore(t *testing.T) {
 		if want := "validate " + DossierRef(uuid.MustParse(contactID)) + " write: "; err == nil || !strings.HasPrefix(err.Error(), want) {
 			t.Errorf("shrinker configured %v: WriteDossier() error = %v, want the contacts root's own refusal (%q...)", configured, err, want)
 		}
+	}
+}
+
+// TestWriteDossierLogsWhetherTheShortenedTextWasSaved pins the dossier
+// writer's record of a shortened dossier, wired as in production: one
+// record per shortened projection, written once the document write has
+// answered, saying the text was saved, or that it was not and why.
+func TestWriteDossierLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
+	const reply = "Steady collaborator."
+	refusal := errors.New("no change was made: this dossier changed after this loop last read it")
+	for _, tt := range []struct {
+		name       string
+		refused    error
+		wantMsg    string
+		wantReason string
+	}{
+		{name: "saved", wantMsg: "projection shortened to fit its budget"},
+		{name: "refused", refused: refusal, wantMsg: "shortened projection not saved", wantReason: refusal.Error()},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tools, contactID := newCitationTestTools(t)
+			store, _, _ := newDossierLifecycleStore(t, tools)
+			var logs strings.Builder
+			shrinker := &documentfacets.Shrinker{
+				Model:  "fast-model",
+				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+				Shrink: func(context.Context, string, int) (string, error) { return reply, nil },
+			}
+			docTools := documents.NewTools(store, shrinker)
+			write := docTools.WriteFaceted
+			if tt.refused != nil {
+				write = func(context.Context, documents.FacetedWriteArgs) (string, error) { return "", tt.refused }
+			}
+			tools.ConfigureDossierDocuments(docTools.Read, write, shrinker)
+			_, err := tools.WriteDossier(context.Background(), DossierWriteArgs{
+				ContactID: contactID, StatusLine: strings.Repeat("s", 142), Teaser: "Useful hook.",
+				Digest: "Enough context to act.", Full: "Complete detail.",
+			})
+			if !errors.Is(err, tt.refused) {
+				t.Fatalf("WriteDossier() error = %v, want %v", err, tt.refused)
+			}
+			var records []map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var record map[string]any
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatalf("log line %q is not JSON: %v", line, err)
+				}
+				records = append(records, record)
+			}
+			if len(records) != 1 {
+				t.Fatalf("log = %s, want one record for status_line", logs.String())
+			}
+			got := records[0]
+			if reason, _ := got["reason"].(string); got["msg"] != tt.wantMsg || got["facet"] != "status_line" || got["new_text"] != reply || reason != tt.wantReason {
+				t.Errorf("log record = %v, want %q for status_line with new_text %q and reason %q", got, tt.wantMsg, reply, tt.wantReason)
+			}
+		})
 	}
 }

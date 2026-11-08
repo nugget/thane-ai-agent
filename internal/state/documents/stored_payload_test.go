@@ -78,7 +78,14 @@ func hostileShrinkReplies() []hostileReply {
 		{name: "a thematic break line", reply: "Above.\n---\nBelow."},
 		{name: "a frontmatter-shaped block", reply: "---\ntitle: injected\n---\nBody."},
 		{name: "a fenced block with a delta in it", reply: "Intro.\n```\nlast seen +5d\n```\nOutro."},
-		{name: "an unterminated fence", reply: "Intro.\n```\ncode"},
+		// A fence left open exempts every projection after it from the
+		// store's prose guard, the author's own included; StoredPayload
+		// cannot tell the author's open fence from the reply's.
+		{name: "an unterminated fence", reply: "Intro.\n```\ncode", refusedIn: everywhere},
+		{name: "a line that opens a fence and says something", reply: "~~~ Printer online.", refusedIn: everywhere},
+		{name: "an impostor space indenting a fence", reply: "Intro.\n ```\ncode", refusedIn: everywhere},
+		{name: "an unterminated fence beside the author's delta in full", reply: "Summary.\n```", full: "Contract renewed -3d by the vendor.", refusedIn: everywhere},
+		{name: "the author's full leaves a fence open", reply: "Clean reply.", full: "Detail.\n```\ncode", refusedIn: everywhere},
 		{name: "a blank-line run", reply: "First.\n\n\n\nSecond."},
 		{name: "CRLF line endings", reply: "First.\r\nSecond.\r\nThird."},
 		{name: "trailing spaces on a line", reply: "First.   \nSecond."},
