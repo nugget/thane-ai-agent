@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -25,7 +26,7 @@ import (
 // exactly the refusal it gets with no shrinker and never reaches the model.
 func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 	const saved = "Steady collaborator; prefers direct technical threads."
-	sentStatus := strings.Repeat("s", 142)
+	sentStatus := strings.TrimSpace(strings.Repeat("word ", 22))
 	for _, tt := range []struct {
 		name      string
 		teaser    string
@@ -59,7 +60,7 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 			tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-				Shrink: func(context.Context, string, int) (string, error) {
+				Shrink: func(context.Context, string, documentfacets.Field) (string, error) {
 					calls++
 					return tt.reply, nil
 				},
@@ -87,8 +88,8 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 			if err := json.Unmarshal([]byte(result), &decoded); err != nil {
 				t.Fatalf("result is not JSON: %v\n%s", err, result)
 			}
-			if len(decoded.Shortened) != 1 || decoded.Shortened[0].SavedText != saved || decoded.Shortened[0].SentCharacters != 142 {
-				t.Fatalf("result = %s, want status_line reported shortened from 142 to the saved text", result)
+			if len(decoded.Shortened) != 1 || decoded.Shortened[0].SavedText != saved || decoded.Shortened[0].Limit != "20 words" || decoded.Shortened[0].Sent != "22 words" {
+				t.Fatalf("result = %s, want status_line reported shortened from 22 words to the saved text", result)
 			}
 			body, err := os.ReadFile(path)
 			if err != nil {
@@ -101,16 +102,17 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 	}
 }
 
-// dossierTargets are the budgeted dossier projections, each with its
-// limit, a sent value a quarter over it, and the clean reply it gets when
-// another projection carries the case's reply.
+// dossierTargets are the budgeted dossier projections, each with a sent
+// value a quarter over its budget (status_line's in words), the clean reply
+// it gets when another projection carries the case's reply, and the length
+// of a multi-byte reply that sits within its limits.
 var dossierTargets = []struct {
 	key, sent, clean string
-	limit            int
+	replyRunes       int
 }{
-	{key: "status_line", limit: 120, sent: strings.Repeat("s", 150), clean: "Clean status."},
-	{key: "teaser", limit: 500, sent: strings.Repeat("t", 625), clean: "Clean teaser."},
-	{key: "digest", limit: 2048, sent: strings.Repeat("d", 2560), clean: "Clean digest."},
+	{key: "status_line", sent: strings.TrimSpace(strings.Repeat("s ", 25)), clean: "Clean status.", replyRunes: 96},
+	{key: "teaser", sent: strings.Repeat("t", 625), clean: "Clean teaser.", replyRunes: 400},
+	{key: "digest", sent: strings.Repeat("d", 2560), clean: "Clean digest.", replyRunes: 1638},
 }
 
 // dossierHostileReply is one shrink-model reply, the projections that
@@ -237,18 +239,18 @@ func TestShortenedDossierLandsAsStoredOrNotAtAll(t *testing.T) {
 					tools, contactID := newCitationTestTools(t)
 					store, _, dir := newDossierLifecycleStore(t, tools)
 					sent := documentfacets.Payload{StatusLine: "Current state.", Teaser: "Open for the hook.", Digest: "Enough to act on.", Full: "Complete detail."}
-					replies := map[int]string{}
+					replies := map[string]string{}
 					for _, over := range dossierTargets {
 						if over.key != target.key && !together {
 							continue
 						}
 						setDossierProjection(&sent, over.key, over.sent)
-						replies[over.limit] = over.clean
+						replies[over.key] = over.clean
 					}
-					replies[target.limit] = withContactID(row.reply, contactID)
+					replies[target.key] = withContactID(row.reply, contactID)
 					switch {
 					case row.nearCeiling:
-						replies[target.limit] = strings.Repeat("語", target.limit*4/5)
+						replies[target.key] = strings.Repeat("語", target.replyRunes)
 						sent.Full = dossierFillToCeiling(sent)
 					case row.full != "":
 						sent.Full = withContactID(row.full, contactID)
@@ -281,10 +283,10 @@ func dossierFillToCeiling(payload documentfacets.Payload) string {
 }
 
 // assertDossierShrinkOutcome writes sent as contactID's dossier with no
-// shrinker, then with one answering replies by limit, and checks the
+// shrinker, then with one answering replies by projection, and checks the
 // second write's outcome is one of the two documents.StoredPayload allows
 // and the one wantLands names.
-func assertDossierShrinkOutcome(t *testing.T, tools *Tools, store *documents.Store, path, contactID string, sent documentfacets.Payload, replies map[int]string, wantLands bool) {
+func assertDossierShrinkOutcome(t *testing.T, tools *Tools, store *documents.Store, path, contactID string, sent documentfacets.Payload, replies map[string]string, wantLands bool) {
 	t.Helper()
 	ctx := context.Background()
 	args := DossierWriteArgs{ContactID: contactID, StatusLine: sent.StatusLine, Teaser: sent.Teaser, Digest: sent.Digest, Full: sent.Full}
@@ -295,7 +297,9 @@ func assertDossierShrinkOutcome(t *testing.T, tools *Tools, store *documents.Sto
 	shrinker := &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(_ context.Context, _ string, limit int) (string, error) { return replies[limit], nil },
+		Shrink: func(_ context.Context, _ string, field documentfacets.Field) (string, error) {
+			return replies[field.Key], nil
+		},
 	}
 	docTools := documents.NewTools(store, shrinker)
 	tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, shrinker)
@@ -331,15 +335,15 @@ func assertDossierShrinkOutcome(t *testing.T, tools *Tools, store *documents.Sto
 	shortened := map[string]bool{}
 	for _, entry := range decoded.Shortened {
 		shortened[entry.Projection] = true
-		if got, _ := stored.ByKey(entry.Projection); got != entry.SavedText || entry.SavedCharacters != utf8.RuneCountInString(got) {
-			t.Errorf("stored %s = %q, but the result reports saved_text %q (%d characters)", entry.Projection, got, entry.SavedText, entry.SavedCharacters)
+		if got, _ := stored.ByKey(entry.Projection); got != entry.SavedText || entry.Saved != lengthIn(entry.Limit, got) {
+			t.Errorf("stored %s = %q, but the result reports saved_text %q (%s)", entry.Projection, got, entry.SavedText, entry.Saved)
 		}
 	}
 	folded := strings.NewReplacer("\u00a0", " ", "\u202f", " ", "\u2010", "-", "\u2011", "-")
 	for _, field := range dossierOutputContract.Fields() {
 		sentValue, _ := sent.ByKey(field.Key)
 		storedValue, _ := stored.ByKey(field.Key)
-		switch over := field.MaxRunes > 0 && utf8.RuneCountInString(sentValue) > field.MaxRunes; {
+		switch over := overBudget(field, sentValue); {
 		case over != shortened[field.Key]:
 			t.Errorf("%s over its budget = %v, reported shortened = %v", field.Key, over, shortened[field.Key])
 		case !over && storedValue != folded.Replace(strings.TrimSpace(sentValue)):
@@ -360,7 +364,7 @@ func TestUnshortenedDossierMeetsTheStoreAsBefore(t *testing.T) {
 		tools, contactID := newCitationTestTools(t)
 		store, _, _ := newDossierLifecycleStore(t, tools)
 		if configured {
-			shrinker := &documentfacets.Shrinker{Model: "fast-model", Shrink: func(context.Context, string, int) (string, error) { return "", nil }}
+			shrinker := &documentfacets.Shrinker{Model: "fast-model", Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return "", nil }}
 			docTools := documents.NewTools(store, shrinker)
 			tools.ConfigureDossierDocuments(docTools.Read, docTools.WriteFaceted, shrinker)
 		}
@@ -397,7 +401,7 @@ func TestWriteDossierLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			shrinker := &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-				Shrink: func(context.Context, string, int) (string, error) { return reply, nil },
+				Shrink: func(context.Context, string, documentfacets.Field) (string, error) { return reply, nil },
 			}
 			docTools := documents.NewTools(store, shrinker)
 			write := docTools.WriteFaceted
@@ -406,7 +410,7 @@ func TestWriteDossierLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			}
 			tools.ConfigureDossierDocuments(docTools.Read, write, shrinker)
 			_, err := tools.WriteDossier(context.Background(), DossierWriteArgs{
-				ContactID: contactID, StatusLine: strings.Repeat("s", 142), Teaser: "Useful hook.",
+				ContactID: contactID, StatusLine: strings.TrimSpace(strings.Repeat("word ", 22)), Teaser: "Useful hook.",
 				Digest: "Enough context to act.", Full: "Complete detail.",
 			})
 			if !errors.Is(err, tt.refused) {
@@ -429,4 +433,23 @@ func TestWriteDossierLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lengthIn renders text's length in the unit limit names ("20 words",
+// "500 characters"), as a shortened projection reports it.
+func lengthIn(limit, text string) string {
+	n, unit := utf8.RuneCountInString(text), "character"
+	if strings.HasSuffix(limit, " words") {
+		n, unit = documentfacets.WordCount(text), "word"
+	}
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// overBudget reports whether value is over any of field's limits.
+func overBudget(field documentfacets.Field, value string) bool {
+	return (field.MaxWords > 0 && documentfacets.WordCount(value) > field.MaxWords) ||
+		(field.MaxRunes > 0 && utf8.RuneCountInString(value) > field.MaxRunes)
 }

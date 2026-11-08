@@ -17,15 +17,16 @@ import (
 )
 
 // shrinkTargets are the budgeted projections a shrink can touch, each with
-// its limit, a sent value a quarter over it, and the clean reply it gets
-// when another projection carries the case's reply.
+// a sent value a quarter over its budget (status_line's in words), the
+// clean reply it gets when another projection carries the case's reply, and
+// the length of a multi-byte reply that sits within its limits.
 var shrinkTargets = []struct {
 	key, sent, clean string
-	limit            int
+	replyRunes       int
 }{
-	{key: "status_line", limit: 120, sent: strings.Repeat("s", 150), clean: "Clean status."},
-	{key: "teaser", limit: 500, sent: strings.Repeat("t", 625), clean: "Clean teaser."},
-	{key: "digest", limit: 2048, sent: strings.Repeat("d", 2560), clean: "Clean digest."},
+	{key: "status_line", sent: strings.TrimSpace(strings.Repeat("s ", 25)), clean: "Clean status.", replyRunes: 96},
+	{key: "teaser", sent: strings.Repeat("t", 625), clean: "Clean teaser.", replyRunes: 400},
+	{key: "digest", sent: strings.Repeat("d", 2560), clean: "Clean digest.", replyRunes: 1638},
 }
 
 // glyphImpostors are the characters the store folds before it saves.
@@ -132,8 +133,27 @@ func (row hostileReply) lands(target string) bool {
 	return !slices.Contains(row.refusedIn, target)
 }
 
-// multiByteReply returns a reply of limit characters, each three bytes.
-func multiByteReply(limit int) string { return strings.Repeat("語", limit) }
+// lengthIn renders text's length in the unit limit names ("20 words",
+// "500 characters"), as a shortened projection reports it.
+func lengthIn(limit, text string) string {
+	n, unit := utf8.RuneCountInString(text), "character"
+	if strings.HasSuffix(limit, " words") {
+		n, unit = documentfacets.WordCount(text), "word"
+	}
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// overBudget reports whether value is over any of field's limits.
+func overBudget(field documentfacets.Field, value string) bool {
+	return (field.MaxWords > 0 && documentfacets.WordCount(value) > field.MaxWords) ||
+		(field.MaxRunes > 0 && utf8.RuneCountInString(value) > field.MaxRunes)
+}
+
+// multiByteReply returns a reply of n characters, each three bytes.
+func multiByteReply(n int) string { return strings.Repeat("語", n) }
 
 // fillToCeiling returns a full dense with non-breaking spaces that puts
 // payload's rendered body 100 bytes under the ceiling.
@@ -144,13 +164,15 @@ func fillToCeiling(contract documentfacets.Contract, payload documentfacets.Payl
 	return strings.Repeat("x\u00a0", units) + strings.Repeat("x", size-3*units)
 }
 
-// limitShrinker answers each Shrink call by the limit it names, the one
-// thing that tells the projections apart.
-func limitShrinker(replies map[int]string) *documentfacets.Shrinker {
+// keyShrinker answers each Shrink call with the reply for the projection
+// it names.
+func keyShrinker(replies map[string]string) *documentfacets.Shrinker {
 	return &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(_ context.Context, _ string, limit int) (string, error) { return replies[limit], nil },
+		Shrink: func(_ context.Context, _ string, field documentfacets.Field) (string, error) {
+			return replies[field.Key], nil
+		},
 	}
 }
 
@@ -176,23 +198,23 @@ func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()
 					sent := documentfacets.Payload{StatusLine: "Current state.", Teaser: "Open for the hook.", Digest: "Enough to act on.", Full: "Complete detail."}
-					replies := map[int]string{}
+					replies := map[string]string{}
 					for _, over := range shrinkTargets {
 						if over.key != target.key && !together {
 							continue
 						}
 						setProjection(&sent, over.key, over.sent)
-						replies[over.limit] = over.clean
+						replies[over.key] = over.clean
 					}
-					replies[target.limit] = row.reply
+					replies[target.key] = row.reply
 					switch {
 					case row.nearCeiling:
-						replies[target.limit] = multiByteReply(target.limit * 4 / 5)
+						replies[target.key] = multiByteReply(target.replyRunes)
 						sent.Full = fillToCeiling(contract, sent)
 					case row.full != "":
 						sent.Full = row.full
 					}
-					assertShrinkOutcome(t, contract, sent, limitShrinker(replies), row.lands(target.key))
+					assertShrinkOutcome(t, contract, sent, keyShrinker(replies), row.lands(target.key))
 				})
 			}
 		}
@@ -204,8 +226,8 @@ func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 	t.Run("a JSON projection spaced with U+00A0", func(t *testing.T) {
 		t.Parallel()
 		jsonContract := documentfacets.Contract{Facets: []documentfacets.Spec{{Name: documentfacets.StatusLine, Format: documentfacets.FormatJSON}}}
-		sent := documentfacets.Payload{StatusLine: `{"state":"` + strings.Repeat("s", 130) + `"}`, Full: "Complete detail."}
-		assertShrinkOutcome(t, jsonContract, sent, limitShrinker(map[int]string{120: "{\"state\":\u00a0\"ok\"}"}), true)
+		sent := documentfacets.Payload{StatusLine: `{"state": "` + strings.TrimSpace(strings.Repeat("s ", 24)) + `"}`, Full: "Complete detail."}
+		assertShrinkOutcome(t, jsonContract, sent, keyShrinker(map[string]string{"status_line": "{\"state\":\u00a0\"ok\"}"}), true)
 	})
 }
 
@@ -263,14 +285,14 @@ func assertShrinkOutcome(t *testing.T, contract documentfacets.Contract, sent do
 	shortened := map[string]bool{}
 	for _, entry := range decoded.Shortened {
 		shortened[entry.Projection] = true
-		if got, _ := stored.ByKey(entry.Projection); got != entry.SavedText || entry.SavedCharacters != utf8.RuneCountInString(got) {
-			t.Errorf("stored %s = %q, but the result reports saved_text %q (%d characters)", entry.Projection, got, entry.SavedText, entry.SavedCharacters)
+		if got, _ := stored.ByKey(entry.Projection); got != entry.SavedText || entry.Saved != lengthIn(entry.Limit, got) {
+			t.Errorf("stored %s = %q, but the result reports saved_text %q (%s)", entry.Projection, got, entry.SavedText, entry.Saved)
 		}
 	}
 	for _, field := range contract.Fields() {
 		sentValue, _ := sent.ByKey(field.Key)
 		storedValue, _ := stored.ByKey(field.Key)
-		switch over := field.MaxRunes > 0 && utf8.RuneCountInString(sentValue) > field.MaxRunes; {
+		switch over := overBudget(field, sentValue); {
 		case over != shortened[field.Key]:
 			t.Errorf("%s over its budget = %v, reported shortened = %v", field.Key, over, shortened[field.Key])
 		case !over && storedValue != normalizeGlyphArtifacts(strings.TrimSpace(sentValue)):
@@ -289,7 +311,7 @@ func assertShrinkOutcome(t *testing.T, contract documentfacets.Contract, sent do
 func TestUnshortenedDocWriteMeetsTheStoreAsBefore(t *testing.T) {
 	t.Parallel()
 
-	for _, shrinker := range []*documentfacets.Shrinker{nil, limitShrinker(nil)} {
+	for _, shrinker := range []*documentfacets.Shrinker{nil, keyShrinker(nil)} {
 		store, _ := newMutationStore(t)
 		_, err := NewTools(store, shrinker).WriteFaceted(context.Background(), FacetedWriteArgs{
 			Ref: "kb:status.md", Contract: documentfacets.DefaultContract(), WriteTool: DocumentWriteToolName,

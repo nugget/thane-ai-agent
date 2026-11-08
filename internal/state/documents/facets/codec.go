@@ -104,8 +104,8 @@ func (c Contract) RenderScaffold() string {
 	for _, field := range c.Fields() {
 		item, _ := sectionByKey(field.Key)
 		placeholder := fmt.Sprintf("_(awaiting first cycle - %s)_", item.scaffoldHint)
-		if field.MaxRunes > 0 {
-			placeholder = fmt.Sprintf("_(awaiting first cycle - %s, <=%d characters)_", item.scaffoldHint, field.MaxRunes)
+		if budget := field.Budget(); budget != "" {
+			placeholder = fmt.Sprintf("_(awaiting first cycle - %s, <=%s)_", item.scaffoldHint, budget)
 		}
 		if field.Format == FormatJSON {
 			placeholder = `{"awaiting_first_cycle": true}`

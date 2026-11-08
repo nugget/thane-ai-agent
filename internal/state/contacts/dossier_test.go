@@ -397,7 +397,7 @@ func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testin
 	id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
 	candidate := validDossierCandidate(id)
 	candidate.Body = dossierOutputContract.Render(documentfacets.Payload{
-		StatusLine: strings.Repeat("s", 121),
+		StatusLine: strings.TrimSpace(strings.Repeat("word ", 21)),
 		Teaser:     "Useful hook.",
 		Digest:     "Enough context to act.",
 		Full:       "Complete detail. — evidence: archive:session:019c52f0",
@@ -410,7 +410,7 @@ func TestValidateDossierWriteReportsFacetAndEvidenceViolationsTogether(t *testin
 	for _, want := range []string{
 		"correct every listed field",
 		"facet contract",
-		"status_line is 121 characters",
+		"status_line is 21 words and the limit is 20 (1 over)",
 		"evidence contract",
 		"archive:session:019c52f0 in field full",
 	} {
@@ -505,7 +505,7 @@ func TestWriteDossierReportsAllProjectionViolationsBeforeWriting(t *testing.T) {
 
 	_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 		ContactID:  contact.ID.String(),
-		StatusLine: strings.Repeat("s", 121),
+		StatusLine: strings.TrimSpace(strings.Repeat("word ", 21)),
 		Teaser:     "Useful hook.",
 		Digest:     strings.Repeat("d", 2049),
 		Full:       "Complete detail. — evidence: archive:session:019c52f0",
@@ -515,7 +515,7 @@ func TestWriteDossierReportsAllProjectionViolationsBeforeWriting(t *testing.T) {
 	}
 	for _, want := range []string{
 		"correct every listed field",
-		"status_line is 121 characters",
+		"status_line is 21 words and the limit is 20 (1 over)",
 		"digest is 2049 characters",
 		"archive:session:019c52f0 in field full",
 		"carries only the first 8 of a session id's 32 hex digits",

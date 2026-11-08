@@ -72,8 +72,13 @@ func TestFacetedOutputGeneratesPublishToolWithTypedProjections(t *testing.T) {
 	if strings.Join(required, ",") != "status_line,teaser,full" {
 		t.Fatalf("required = %v, want the declared projections and full but not note", required)
 	}
-	if !strings.Contains(props["status_line"].(map[string]any)["description"].(string), "120 characters") {
-		t.Fatalf("status_line description should state its budget: %v", props["status_line"])
+	for key, budget := range map[string]string{
+		"status_line": "Maximum 20 words — a ceiling, not a target",
+		"teaser":      "Maximum 500 characters — a ceiling, not a target",
+	} {
+		if !strings.Contains(props[key].(map[string]any)["description"].(string), budget) {
+			t.Fatalf("%s description should state its budget %q: %v", key, budget, props[key])
+		}
 	}
 }
 
@@ -164,14 +169,14 @@ func TestPublishToolRejectsOverBudgetWithoutWriting(t *testing.T) {
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
 	_, err = publish.Handler(context.Background(), map[string]any{
-		"status_line": strings.Repeat("x", 200),
+		"status_line": strings.TrimSpace(strings.Repeat("word ", 33)),
 		"teaser":      "Fine.",
 		"full":        "Fine.",
 	})
 	if err == nil {
 		t.Fatal("publish handler error = nil for an over-budget status line")
 	}
-	if !strings.Contains(err.Error(), "the limit is 120") {
+	if !strings.Contains(err.Error(), "the limit is 20 (") {
 		t.Fatalf("error should teach the budget: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(coreDir, "office.md")); !os.IsNotExist(statErr) {

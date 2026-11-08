@@ -48,7 +48,7 @@ func TestWriteDossierAsksForRefusalsAsErrors(t *testing.T) {
 // and pins that each reports a write that did not land, asks for every
 // field in the next call, and sets no retry count.
 func TestDossierRejectionSaysNothingWasWritten(t *testing.T) {
-	overBudget := strings.Repeat("s", 121)
+	overLimit := strings.TrimSpace(strings.Repeat("word ", 21))
 	tests := []struct {
 		name   string
 		reject func(t *testing.T) error
@@ -69,7 +69,7 @@ func TestDossierRejectionSaysNothingWasWritten(t *testing.T) {
 				tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 				_, err = tools.WriteDossier(context.Background(), DossierWriteArgs{
 					ContactID:  contact.ID.String(),
-					StatusLine: overBudget,
+					StatusLine: overLimit,
 					Teaser:     "Useful hook.",
 					Digest:     "Enough context to act.",
 					Full:       "Complete detail.",
@@ -86,7 +86,7 @@ func TestDossierRejectionSaysNothingWasWritten(t *testing.T) {
 				id := uuid.MustParse("019c76e4-2ff1-7918-8d6f-6c2488f5098d")
 				candidate := validDossierCandidate(id)
 				candidate.Body = dossierOutputContract.Render(documentfacets.Payload{
-					StatusLine: overBudget,
+					StatusLine: overLimit,
 					Teaser:     "Useful hook.",
 					Digest:     "Enough context to act.",
 					Full:       "Complete detail.",
@@ -104,7 +104,7 @@ func TestDossierRejectionSaysNothingWasWritten(t *testing.T) {
 			for _, want := range []string{
 				"projections are invalid and nothing was written",
 				"correct every listed field in your next call",
-				"status_line is 121 characters and the limit is 120 (1 over)",
+				"status_line is 21 words and the limit is 20 (1 over)",
 			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error = %q, want it to contain %q", err, want)

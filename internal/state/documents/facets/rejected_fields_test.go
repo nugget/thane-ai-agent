@@ -27,8 +27,18 @@ func TestValidateMarksTheRejectedProjection(t *testing.T) {
 		want      []string
 	}{
 		{
-			name:   "over budget",
+			name:   "over its word budget",
+			mutate: func(p *Payload) { p.StatusLine = strings.TrimSpace(strings.Repeat("s ", statusLineMaxWords+11)) },
+			want:   []string{"status_line"},
+		},
+		{
+			name:   "over its character backstop",
 			mutate: func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+31) },
+			want:   []string{"status_line"},
+		},
+		{
+			name:   "over both of its limits, marked once",
+			mutate: func(p *Payload) { p.StatusLine = strings.TrimSpace(strings.Repeat("ninechars ", statusLineMaxWords+2)) },
 			want:   []string{"status_line"},
 		},
 		{

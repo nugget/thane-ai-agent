@@ -382,9 +382,10 @@ func TestUnchangedArgumentsNote(t *testing.T) {
 func TestToolOutcomeLastErrorKeepsEveryViolation(t *testing.T) {
 	const tool = "publish_output_trip"
 	const frame = "faceted document projections are invalid and nothing was written; correct every listed field in your next call — a listed field resent unchanged is refused the same way: "
-	const lever = "; rewording alone rarely closes a gap this large — remove whole items totalling at least 60 characters: anything resolved, superseded, or already said elsewhere leaves this field entirely"
-	twoFields := frame + "status_line is 190 characters and the limit is 120 (70 over)" + lever + "\n" +
-		"teaser is 560 characters and the limit is 500 (60 over)" + lever
+	const lever = "; rewording alone rarely closes a gap this large — remove whole items totalling at least "
+	const items = ": anything resolved, superseded, or already said elsewhere leaves this field entirely"
+	twoFields := frame + "status_line is 33 words and the limit is 20 (13 over)" + lever + "13 words" + items + "\n" +
+		"teaser is 560 characters and the limit is 500 (60 over)" + lever + "60 characters" + items
 	cases := []struct {
 		name string
 		err  string

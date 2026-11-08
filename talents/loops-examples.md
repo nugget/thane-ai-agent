@@ -201,12 +201,13 @@ the section headings; they are rendered for you.
 }
 ```
 
-Each projection has a rune budget — 120 for `status_line`, 500 for
-`teaser`, 2048 for `digest` — and an over-budget value is rejected
-rather than trimmed, because a clipped projection reads as a fragment
-with no sign that anything is missing. The budget is a ceiling, not
-a target — compose comfortably under it; you cannot count runes
-precisely enough to graze a ceiling safely. A rejection names each
+Each projection has a budget — 20 words for `status_line`, 500
+characters for `teaser`, 2048 for `digest` — and an over-budget value
+is rejected rather than trimmed, because a clipped projection reads as
+a fragment with no sign that anything is missing. The budget is a
+ceiling, not a target — compose comfortably under it; you cannot count
+characters precisely enough to graze a ceiling safely, and a status
+line that needs all twenty words is carrying too much. A rejection names each
 failing field's overage and the fix sized to it: reword a small gap,
 remove whole items from a large one.
 

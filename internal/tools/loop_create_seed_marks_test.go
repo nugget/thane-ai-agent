@@ -22,8 +22,8 @@ func TestGuidedCreateSeedRefusalMarksNoArgument(t *testing.T) {
 	}{
 		{
 			name:    "over budget status line",
-			initial: map[string]any{"status_line": strings.Repeat("x", 121), "digest": "Fine.", "full": "Fine."},
-			wantErr: "limit is 120",
+			initial: map[string]any{"status_line": strings.TrimSpace(strings.Repeat("word ", 21)), "digest": "Fine.", "full": "Fine."},
+			wantErr: "status_line is 21 words and the limit is 20",
 		},
 		{
 			name:    "projection that is not a string",
@@ -66,12 +66,12 @@ func TestGuidedCreateMigrationRefusalMarksNoArgument(t *testing.T) {
 
 	args := curateArgs(map[string]any{
 		"facets":    []any{"status_line"},
-		"migration": map[string]any{"status_line": strings.Repeat("x", 121)},
+		"migration": map[string]any{"status_line": strings.TrimSpace(strings.Repeat("word ", 21))},
 	})
 	args["replace"] = true
 	_, err := rig.tool.Handler(ctx, args)
-	if err == nil || !strings.Contains(err.Error(), "output.migration") || !strings.Contains(err.Error(), "limit is 120") {
-		t.Fatalf("error = %v, want an output.migration refusal naming the 120-character limit", err)
+	if err == nil || !strings.Contains(err.Error(), "output.migration") || !strings.Contains(err.Error(), "status_line is 21 words and the limit is 20") {
+		t.Fatalf("error = %v, want an output.migration refusal naming the 20-word limit", err)
 	}
 	if got := toolargs.RejectedArguments(err); got != nil {
 		t.Errorf("RejectedArguments() = %#v, want nil: the projections are nested under output.migration", got)

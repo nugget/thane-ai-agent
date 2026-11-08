@@ -32,8 +32,9 @@ type parsedDocument struct {
 	Facets   []string
 	// FacetBytes is the UTF-8 byte length of each present projection's
 	// content, keyed by facet key, with "full" always present. Byte
-	// length, not rune count, deliberately: facet budgets elsewhere in
-	// the contract are runes (display budgets), but these entries exist
+	// length, not rune or word count, deliberately: facet budgets
+	// elsewhere in the contract count runes or words (display budgets),
+	// but these entries exist
 	// so a context advertiser can estimate what materializing a level
 	// costs against a byte-denominated context budget without any file
 	// I/O — and a rune count under-estimates multi-byte UTF-8 content,

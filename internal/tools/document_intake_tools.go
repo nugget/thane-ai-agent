@@ -235,9 +235,7 @@ func projectionProperty(name documentfacets.Name, optional bool) map[string]any 
 	}
 	field, _ := documentfacets.FieldByKey(key)
 	description := field.Guidance + documentfacets.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
-	if field.MaxRunes > 0 {
-		description = fmt.Sprintf("%s Maximum %d characters.", description, field.MaxRunes)
-	}
+	description += field.BudgetClause()
 	if optional {
 		description += " Optional on first creation."
 	}

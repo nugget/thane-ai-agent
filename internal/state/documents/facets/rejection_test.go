@@ -7,10 +7,11 @@ import (
 )
 
 // TestValidateSizesTheLeverToTheOverage pins the two repairs an
-// over-budget projection can be offered. A gap within a tenth of the limit,
-// or within 30 characters on a short one, closes by rewording; a larger one
-// rarely does, and saying "tighten it" there is what sent a publish loop
-// round the same rejection until the loop guard stopped it.
+// over-budget projection can be offered, in the unit of the limit it broke.
+// A gap within a tenth of the limit, or within 30 characters or five words
+// on a short one, closes by rewording; a larger one rarely does, and saying
+// "tighten it" there is what sent a publish loop round the same rejection
+// until the loop guard stopped it.
 func TestValidateSizesTheLeverToTheOverage(t *testing.T) {
 	t.Parallel()
 
@@ -26,29 +27,46 @@ func TestValidateSizesTheLeverToTheOverage(t *testing.T) {
 		wantAbsent []string
 	}{
 		{
-			name:       "one character over is rewordable",
-			mutate:     func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+1) },
-			want:       []string{"status_line is 121 characters", "the limit is 120", "(1 over)", rewordLever + " 1 character —"},
-			wantAbsent: []string{removeLever},
+			name:       "one word over is rewordable",
+			mutate:     func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+1, "s") },
+			want:       []string{"status_line is 21 words", "the limit is 20", "(1 over)", rewordLever + " 1 word —"},
+			wantAbsent: []string{removeLever, "characters"},
 		},
 		{
-			// A tenth of status_line's limit is 12; the 30-character floor
+			// A tenth of status_line's word limit is 2; the five-word floor
 			// keeps a one-line projection rewordable past that.
-			name:       "thirty over a single-line limit is still rewordable",
-			mutate:     func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+30) },
-			want:       []string{"status_line is 150 characters", "(30 over)", rewordLever + " 30 characters"},
+			name:       "five words over a status line is still rewordable",
+			mutate:     func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+5, "s") },
+			want:       []string{"status_line is 25 words", "(5 over)", rewordLever + " 5 words"},
 			wantAbsent: []string{removeLever},
 		},
 		{
-			name:   "just past the floor needs whole items removed",
-			mutate: func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+31) },
+			name:   "just past the word floor needs whole items removed",
+			mutate: func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+6, "s") },
 			want: []string{
-				"status_line is 151 characters", "the limit is 120", "(31 over)",
+				"status_line is 26 words", "the limit is 20", "(6 over)",
 				"rewording alone rarely closes a gap this large",
-				removeLever + " totalling at least 31 characters",
+				removeLever + " totalling at least 6 words",
 				"resolved, superseded, or already said elsewhere leaves this field entirely",
 			},
 			wantAbsent: []string{rewordLever},
+		},
+		{
+			// Within its words, a status line can still run past the
+			// character backstop on long tokens; that refusal counts
+			// characters, the unit it enforced.
+			name:       "one character past the status line backstop",
+			mutate:     func(p *Payload) { p.StatusLine = strings.Repeat("s", statusLineMaxRunes+1) },
+			want:       []string{"status_line is 181 characters", "the limit is 180", "(1 over)", rewordLever + " 1 character —"},
+			wantAbsent: []string{removeLever, "words"},
+		},
+		{
+			// Cutting words is the repair a writer can count, and naming
+			// the backstop beside it would hand back a character target.
+			name:       "over both status line limits names only its words",
+			mutate:     func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+2, "ninechars") },
+			want:       []string{"status_line is 22 words and the limit is 20 (2 over)"},
+			wantAbsent: []string{"characters", "180"},
 		},
 		{
 			name:       "teaser at its tier edge rewords",

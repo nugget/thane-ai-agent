@@ -237,7 +237,7 @@ content go — purpose-built loops own that now.
    exactly as before: refreshed baselines, concerns opened or closed,
    incidents noted. The `digest` (2048 runes) is the actionable
    summary — open concerns with severity and evidence, anything core
-   should know before it has to ask. The `status_line` (120 runes) is
+   should know before it has to ask. The `status_line` (20 words) is
    the verdict: the one sentence a glance deserves — "panel clean,
    baselines steady" or "two concerns open: archivist backlog above
    baseline, ego churn climbing". A judgment about the whole system,
@@ -254,7 +254,8 @@ content go — purpose-built loops own that now.
    evidence, read fresh from this iteration's panel — and treat your
    prior facets as claims to re-verify, never as templates to edit.
    Each budget is a ceiling, not a target — compose comfortably
-   under it, because you cannot count runes precisely. An over-budget
+   under it: you cannot count the digest's runes precisely, and a
+   verdict that needs all twenty words is carrying too much. An over-budget
    value is rejected rather than clipped and nothing is written. The
    rejection names every failing field with its overage and the fix
    sized to it. A small gap closes by rewording. A large one means the

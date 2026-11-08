@@ -9,14 +9,20 @@ import (
 )
 
 var (
-	statusLineMaxRunes = facetTestBudget(string(OutputFacetStatusLine))
-	teaserMaxRunes     = facetTestBudget(string(OutputFacetTeaser))
-	digestMaxRunes     = facetTestBudget(string(OutputFacetDigest))
+	statusLineMaxWords = facetTestField(OutputFacetStatusLine).MaxWords
+	statusLineMaxRunes = facetTestField(OutputFacetStatusLine).MaxRunes
+	teaserMaxRunes     = facetTestField(OutputFacetTeaser).MaxRunes
+	digestMaxRunes     = facetTestField(OutputFacetDigest).MaxRunes
 )
 
-func facetTestBudget(key string) int {
-	field, _ := FacetFieldByKey(key)
-	return field.MaxRunes
+func facetTestField(facet OutputFacet) FacetField {
+	field, _ := FacetFieldByKey(string(facet))
+	return field
+}
+
+// facetTestWords returns a single line of n words.
+func facetTestWords(n int) string {
+	return strings.TrimSpace(strings.Repeat("word ", n))
 }
 
 func facetedOutput(names ...OutputFacet) OutputSpec {
@@ -141,8 +147,14 @@ func TestValidateFacetPayload(t *testing.T) {
 		{
 			name:    "over budget status line rejected",
 			output:  full,
+			payload: FacetPayload{StatusLine: facetTestWords(statusLineMaxWords + 1), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
+			wantErr: "status_line is 21 words and the limit is 20",
+		},
+		{
+			name:    "status line character backstop rejected",
+			output:  full,
 			payload: FacetPayload{StatusLine: strings.Repeat("a", statusLineMaxRunes+1), Teaser: good.Teaser, Digest: good.Digest, Full: good.Full},
-			wantErr: "the limit is 120",
+			wantErr: "status_line is 181 characters and the limit is 180",
 		},
 		{
 			name:    "budget counts runes not bytes",
@@ -202,7 +214,7 @@ func TestValidateFacetPayloadRejectsUnfacetedOutput(t *testing.T) {
 func TestValidateFacetPayloadReportsEveryFieldViolation(t *testing.T) {
 	output := facetedOutput(OutputFacetStatusLine, OutputFacetTeaser, OutputFacetDigest)
 	err := output.ValidateFacetPayload(FacetPayload{
-		StatusLine: strings.Repeat("s", statusLineMaxRunes+1),
+		StatusLine: facetTestWords(statusLineMaxWords + 1),
 		Teaser:     "Useful hook.",
 		Digest:     strings.Repeat("d", digestMaxRunes+1),
 		Full:       "Complete detail.",
@@ -210,7 +222,7 @@ func TestValidateFacetPayloadReportsEveryFieldViolation(t *testing.T) {
 	if err == nil {
 		t.Fatal("multiple over-budget projections should refuse")
 	}
-	for _, want := range []string{"status_line is 121 characters", "digest is 2049 characters"} {
+	for _, want := range []string{"status_line is 21 words", "digest is 2049 characters"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("aggregate error = %v, want it to mention %q", err, want)
 		}

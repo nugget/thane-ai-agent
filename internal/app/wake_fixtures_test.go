@@ -34,11 +34,11 @@ const (
 	notifyN2 = "Fixture source alpha reports one more item."
 )
 
-// overBudgetDigest is refused by Go validation: its status_line is 121
-// runes against a 120 limit.
+// overBudgetDigest is refused by Go validation: its status_line is 21
+// words against a 20-word limit.
 func overBudgetDigest() map[string]any {
 	return map[string]any{
-		"status_line": strings.Repeat("s", 121),
+		"status_line": strings.TrimSpace(strings.Repeat("word ", 21)),
 		"teaser":      "Three new items arrived.",
 		"full":        "# Digest\n\nThree new items.",
 	}
