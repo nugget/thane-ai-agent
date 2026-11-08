@@ -349,29 +349,50 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	}
 }
 
-// handleOllamaStreamingChatShared handles streaming chat responses in Ollama format.
-//
-// This function implements intelligent streaming that:
-//   - Buffers initial tokens to detect tool calls
-//   - Falls back to non-streaming mode if tool calls are detected
-//   - Streams tokens in real-time for regular text responses
-//   - Sends responses in Ollama's NDJSON streaming format
-//
-// The buffering approach prevents JSON tool call fragments from leaking into
-// the stream while maintaining low latency for regular conversations.
-//
-// Parameters:
-//   - w: HTTP response writer (must support flushing)
-//   - r: HTTP request context
-//   - req: Parsed agent request
-//   - start: Request start time for duration tracking
-//   - loop: Agent loop for processing
-//   - logger: Logger for error tracking
-//
 // runFunc abstracts the agent dispatch so callers can route through
 // the OWU tracker or call the agent loop directly.
 type runFunc func(ctx context.Context, req *agent.Request, cb agent.StreamCallback) (*agent.Response, error)
 
+// handleOllamaStreamingChatShared answers an /api/chat request that
+// asked for a stream: it runs req through run and writes the reply to
+// w as Ollama NDJSON chunks. An empty assistant chunk goes out before
+// the run starts, so a client sees the stream open however long the
+// first token takes, and a done chunk with empty content ends it.
+//
+// The first token or tool call the run reports picks how its text is
+// written. A token first streams the run's text live: every token is
+// written as it arrives. A tool call first drops every token and
+// writes resp.Content as one chunk once the run returns, so text the
+// model wrote around its tool calls never reaches the client. A token
+// with empty text carries no text: it is not written and does not
+// count as the first token.
+//
+// For a run that returns without error, the message content of the
+// chunks the handler writes, read in order, obeys these invariants:
+//   - When a tool call came first, the chunks concatenate to
+//     resp.Content.
+//   - Otherwise, when the tokens the run streamed are a prefix of
+//     resp.Content (all of it, part of it, or none, as on the greeting
+//     fast path and the runtime's fallback and timeout replies, which
+//     no token carries), the chunks concatenate to resp.Content, and
+//     the part no token carried is one chunk written before the done
+//     chunk. A streamed request then delivers the text an unstreamed
+//     one would.
+//   - Otherwise the stream cannot take back the tokens it wrote, so
+//     the text the client assembles contains resp.Content: nothing
+//     more is written when the tokens already contain it, and
+//     otherwise a blank line and resp.Content follow them, before the
+//     done chunk. The tokens contain the reply when a retried call
+//     streamed it again after an abandoned attempt, when a provider
+//     stripped a tool-call payload it had streamed after the reply, and
+//     when a run that called tools streamed its reply, or kept its
+//     narration as the reply, after the text of earlier iterations.
+//     They lack it when the reply is a fallback or timeout notice that
+//     no token carried.
+//
+// A run that returns an error ends the stream with one done chunk
+// whose done_reason is "error" and whose content is the client-safe
+// message from [ollamaAgentError].
 func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, run runFunc, logger *slog.Logger) {
 	// Set headers for streaming. Omit "Connection: keep-alive" — it's a
 	// hop-by-hop header forbidden in HTTP/2 (RFC 9113 §8.2.2).
@@ -390,89 +411,50 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		model = req.Model
 	}
 
-	// Buffer to detect tool calls at the start of streaming
-	// Note: Tool call detection relies on KindToolCallStart events which are emitted
-	// by the agent loop before any tool-related tokens. This prevents JSON leakage
-	// in the stream. If the LLM generates text-based tool calls (not using the proper
-	// tool syntax), those would stream as regular text - but that's expected behavior.
-	var buffer []agent.StreamEvent
-	var hasToolCalls bool
-	var streaming bool
-
-	// Emit an immediate empty assistant chunk so downstream clients know
-	// the stream is live even when first-token latency is high.
-	initial := OllamaChatResponse{
-		Model:     model,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Message: OllamaChatMessage{
-			Role:    "assistant",
-			Content: "",
-		},
-		Done: false,
-	}
-	data, _ := json.Marshal(initial)
-	fmt.Fprintf(w, "%s\n", data)
-	flusher.Flush()
-
-	// Create stream callback that buffers initially, then streams if no tool calls
-	streamCallback := func(event agent.StreamEvent) {
-		// If we've already detected tool calls, stop processing events
-		if hasToolCalls {
-			return
+	writeChunk := func(content string) {
+		chunk := OllamaChatResponse{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message: OllamaChatMessage{
+				Role:    "assistant",
+				Content: content,
+			},
+			Done: false,
 		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "%s\n", data)
+		flusher.Flush()
+	}
 
-		if !streaming {
-			// Still buffering - check for tool calls
-			if event.Kind == agent.KindToolCallStart {
-				hasToolCalls = true
-				buffer = nil // Clear buffer to avoid unnecessary memory usage
-				// Stop buffering and fall back to non-streaming
+	// Open the stream before the run starts.
+	writeChunk("")
+
+	// The handler knows a tool call only by the KindToolCallStart event
+	// the agent loop emits for it; every token is text to it.
+	var (
+		// tokenFirst and toolFirst record which kind of event the run
+		// reported first; at most one of them is set.
+		tokenFirst, toolFirst bool
+		// toolCalled records that the run reported a tool call at all,
+		// for the log line of a reply the tokens did not carry.
+		toolCalled bool
+		// streamed is the text of every token written to the client.
+		streamed strings.Builder
+	)
+	streamCallback := func(event agent.StreamEvent) {
+		switch event.Kind {
+		case agent.KindToolCallStart:
+			toolCalled = true
+			if !tokenFirst {
+				toolFirst = true
+			}
+		case agent.KindToken:
+			if toolFirst || event.Token == "" {
 				return
 			}
-
-			// Only buffer token events
-			if event.Kind == agent.KindToken {
-				buffer = append(buffer, event)
-			}
-
-			// Start streaming on the first text chunk so short or
-			// coarse-grained upstream deltas don't get buffered until
-			// completion. Tool-call paths still short-circuit above.
-			if event.Kind == agent.KindToken && len(buffer) >= 1 && !hasToolCalls {
-				streaming = true
-				// Flush buffered content
-				for _, bufferedEvent := range buffer {
-					chunk := OllamaChatResponse{
-						Model:     model,
-						CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-						Message: OllamaChatMessage{
-							Role:    "assistant",
-							Content: bufferedEvent.Token,
-						},
-						Done: false,
-					}
-					data, _ := json.Marshal(chunk)
-					fmt.Fprintf(w, "%s\n", data)
-					flusher.Flush()
-				}
-				buffer = nil // Clear buffer
-			}
-		} else {
-			// We're streaming - send tokens directly
-			if event.Kind == agent.KindToken {
-				chunk := OllamaChatResponse{
-					Model:     model,
-					CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-					Message: OllamaChatMessage{
-						Role:    "assistant",
-						Content: event.Token,
-					},
-					Done: false,
-				}
-				data, _ := json.Marshal(chunk)
-				fmt.Fprintf(w, "%s\n", data)
-				flusher.Flush()
-			}
+			tokenFirst = true
+			streamed.WriteString(event.Token)
+			writeChunk(event.Token)
 		}
 	}
 
@@ -501,38 +483,24 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
-	// If we detected tool calls and buffered everything, send it now
-	if hasToolCalls && !streaming {
-		// Send the complete response as a single chunk
-		chunk := OllamaChatResponse{
-			Model:     model,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			Message: OllamaChatMessage{
-				Role:    "assistant",
-				Content: resp.Content,
-			},
-			Done: false,
-		}
-		data, _ := json.Marshal(chunk)
-		fmt.Fprintf(w, "%s\n", data)
-		flusher.Flush()
-	}
-
-	// If we never started streaming (very short response), send buffered tokens now
-	if !streaming && !hasToolCalls && len(buffer) > 0 {
-		for _, bufferedEvent := range buffer {
-			chunk := OllamaChatResponse{
-				Model:     model,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-				Message: OllamaChatMessage{
-					Role:    "assistant",
-					Content: bufferedEvent.Token,
-				},
-				Done: false,
+	if toolFirst {
+		writeChunk(resp.Content)
+	} else {
+		text := streamed.String()
+		if tail := ollamaStreamTail(text, resp.Content); tail != "" {
+			attrs := []any{
+				"request_id", resp.RequestID,
+				"tool_called", toolCalled,
+				"streamed_len", len(text),
+				"reply_len", len(resp.Content),
+				"tail_len", len(tail),
 			}
-			data, _ := json.Marshal(chunk)
-			fmt.Fprintf(w, "%s\n", data)
-			flusher.Flush()
+			if strings.HasPrefix(resp.Content, text) {
+				logger.Debug("ollama stream writing reply text no token carried", attrs...)
+			} else {
+				logger.Warn("ollama stream lacks the reply, writing it after the streamed text", attrs...)
+			}
+			writeChunk(tail)
 		}
 	}
 
@@ -550,9 +518,24 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		TotalDuration: duration.Nanoseconds(),
 		EvalDuration:  duration.Nanoseconds(),
 	}
-	data, _ = json.Marshal(final)
+	data, _ := json.Marshal(final)
 	fmt.Fprintf(w, "%s\n", data)
 	flusher.Flush()
+}
+
+// ollamaStreamTail returns what a stream that has already written
+// streamed must still write for the text a client assembles from it to
+// hold reply: the rest of reply when streamed is a prefix of it,
+// nothing when streamed already contains it, and otherwise a blank line
+// and then reply.
+func ollamaStreamTail(streamed, reply string) string {
+	if rest, ok := strings.CutPrefix(reply, streamed); ok {
+		return rest
+	}
+	if strings.Contains(streamed, reply) {
+		return ""
+	}
+	return "\n\n" + reply
 }
 
 // handleOllamaTagsShared returns the list of available models.
