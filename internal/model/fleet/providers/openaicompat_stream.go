@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
@@ -27,6 +28,20 @@ type streamTrace struct {
 	upstreamID string
 }
 
+// handleStreaming reads one SSE stream into a completion. Each content
+// delta goes to callback as it arrives, except while couldBeTextToolCall
+// holds for the content so far: the text fallback runs only after the
+// stream ends, so a reply it turns into calls or clears must not reach
+// the client as text first. The delta that rules a call out sends all
+// that was held as one token. A stream that ends still holding sends,
+// as one token before returning, what the fallback left of the content
+// (nothing for calls or a suppressed call); a refused stream sends
+// nothing held. Tools offered or not: the fallback runs either way.
+// Accepted gaps, which stream before the fallback removes them: a call
+// after prose (a <tool_call> tag mid-reply, or a call trailing prose)
+// and a tool name followed by JSON arguments, which starts as a plain
+// word. When the fallback changes the content, the original is logged
+// at INFO with the action, and streamed_removed marks one of the gaps.
 func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback, trace streamTrace) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
@@ -45,6 +60,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		finishReason   string
 		upstreamID     string
 		firstToken     time.Time
+		holding        = true
 	)
 
 	partialUsage := func() *llm.ChatResponse {
@@ -141,7 +157,13 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 					firstToken = time.Now()
 				}
 				contentBuilder.WriteString(choice.Delta.Content)
-				callback(llm.StreamEvent{Kind: llm.KindToken, Token: choice.Delta.Content})
+				switch {
+				case !holding:
+					callback(llm.StreamEvent{Kind: llm.KindToken, Token: choice.Delta.Content})
+				case !couldBeTextToolCall(contentBuilder.String()):
+					holding = false
+					callback(llm.StreamEvent{Kind: llm.KindToken, Token: contentBuilder.String()})
+				}
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				acc := toolAcc[tc.Index]
@@ -288,6 +310,13 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	if err := applyTextToolFallback(result, validToolNames); err != nil {
 		return partialUsage(), err
 	}
+	if result.TextToolAction != llm.TextToolActionNone {
+		trace.log.Info("text tool fallback changed stream content", "action", result.TextToolAction,
+			"original_content", contentBuilder.String(), "streamed_removed", !holding)
+	}
+	if holding && result.Message.Content != "" {
+		callback(llm.StreamEvent{Kind: llm.KindToken, Token: result.Message.Content})
+	}
 
 	attrs := []any{
 		"model", result.Model,
@@ -314,4 +343,32 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	trace.log.Debug("stream complete", attrs...)
 	trace.log.Log(ctx, llm.LevelTrace, "stream final content", "content", result.Message.Content)
 	return result, nil
+}
+
+// couldBeTextToolCall reports whether content could still grow into a
+// whole reply that llm.ApplyTextToolCallFallback (default profile)
+// recovers or suppresses. Past leading whitespace, which alone holds,
+// that is: '{', held to the end; '[' then '{' after any whitespace;
+// "<tool_call>" or a prefix of it; or a fence, from its first backtick,
+// whose info line, trimmed, is empty, "json" or "tool", or while
+// unfinished can still become one ("```js"). Once false, it stays false.
+func couldBeTextToolCall(content string) bool {
+	t := strings.TrimLeftFunc(content, unicode.IsSpace)
+	switch {
+	case t == "" || t[0] == '{':
+		return true
+	case t[0] == '[':
+		rest := strings.TrimLeftFunc(t[1:], unicode.IsSpace)
+		return rest == "" || rest[0] == '{'
+	case t[0] == '<':
+		return strings.HasPrefix(t, "<tool_call>") || strings.HasPrefix("<tool_call>", t)
+	case strings.HasPrefix(t, "```"):
+		line, _, complete := strings.Cut(t[3:], "\n")
+		info := strings.TrimSpace(line)
+		if complete || info != strings.TrimLeftFunc(line, unicode.IsSpace) {
+			return info == "" || info == "json" || info == "tool"
+		}
+		return strings.HasPrefix("json", info) || strings.HasPrefix("tool", info)
+	}
+	return strings.HasPrefix("```", t)
 }
