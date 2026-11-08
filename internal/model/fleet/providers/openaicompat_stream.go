@@ -35,13 +35,14 @@ type streamTrace struct {
 // the client as text first. The delta that rules a call out sends all
 // that was held as one token. A stream that ends still holding sends,
 // as one token before returning, what the fallback left of the content
-// (nothing for calls or a suppressed call); a refused stream sends
-// nothing held. Tools offered or not: the fallback runs either way.
-// Accepted gaps, which stream before the fallback removes them: a call
-// after prose (a <tool_call> tag mid-reply, or a call trailing prose)
-// and a tool name followed by JSON arguments, which starts as a plain
-// word. When the fallback changes the content, the original is logged
-// at INFO with the action, and streamed_removed marks one of the gaps.
+// (nothing for calls or a suppressed call); until then a held reply is
+// silent, and a refused stream sends nothing held. Tools offered or not:
+// the fallback runs either way. Accepted gaps, which stream before the
+// fallback removes them: a call after prose (a <tool_call> tag mid-reply,
+// or a call trailing prose), a tool name followed by JSON arguments, and
+// a JSON array or concatenation led by null. When the fallback changes
+// the content, the original is logged at INFO with text_tool_action, and
+// streamed_removed marks one of the gaps.
 func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback, trace streamTrace) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
@@ -311,7 +312,7 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 		return partialUsage(), err
 	}
 	if result.TextToolAction != llm.TextToolActionNone {
-		trace.log.Info("text tool fallback changed stream content", "action", result.TextToolAction,
+		trace.log.Info("text tool fallback changed stream content", "text_tool_action", result.TextToolAction,
 			"original_content", contentBuilder.String(), "streamed_removed", !holding)
 	}
 	if holding && result.Message.Content != "" {
@@ -345,13 +346,14 @@ func (c *OpenAICompatClient) handleStreaming(ctx context.Context, requestedModel
 	return result, nil
 }
 
-// couldBeTextToolCall reports whether content could still grow into a
-// whole reply that llm.ApplyTextToolCallFallback (default profile)
-// recovers or suppresses. Past leading whitespace, which alone holds,
-// that is: '{', held to the end; '[' then '{' after any whitespace;
-// "<tool_call>" or a prefix of it; or a fence, from its first backtick,
-// whose info line, trimmed, is empty, "json" or "tool", or while
-// unfinished can still become one ("```js"). Once false, it stays false.
+// couldBeTextToolCall reports whether content, past leading whitespace
+// (which alone holds), still starts like one of the calls
+// llm.ApplyTextToolCallFallback (default profile) reads from the start
+// of a reply: '{'; '[' then '{' after any whitespace; "<tool_call>" or a
+// prefix of it; or a fence, from its first backtick, whose info line,
+// trimmed, is empty, "json" or "tool", or while unfinished can still
+// become one ("```js" can, "```js " cannot). A '{' or such a fence holds
+// to the end. JSON led by null is not held. Once false, it stays false.
 func couldBeTextToolCall(content string) bool {
 	t := strings.TrimLeftFunc(content, unicode.IsSpace)
 	switch {

@@ -45,6 +45,7 @@ func TestCouldBeTextToolCall(t *testing.T) {
 		{"[x", false},
 		{"[1]", false},
 		{"[null", false},
+		{"null{", false},
 		{"<", true},
 		{"<tool_c", true},
 		{"<tool_call>", true},
@@ -504,7 +505,8 @@ func TestOpenAICompatRefusedStreamSendsNothingHeld(t *testing.T) {
 // TestStreamRetainsRewrittenContent pins the INFO record that keeps a
 // reply the fallback changed: fixing the leak must not erase the only
 // place that text was seen. streamed_removed marks the accepted gaps,
-// where text the fallback removed had already streamed.
+// where text the fallback removed had already streamed; each gap the
+// handleStreaming Godoc names has a row here.
 func TestStreamRetainsRewrittenContent(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -523,8 +525,16 @@ func TestStreamRetainsRewrittenContent(t *testing.T) {
 			wantRecord: true, wantAction: llm.TextToolActionStrippedTrailing, wantFinalToken: `{"a": 1} then`},
 		{name: "prose then a tagged call", parts: []string{"Loading forge. ", "<tool_call>", `{"name":"tag_activate","arguments":{}}`, "</tool_call>"},
 			wantRecord: true, wantAction: llm.TextToolActionRecovered, wantStreamed: true},
+		{name: "a tagged call inside another language's fence", parts: []string{"```python\n", "<tool_call>", `{"name":"tag_activate","arguments":{}}`, "</tool_call>\n```"},
+			wantRecord: true, wantAction: llm.TextToolActionRecovered, wantStreamed: true},
 		{name: "prose then a trailing call", parts: []string{"Resetting. ", `{"name":"tag_deactivate"}`},
 			wantRecord: true, wantAction: llm.TextToolActionStrippedTrailing, wantStreamed: true},
+		{name: "tool name then JSON arguments", parts: []string{"tag_activate ", `{"tag":"forge"}`},
+			wantRecord: true, wantAction: llm.TextToolActionRecovered, wantStreamed: true},
+		{name: "array led by null", parts: []string{"[null, ", `{"name":"tag_activate","arguments":{}}]`},
+			wantRecord: true, wantAction: llm.TextToolActionRecovered, wantStreamed: true},
+		{name: "concatenation led by null", parts: []string{"null", `{"name":"tag_activate","arguments":{}}{"name":"tag_deactivate","arguments":{}}`},
+			wantRecord: true, wantAction: llm.TextToolActionRecovered, wantStreamed: true},
 		{name: "prose", parts: []string{"All ", "off."}},
 		{name: "held JSON that is not a call", parts: []string{`{"temperature":`, ` 72}`}},
 	}
@@ -562,7 +572,7 @@ func TestStreamRetainsRewrittenContent(t *testing.T) {
 			rec := records[0]
 			want := map[string]any{
 				"level":            "INFO",
-				"action":           string(tt.wantAction),
+				"text_tool_action": string(tt.wantAction),
 				"original_content": strings.Join(tt.parts, ""),
 				"streamed_removed": tt.wantStreamed,
 			}
