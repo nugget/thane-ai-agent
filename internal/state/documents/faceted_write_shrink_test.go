@@ -95,7 +95,8 @@ func TestDocWriteShortenedOntoTheStoredTextIsUnchanged(t *testing.T) {
 	store, _ := newMutationStore(t)
 	calls := 0
 	tools := NewTools(store, replyingShrinker(saved, &calls))
-	args := PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."}
+	sent := strings.TrimSpace(strings.Repeat("word ", 25))
+	args := PublishArgs{Ref: "kb:status.md", StatusLine: sent, Full: "Complete detail."}
 	for i, wantUnchanged := range []bool{false, true} {
 		result, err := tools.Publish(context.Background(), args)
 		if err != nil {
