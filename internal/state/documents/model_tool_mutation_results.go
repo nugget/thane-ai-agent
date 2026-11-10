@@ -23,6 +23,9 @@ type modelMutationResult struct {
 	// reservation says so. Without this field the store's warnings stop
 	// at the envelope and the advisory tier is a no-op.
 	Warnings []string `json:"warnings,omitempty"`
+	// Unchanged says the write matched the stored document byte for byte
+	// and created no revision.
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 type modelDeleteResult struct {
@@ -130,6 +133,7 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 		Section:       result.Section,
 		Window:        result.Window,
 		Warnings:      append([]string(nil), result.Warnings...),
+		Unchanged:     result.Unchanged,
 	}
 }
 
