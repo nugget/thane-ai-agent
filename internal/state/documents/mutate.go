@@ -131,6 +131,9 @@ type MutationResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 	// Revision advances the hidden read receipt after a successful mutation.
 	Revision string `json:"-"`
+	// Unchanged reports a write whose result matched the stored document
+	// byte for byte, so it created no revision.
+	Unchanged bool `json:"unchanged,omitempty"`
 }
 
 // PriorReadRequiredError prevents a scoped whole-document replacement from
@@ -309,6 +312,7 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 			raw = stableRaw
 		}
 	}
+	unchanged := existingRecord != nil && raw == existingRaw
 
 	action := strings.TrimSpace(args.StructuredTool)
 	if action == "" {
@@ -326,6 +330,12 @@ func (s *Store) Write(ctx context.Context, args WriteArgs) (*MutationResult, err
 	s.attachMutationRevision(ctx, record, revision)
 	result := mutationResultFromRecord(action, record, existed, sectionName, "")
 	result.Warnings = warnings
+	if unchanged {
+		result.Unchanged = true
+		result.Warnings = append(result.Warnings, unchangedWriteWarning(existingRecord, now))
+		s.logger.Info("document write changed nothing",
+			"ref", record.Ref, "tool", action, "updated", firstValue(existingRecord.Frontmatter, "updated"))
+	}
 	return result, nil
 }
 
