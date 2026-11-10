@@ -126,6 +126,11 @@ type Server struct {
 	logger                             *slog.Logger
 	server                             *http.Server
 	stats                              *SessionStats
+	// chatStreamKeepalive is how often a /v1 chat-completions stream
+	// writes a keepalive comment while its run is in progress. Tests
+	// shorten it; production leaves it zero for
+	// defaultChatStreamKeepalive.
+	chatStreamKeepalive time.Duration
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -1023,6 +1028,22 @@ type StreamDelta struct {
 	Content string `json:"content,omitempty"`
 }
 
+const (
+	// defaultChatStreamKeepalive is how often a /v1 chat-completions
+	// stream writes a keepalive comment while its run is in progress.
+	// A run can send the client nothing for minutes: a model's
+	// reasoning reaches no stream callback, and a reply that could
+	// still be a tool call written as text is held to the end of the
+	// model's stream. The comments keep a client or proxy that times
+	// out an idle read from dropping the stream meanwhile.
+	defaultChatStreamKeepalive = 30 * time.Second
+	// chatStreamDeadlineIntervals is how many keepalive intervals each
+	// write on a /v1 chat-completions stream moves the write deadline
+	// ahead, so a client that stops reading is dropped after that many
+	// intervals rather than holding the run's writes open.
+	chatStreamDeadlineIntervals = 4
+)
+
 func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Request, agentReq *agent.Request) {
 	// Set SSE headers. Omit "Connection: keep-alive" — it's a hop-by-hop
 	// header forbidden in HTTP/2 (RFC 9113 §8.2.2).
@@ -1039,7 +1060,43 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	completionID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	created := time.Now().Unix()
 	modelName := "thane" // Will be updated when we get the response
-	var writeMu sync.Mutex
+
+	keepalive := s.chatStreamKeepalive
+	if keepalive <= 0 {
+		keepalive = defaultChatStreamKeepalive
+	}
+	rc := http.NewResponseController(w)
+	var (
+		writeMu sync.Mutex
+		// closed is set when the handler returns. runChatLoop returns
+		// as soon as the request's context ends, while the loop may
+		// still be streaming, and net/http reuses a finished
+		// response's buffers.
+		closed bool
+	)
+	// send performs one write on the stream and flushes it, under
+	// writeMu so the keepalive's writes never interleave with the
+	// run's. Each write first gets a fresh deadline, replacing the
+	// listener's WriteTimeout, which counts from the request: a silent
+	// phase cannot expire it, and it bounds only how long one write
+	// may block on a client that has stopped reading.
+	send := func(write func()) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if closed {
+			return
+		}
+		if err := rc.SetWriteDeadline(time.Now().Add(chatStreamDeadlineIntervals * keepalive)); err != nil {
+			s.logger.Debug("failed to reset write deadline", "error", err)
+		}
+		write()
+		flusher.Flush()
+	}
+	defer func() {
+		writeMu.Lock()
+		closed = true
+		writeMu.Unlock()
+	}()
 
 	// Send initial chunk with role
 	initialChunk := StreamChunk{
@@ -1052,57 +1109,37 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 			Delta: StreamDelta{Role: "assistant"},
 		}},
 	}
-	writeMu.Lock()
-	s.writeSSE(w, initialChunk)
-	flusher.Flush()
-	writeMu.Unlock()
+	send(func() { s.writeSSE(w, initialChunk) })
 
 	// Track if any tokens were streamed (greeting fast-path skips streaming)
 	streamed := false
 
-	// Get response controller for deadline management (Go 1.20+)
-	rc := http.NewResponseController(w)
-
-	// Stream callback sends tokens and keepalives during tool execution
 	streamCallback := func(event agent.StreamEvent) {
-		switch event.Kind {
-		case agent.KindToken:
-			streamed = true
-			chunk := StreamChunk{
-				ID:      completionID,
-				Object:  "chat.completion.chunk",
-				Created: created,
-				Model:   modelName,
-				Choices: []StreamChoice{{
-					Index: 0,
-					Delta: StreamDelta{Content: event.Token},
-				}},
-			}
-			writeMu.Lock()
-			s.writeSSE(w, chunk)
-			flusher.Flush()
-			writeMu.Unlock()
-
-		case agent.KindToolCallStart, agent.KindToolCallDone:
-			// Send SSE comment as keepalive to prevent write timeout
-			writeMu.Lock()
-			fmt.Fprintf(w, ": keepalive\n\n")
-			flusher.Flush()
-			writeMu.Unlock()
+		if event.Kind != agent.KindToken {
+			return
 		}
-
-		// Reset write deadline after every event to prevent timeout
-		// during multi-iteration tool loops
-		writeMu.Lock()
-		if err := rc.SetWriteDeadline(time.Now().Add(120 * time.Second)); err != nil {
-			s.logger.Debug("failed to reset write deadline", "error", err)
+		streamed = true
+		chunk := StreamChunk{
+			ID:      completionID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   modelName,
+			Choices: []StreamChoice{{
+				Index: 0,
+				Delta: StreamDelta{Content: event.Token},
+			}},
 		}
-		writeMu.Unlock()
+		send(func() { s.writeSSE(w, chunk) })
 	}
 
 	// Run agent with streaming — context carries the subsystem logger
-	// injected by the calling OpenAI-compatible handler.
+	// injected by the calling OpenAI-compatible handler. The keepalive
+	// runs only as long as the run does, so no comment follows [DONE].
+	stopKeepalive := startKeepalive(r.Context(), keepalive, func() {
+		send(func() { fmt.Fprint(w, ": keepalive\n\n") })
+	})
 	resp, err := s.runChatLoop(r.Context(), agentReq, streamCallback, "api/chat-completions")
+	stopKeepalive()
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)
 		// Can't change status code after streaming started, just close
@@ -1128,14 +1165,37 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 			FinishReason: &finishReason,
 		}},
 	}
-	writeMu.Lock()
-	s.writeSSE(w, finalChunk)
-	flusher.Flush()
+	send(func() {
+		s.writeSSE(w, finalChunk)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+}
 
-	// Send [DONE] marker
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	flusher.Flush()
-	writeMu.Unlock()
+// startKeepalive calls beat every interval until ctx ends or the
+// returned stop is called, and stop returns only once no beat is
+// running, so the caller may finish its response right after.
+func startKeepalive(ctx context.Context, interval time.Duration, beat func()) (stop func()) {
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				beat()
+			}
+		}
+	}()
+	return func() {
+		close(quit)
+		<-done
+	}
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, chunk StreamChunk) {

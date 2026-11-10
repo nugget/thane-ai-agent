@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -357,6 +359,194 @@ func TestHandleStreamingCompletionUsesChatLoopStream(t *testing.T) {
 	}
 	if rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("Content-Type = %q, want text/event-stream", rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestHandleStreamingCompletionWritesNothingAfterReturn(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan struct{})
+	returned := make(chan struct{})
+	lateDone := make(chan struct{})
+	runner := &capturingAPILoopRunner{
+		onRun: func(_ looppkg.Request, stream looppkg.StreamCallback) {
+			defer close(lateDone)
+			close(started)
+			select {
+			case <-returned:
+			case <-time.After(5 * time.Second):
+				return
+			}
+			// The run outlives a request whose context ended.
+			stream(agent.StreamEvent{Kind: agent.KindToken, Token: "late"})
+		},
+	}
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
+			Runner: runner,
+			Logger: testAPILogger(),
+		})
+	})
+
+	go func() {
+		<-started
+		cancel()
+	}()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", nil)
+	server.handleStreamingCompletion(rec, req, &agent.Request{
+		Messages:       []agent.Message{{Role: "user", Content: "hello"}},
+		RoutingFactors: map[string]string{"channel": "api"},
+	})
+	atReturn := rec.Body.String()
+	close(returned)
+	<-lateDone
+
+	if got := rec.Body.String(); got != atReturn {
+		t.Fatalf("body grew after the handler returned: %q, want %q", got, atReturn)
+	}
+}
+
+// serveChatStream serves handleStreamingCompletion with a shortened
+// keepalive on a listener whose WriteTimeout matches the stream's write
+// deadline, as the native API's 120-second WriteTimeout does in
+// production, so a silence longer than the deadline loses the client
+// if the stream lets the deadline run from its last write.
+func serveChatStream(t *testing.T, keepalive time.Duration, runner *capturingAPILoopRunner) *httptest.Server {
+	t.Helper()
+
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.chatStreamKeepalive = keepalive
+	server.ConfigureChatLoopLauncher(func(ctx context.Context, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+		return looppkg.NewRegistry().Launch(ctx, launch, looppkg.Deps{
+			Runner: runner,
+			Logger: testAPILogger(),
+		})
+	})
+
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.handleStreamingCompletion(w, r, &agent.Request{
+			Messages:       []agent.Message{{Role: "user", Content: "hello"}},
+			RoutingFactors: map[string]string{"channel": "api"},
+		})
+	}))
+	ts.Config.WriteTimeout = chatStreamDeadlineIntervals * keepalive
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func openChatStream(t *testing.T, ts *httptest.Server) *http.Response {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func TestHandleStreamingCompletionOutlastsSilenceLongerThanDeadline(t *testing.T) {
+	t.Parallel()
+
+	const keepalive = 50 * time.Millisecond
+	silence := 3 * chatStreamDeadlineIntervals * keepalive
+	runner := &capturingAPILoopRunner{
+		response: &looppkg.Response{Content: "held reply", Model: "test-model", FinishReason: "stop"},
+		onRun: func(_ looppkg.Request, stream looppkg.StreamCallback) {
+			// A reasoning phase or a held reply sends nothing for
+			// longer than the write deadline, then the reply arrives.
+			time.Sleep(silence)
+			stream(agent.StreamEvent{Kind: agent.KindToken, Token: "held reply"})
+		},
+	}
+	ts := serveChatStream(t, keepalive, runner)
+
+	body, err := io.ReadAll(openChatStream(t, ts).Body)
+	if err != nil {
+		t.Fatalf("reading stream after %v of silence: %v (body %q)", silence, err, body)
+	}
+	if !strings.Contains(string(body), `"content":"held reply"`) {
+		t.Fatalf("stream body = %q, want the held reply", body)
+	}
+	if !strings.HasSuffix(string(body), "data: [DONE]\n\n") {
+		t.Fatalf("stream body = %q, want it to end with the DONE marker", body)
+	}
+}
+
+func TestHandleStreamingCompletionKeepaliveSpansTheRun(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	runner := &capturingAPILoopRunner{
+		response: &looppkg.Response{Content: "done", Model: "test-model", FinishReason: "stop"},
+		onRun: func(_ looppkg.Request, stream looppkg.StreamCallback) {
+			select {
+			case <-release:
+			case <-time.After(5 * time.Second):
+			}
+			stream(agent.StreamEvent{Kind: agent.KindToken, Token: "done"})
+		},
+	}
+	ts := serveChatStream(t, 50*time.Millisecond, runner)
+	reader := bufio.NewReader(openChatStream(t, ts).Body)
+
+	// While the run is silent, keepalive comments arrive.
+	for seen := 0; seen < 2; {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading silent stream after %d keepalives: %v", seen, err)
+		}
+		if strings.Contains(line, `"content"`) {
+			t.Fatalf("got content %q while the run was silent", line)
+		}
+		if line == ": keepalive\n" {
+			seen++
+		}
+	}
+
+	// Once the run returns, the stream ends with the reply, the final
+	// chunk, and the DONE marker, and no comment follows the run.
+	close(release)
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("reading stream end: %v", err)
+	}
+	_, final, ok := strings.Cut(string(rest), `"content":"done"`)
+	if !ok {
+		t.Fatalf("stream end = %q, want the reply", rest)
+	}
+	if !strings.HasSuffix(final, "data: [DONE]\n\n") {
+		t.Fatalf("stream end = %q, want it to end with the DONE marker", rest)
+	}
+	_, afterRun, _ := strings.Cut(final, `"finish_reason"`)
+	if strings.Contains(afterRun, "keepalive") {
+		t.Fatalf("stream after the run = %q, want no keepalive", afterRun)
+	}
+}
+
+func TestStartKeepaliveStopsBeating(t *testing.T) {
+	t.Parallel()
+
+	var beats atomic.Int32
+	stop := startKeepalive(t.Context(), time.Millisecond, func() { beats.Add(1) })
+	for beats.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+
+	after := beats.Load()
+	time.Sleep(20 * time.Millisecond)
+	if got := beats.Load(); got != after {
+		t.Fatalf("beats after stop = %d, want %d", got, after)
 	}
 }
 
