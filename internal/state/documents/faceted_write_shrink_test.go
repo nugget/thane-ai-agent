@@ -87,6 +87,48 @@ func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 	}
 }
 
+// TestDocWriteShortenedOntoTheStoredTextIsUnchanged pins what a model reads
+// when shortening lands its over-budget text on what is already stored. The
+// write is unchanged, and the warning that says so speaks of the document
+// the write would save, which shortened_projections explains, not of what
+// the model sent, which never matched.
+func TestDocWriteShortenedOntoTheStoredTextIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const saved = "Printer online; two packages wait at the desk."
+	store, _ := newMutationStore(t)
+	calls := 0
+	tools := NewTools(store, replyingShrinker(saved, &calls))
+	sent := strings.TrimSpace(strings.Repeat("word ", 25))
+	args := PublishArgs{Ref: "kb:status.md", StatusLine: sent, Full: "Complete detail."}
+	for i, wantUnchanged := range []bool{false, true} {
+		result, err := tools.Publish(context.Background(), args)
+		if err != nil {
+			t.Fatalf("publish %d: error = %v", i+1, err)
+		}
+		var decoded struct {
+			Unchanged bool     `json:"unchanged"`
+			Warnings  []string `json:"warnings"`
+			Shortened []struct {
+				SavedText string `json:"saved_text"`
+			} `json:"shortened_projections"`
+		}
+		if err := json.Unmarshal([]byte(result), &decoded); err != nil {
+			t.Fatalf("publish %d: result is not JSON: %v\n%s", i+1, err, result)
+		}
+		if decoded.Unchanged != wantUnchanged || len(decoded.Shortened) != 1 || decoded.Shortened[0].SavedText != saved {
+			t.Errorf("publish %d: result = %s, want unchanged = %v with one projection shortened to %q", i+1, result, wantUnchanged, saved)
+		}
+		said := strings.Contains(strings.Join(decoded.Warnings, "\n"), "unchanged: the document this write would save is byte for byte the one already stored, so no new revision was created")
+		if said != wantUnchanged {
+			t.Errorf("publish %d: warnings = %q, want the unchanged warning = %v", i+1, decoded.Warnings, wantUnchanged)
+		}
+	}
+	if calls != 2 {
+		t.Errorf("shrink calls = %d, want one per publish", calls)
+	}
+}
+
 // TestDocWriteRefusalIsUnchangedWhenShrinkCannotHelp pins that the model
 // reads exactly the refusal it reads with no shrinker configured, whether
 // the shrink result does not fit or another violation rules shrinking out.

@@ -38,16 +38,18 @@ func (a *App) facetShrinker() *documentfacets.Shrinker {
 // limits, the ones it was refused over, bounded at two output tokens per
 // character field allows. A word budget is asked for in words, the unit a
 // model can count while it writes, and every budgeted field carries a
-// character limit for the bound. A reply that reached that bound is refused, by its stop reason
-// or, for a provider that reports none (Ollama), by the tokens it spent,
-// and its text comes back with the refusal so the shrink log keeps it. A
-// model that reasoned instead of answering is refused with
-// [thinkingOffFix], because nothing else shows it: the writer's refusal
-// stands just as when the text could not be shortened. That holds whether
-// it reached the bound or, on a slower model, ran out the call's deadline
-// first, which a model that answers directly but too slowly for a long
-// projection also does. The client carries no sampling settings, so the
-// deployment's own defaults, temperature included, apply.
+// character limit for the bound. A reply that reached that bound is
+// refused, by its stop reason or, for a provider that reports none
+// (Ollama), by the tokens it spent, and its text comes back with the
+// refusal so the shrink log keeps it. A model that reasoned instead of
+// answering is refused with [thinkingOffFix], because nothing else shows
+// it: the writer's refusal stands just as when the text could not be
+// shortened. That holds whether it reached the bound, which openai_compat
+// reports as an [llm.ErrEmptyCompletion] beside a response carrying the
+// stop reason and token count, or, on a slower model, ran out the call's
+// deadline first, which a model that answers directly but too slowly for
+// a long projection also does. The client carries no sampling settings, so
+// the deployment's own defaults, temperature included, apply.
 func shrinkFacetText(ctx context.Context, client llm.Client, model, text string, field documentfacets.Field, limits string) (string, error) {
 	bound := 2 * field.MaxRunes
 	resp, err := client.Chat(llm.WithMaxOutputTokens(ctx, bound), model, []llm.Message{
@@ -60,12 +62,17 @@ func shrinkFacetText(ctx context.Context, client llm.Client, model, text string,
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "", fmt.Errorf("%w; no answer arrived before the call's deadline: %s, and one that answers directly but slowly cannot shorten a long projection in time", err, thinkingOffFix)
 	}
+	capped := resp != nil && (resp.StopReason == "length" || resp.StopReason == "max_tokens" || resp.OutputTokens >= bound)
+	spentBound := fmt.Sprintf("the reply spent the whole %d-token output bound without answering; %s", bound, thinkingOffFix)
+	if errors.Is(err, llm.ErrEmptyCompletion) && capped {
+		return "", fmt.Errorf("%w; %s", err, spentBound)
+	}
 	if err != nil {
 		return "", err
 	}
-	if resp.StopReason == "length" || resp.StopReason == "max_tokens" || resp.OutputTokens >= bound {
+	if capped {
 		if strings.TrimSpace(resp.Message.Content) == "" {
-			return "", fmt.Errorf("the reply spent the whole %d-token output bound without answering; %s", bound, thinkingOffFix)
+			return "", errors.New(spentBound)
 		}
 		return resp.Message.Content, fmt.Errorf("the reply stopped at the %d-token output bound", bound)
 	}

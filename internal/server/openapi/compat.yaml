@@ -70,7 +70,7 @@ paths:
             text/event-stream:
               schema:
                 type: string
-                description: SSE stream of completion chunks (OpenAI delta format).
+                description: "SSE stream of completion chunks (OpenAI delta format), with `: keepalive` comment lines while the run sends nothing."
         "401": { $ref: "#/components/responses/OpenAIUnauthorized" }
   /v1/models:
     get:
