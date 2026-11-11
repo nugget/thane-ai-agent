@@ -102,7 +102,7 @@ func TestWriteDossierShrinksOnlyASmallOverrun(t *testing.T) {
 	}
 }
 
-// dossierTargets are the budgeted dossier projections, each with a sent
+// dossierTargets are the dossier projections a shrink can touch, each with a sent
 // value a quarter over its budget (status_line's in words), the clean reply
 // it gets when another projection carries the case's reply, and the length
 // of a multi-byte reply that sits within its limits.
@@ -112,7 +112,6 @@ var dossierTargets = []struct {
 }{
 	{key: "status_line", sent: strings.TrimSpace(strings.Repeat("s ", 25)), clean: "Clean status.", replyRunes: 96},
 	{key: "teaser", sent: strings.Repeat("t", 625), clean: "Clean teaser.", replyRunes: 400},
-	{key: "digest", sent: strings.Repeat("d", 2560), clean: "Clean digest.", replyRunes: 1638},
 }
 
 // dossierHostileReply is one shrink-model reply, the projections that
@@ -130,7 +129,7 @@ type dossierHostileReply struct {
 }
 
 var (
-	everyDossierTarget = []string{"status_line", "teaser", "digest"}
+	everyDossierTarget = []string{"status_line", "teaser"}
 	nameDossierTargets = []string{"status_line", "teaser"}
 )
 
@@ -221,9 +220,9 @@ func withContactID(text, id string) string {
 // reply, the dossier lands with every shortened projection read back from
 // disk equal to the saved_text the result reports, or it returns byte for
 // byte the refusal the same write returns with no shrinker, and leaves no
-// file. Every reply runs in each budgeted projection, once as the only
-// overrun and once with all three over and the others given clean
-// replies.
+// file. Every reply runs in each projection a shrink can touch, once as
+// the only overrun and once with both over and the other given a clean
+// reply.
 func TestShortenedDossierLandsAsStoredOrNotAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -268,8 +267,6 @@ func setDossierProjection(payload *documentfacets.Payload, key, value string) {
 		payload.StatusLine = value
 	case "teaser":
 		payload.Teaser = value
-	case "digest":
-		payload.Digest = value
 	}
 }
 

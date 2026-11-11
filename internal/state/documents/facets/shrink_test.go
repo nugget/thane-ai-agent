@@ -125,15 +125,18 @@ func limitsOf(field Field) []budgetLimit {
 // TestFitShrinksOnlyOverrunsWithinHalfTheLimit generates every budgeted
 // projection over each of its limits at three overages — one over, exactly
 // half the limit over (the last overage that shrinks), and one past that —
-// and checks only the first two reach the shrink model, which is handed the
-// projection's field, and that the result reports the limit in its unit.
+// and checks only the first two of a status line or teaser reach the shrink
+// model, which is handed the projection's field, and that the result
+// reports the limit in its unit. A digest never reaches it: rewriting one
+// takes longer than a write should wait.
 func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, field := range DefaultContract().Fields() {
 		for _, limit := range limitsOf(field) {
 			for _, overage := range []int{1, limit.limit / 2, limit.limit/2 + 1} {
-				wantShrink := overage <= limit.limit/2
+				shortens := field.Key == "status_line" || field.Key == "teaser"
+				wantShrink := shortens && overage <= limit.limit/2
 				t.Run(fmt.Sprintf("%s %s over", field.Key, limit.unit.count(overage)), func(t *testing.T) {
 					t.Parallel()
 					sent := validShrinkPayload()
@@ -146,7 +149,7 @@ func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 					if !wantShrink {
 						assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
 						if len(*calls) != 0 {
-							t.Fatalf("shrink called %d times for an overage past half the limit", len(*calls))
+							t.Fatalf("shrink called %d times for an overrun it must leave to the author", len(*calls))
 						}
 						return
 					}
@@ -300,8 +303,10 @@ func mentions(text, name string) error {
 	return nil
 }
 
-// TestFitBoundsEachShrinkCall pins that every call runs on its own deadline
-// of a few seconds, and that a call that runs into it costs the write
+// TestFitBoundsEachShrinkCall pins that every call runs on its own deadline,
+// sized to the projection: at most five seconds for a status line and at
+// most ten, more than five, for a teaser, whose longer reply would run into
+// a status line's. A call that runs into its deadline costs the write
 // nothing but the original refusal.
 func TestFitBoundsEachShrinkCall(t *testing.T) {
 	t.Parallel()
@@ -326,18 +331,34 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 		t.Errorf("log = %s, want the deadline as the reason", logs)
 	}
 
-	shrinker, calls, _ = scriptedShrinker(reply("Short."))
-	if _, _, err := shrinker.Fit(context.Background(), sent, validate); err != nil {
-		t.Fatalf("Fit() error = %v", err)
-	}
-	if d := (*calls)[0].deadline; d <= 0 || d > 5*time.Second {
-		t.Fatalf("shrink call deadline = %v, want one of at most five seconds", d)
+	teaser := validShrinkPayload()
+	teaser.Teaser = strings.Repeat("t", teaserMaxRunes+40)
+	for _, tt := range []struct {
+		key        string
+		sent       Payload
+		min, max   time.Duration
+		wantWithin string
+	}{
+		{key: "status_line", sent: sent, max: 5 * time.Second, wantWithin: "at most five seconds"},
+		{key: "teaser", sent: teaser, min: 5 * time.Second, max: 10 * time.Second, wantWithin: "more than five seconds and at most ten"},
+	} {
+		shrinker, calls, _ = scriptedShrinker(reply("Short."))
+		if _, _, err := shrinker.Fit(context.Background(), tt.sent, validate); err != nil {
+			t.Fatalf("%s: Fit() error = %v", tt.key, err)
+		}
+		if len(*calls) != 1 || (*calls)[0].field.Key != tt.key {
+			t.Fatalf("%s: shrink calls = %+v, want one for %s", tt.key, *calls, tt.key)
+		}
+		if d := (*calls)[0].deadline; d <= tt.min || d > tt.max {
+			t.Errorf("%s shrink call deadline = %v, want %s", tt.key, d, tt.wantWithin)
+		}
 	}
 }
 
 // TestFitLeavesAnyOtherViolationToTheModel pins that one violation of any
-// other kind, or one overrun past half its limit, keeps every overrun away
-// from the shrink model and returns the refusal the writer built.
+// other kind, one overrun past half its limit, or a digest over its budget
+// by any amount keeps every overrun away from the shrink model and returns
+// the refusal the writer built.
 func TestFitLeavesAnyOtherViolationToTheModel(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +371,7 @@ func TestFitLeavesAnyOtherViolationToTheModel(t *testing.T) {
 		{name: "a reserved heading in another projection", mutate: func(p *Payload) { p.Teaser = "## Digest\n\nsmuggled" }},
 		{name: "a line break in the over-budget projection", mutate: func(p *Payload) { p.StatusLine += "\nmore" }},
 		{name: "a second overrun past half its limit", mutate: func(p *Payload) { p.Teaser = strings.Repeat("t", teaserMaxRunes*3/2+1) }},
+		{name: "a digest one character over", mutate: func(p *Payload) { p.Digest = strings.Repeat("d", digestMaxRunes+1) }},
 		{name: "within half its words but past half its characters", mutate: func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+2, "fifteencharsxyz") }},
 		{name: "a writer's own rule", domain: func(Payload) error { return errors.New("status_line repeats the subject name") }},
 	}

@@ -9,10 +9,22 @@ import (
 	"time"
 )
 
-const (
-	shrinkAttempts       = 2
-	shrinkAttemptTimeout = 5 * time.Second
-)
+const shrinkAttempts = 2
+
+// shrinkCallTimeouts bounds one Shrink call for each projection the shrinker
+// shortens, sized to the longest reply that projection accepts: at about
+// three characters a token and 20 tokens a second, the slow end of a local
+// model's decode, a status line's 180 characters take about three seconds
+// and a teaser's 500 about eight, each with a second more for the first
+// token. A projection absent here is never shrunk, and its refusal reaches
+// the author as written. A digest's 2,048 characters would take about 35
+// seconds a call, so two calls could hold a write for over a minute, and
+// whether a shrink keeps the facts of a summary that long is unmeasured;
+// full is longer still.
+var shrinkCallTimeouts = map[string]time.Duration{
+	string(StatusLine): 5 * time.Second,
+	string(Teaser):     10 * time.Second,
+}
 
 // Shrinker lets a faceted write land when all that is wrong with it is a
 // projection a little over its budget: an author that has stalled just over
@@ -53,12 +65,12 @@ type Shortened struct {
 //  1. A payload validate accepts, or any refusal from a nil Shrinker, comes
 //     back unchanged.
 //  2. Shrinking is attempted only when every violation in the refusal is a
-//     projection over its budget and over none of its limits by more than
-//     half that limit.
-//  3. Each such projection gets at most two Shrink calls of a few seconds
-//     each; the first result that is non-empty, within every limit of the
-//     projection, and single-line where the projection requires it replaces
-//     the projection.
+//     projection the shrinker shortens (status_line or teaser) over its
+//     budget and over none of its limits by more than half that limit.
+//  3. Each such projection gets at most two Shrink calls, each bounded by a
+//     deadline sized to the projection; the first result that is
+//     non-empty, within every limit of the projection, and single-line
+//     where the projection requires it replaces the projection.
 //  4. validate runs again on the adjusted payload. If it passes, Fit returns
 //     that payload and one [Shortened] per replaced projection; if anything
 //     failed, the original payload and refusal, so the model only ever reads
@@ -107,15 +119,17 @@ func (s *Shrinker) Report(ctx context.Context, shortened []Shortened, err error)
 }
 
 // smallOverruns appends each over-budget violation in err's tree to found and
-// reports whether every violation is one over by at most half of each of
-// its projection's limits, the one reported and any other.
+// reports whether every violation is one in a projection the shrinker
+// shortens ([shrinkCallTimeouts]), over by at most half of each of its
+// limits, the one reported and any other.
 // Wrappers (a frame, a label, a mark) are transparent; any other leaf is a
 // violation shrinking cannot repair.
 func smallOverruns(err error, found *[]*overBudget) bool {
 	switch e := err.(type) {
 	case *overBudget:
 		*found = append(*found, e)
-		return e.withinHalf()
+		_, shortens := shrinkCallTimeouts[e.key]
+		return shortens && e.withinHalf()
 	case interface{ Unwrap() []error }:
 		for _, child := range e.Unwrap() {
 			if !smallOverruns(child, found) {
@@ -150,7 +164,7 @@ func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error)
 	var reason error
 	for entry.attempts < shrinkAttempts {
 		entry.attempts++
-		callCtx, cancel := context.WithTimeout(ctx, shrinkAttemptTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, shrinkCallTimeouts[field.Key])
 		candidate, err := s.Shrink(callCtx, entry.sent, field, entry.over.ask())
 		cancel()
 		candidate = strings.TrimSpace(candidate)
