@@ -125,15 +125,18 @@ func limitsOf(field Field) []budgetLimit {
 // TestFitShrinksOnlyOverrunsWithinHalfTheLimit generates every budgeted
 // projection over each of its limits at three overages — one over, exactly
 // half the limit over (the last overage that shrinks), and one past that —
-// and checks only the first two reach the shrink model, which is handed the
-// projection's field, and that the result reports the limit in its unit.
+// and checks only the first two of a status line or teaser reach the shrink
+// model, which is handed the projection's field, and that the result
+// reports the limit in its unit. A digest never reaches it: rewriting one
+// takes longer than a write should wait.
 func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, field := range DefaultContract().Fields() {
 		for _, limit := range limitsOf(field) {
 			for _, overage := range []int{1, limit.limit / 2, limit.limit/2 + 1} {
-				wantShrink := overage <= limit.limit/2
+				shortens := field.Key == "status_line" || field.Key == "teaser"
+				wantShrink := shortens && overage <= limit.limit/2
 				t.Run(fmt.Sprintf("%s %s over", field.Key, limit.unit.count(overage)), func(t *testing.T) {
 					t.Parallel()
 					sent := validShrinkPayload()
@@ -146,7 +149,7 @@ func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 					if !wantShrink {
 						assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
 						if len(*calls) != 0 {
-							t.Fatalf("shrink called %d times for an overage past half the limit", len(*calls))
+							t.Fatalf("shrink called %d times for an overrun it must leave to the author", len(*calls))
 						}
 						return
 					}
@@ -300,44 +303,105 @@ func mentions(text, name string) error {
 	return nil
 }
 
-// TestFitBoundsEachShrinkCall pins that every call runs on its own deadline
-// of a few seconds, and that a call that runs into it costs the write
-// nothing but the original refusal.
+// TestFitBoundsEachShrinkCall pins the deadline a projection's shrink calls
+// share. It is sized to the projection, at most 6.5 seconds for a status
+// line and 14.5 for a teaser, so a write with both over waits at most 21,
+// inside a delegate's default 30-second tool timeout. A reply refused
+// quickly leaves the rest of it to a second call; a call that runs it out
+// is the last, costing the write nothing but the original refusal; a reply
+// refused with too little left for another call's first token ends the
+// shrink with its own reason, not a timeout; and a reply that arrives as
+// the deadline passes is still used.
 func TestFitBoundsEachShrinkCall(t *testing.T) {
 	t.Parallel()
 
 	sent := validShrinkPayload()
 	sent.StatusLine = wordsOf(statusLineMaxWords+1, "s")
+	stillOver := wordsOf(statusLineMaxWords+1, "s")
+	validate, refusals := writerValidate(nil)
+	within := func(d time.Duration) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), d)
+	}
+
 	waits := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
 	shrinker, calls, logs := scriptedShrinker(waits)
-	validate, refusals := writerValidate(nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := within(50 * time.Millisecond)
 	defer cancel()
-
 	got, shortened, err := shrinker.Fit(ctx, sent, validate)
 	assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
-	if len(*calls) != shrinkAttempts {
-		t.Fatalf("shrink calls = %d, want %d", len(*calls), shrinkAttempts)
+	if len(*calls) != 1 {
+		t.Fatalf("shrink calls = %d after one ran out the deadline, want 1", len(*calls))
 	}
 	if !strings.Contains(logs.String(), context.DeadlineExceeded.Error()) {
 		t.Errorf("log = %s, want the deadline as the reason", logs)
 	}
 
-	shrinker, calls, _ = scriptedShrinker(reply("Short."))
-	if _, _, err := shrinker.Fit(context.Background(), sent, validate); err != nil {
-		t.Fatalf("Fit() error = %v", err)
+	late := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
+		<-ctx.Done()
+		return "Short.", nil
 	}
-	if d := (*calls)[0].deadline; d <= 0 || d > 5*time.Second {
-		t.Fatalf("shrink call deadline = %v, want one of at most five seconds", d)
+	shrinker, calls, _ = scriptedShrinker(late)
+	ctx, cancel = within(50 * time.Millisecond)
+	defer cancel()
+	if got, _, err := shrinker.Fit(ctx, sent, validate); err != nil || got.StatusLine != "Short." || len(*calls) != 1 {
+		t.Fatalf("Fit() = %q, %v after %d calls; want the reply that arrived as the deadline passed saved", got.StatusLine, err, len(*calls))
+	}
+
+	shrinker, calls, logs = scriptedShrinker(reply(stillOver), reply("Short."))
+	validate, refusals = writerValidate(nil)
+	ctx, cancel = within(time.Second)
+	defer cancel()
+	got, shortened, err = shrinker.Fit(ctx, sent, validate)
+	assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
+	if len(*calls) != 1 {
+		t.Fatalf("shrink calls = %d with under a first token's wait left, want 1", len(*calls))
+	}
+	if outcome := logs.String(); !strings.Contains(outcome, "still over") || strings.Contains(outcome, context.DeadlineExceeded.Error()) {
+		t.Errorf("log = %s, want the refusal to keep the reply's own reason", outcome)
+	}
+
+	slowlyOver := func(context.Context, string, Field, string) (string, error) {
+		time.Sleep(20 * time.Millisecond)
+		return stillOver, nil
+	}
+	shrinker, calls, _ = scriptedShrinker(slowlyOver, reply("Short."))
+	if _, _, err := shrinker.Fit(context.Background(), sent, validate); err != nil {
+		t.Fatalf("Fit() error = %v, want the second call's reply saved", err)
+	}
+	if len(*calls) != 2 || (*calls)[1].deadline > (*calls)[0].deadline-20*time.Millisecond {
+		t.Fatalf("shrink calls = %+v, want the second on what the first left of one deadline", *calls)
+	}
+
+	teaser := validShrinkPayload()
+	teaser.Teaser = strings.Repeat("t", teaserMaxRunes+40)
+	for _, tt := range []struct {
+		key      string
+		sent     Payload
+		min, max time.Duration
+	}{
+		{key: "status_line", sent: sent, min: 6 * time.Second, max: 6500 * time.Millisecond},
+		{key: "teaser", sent: teaser, min: 14 * time.Second, max: 14500 * time.Millisecond},
+	} {
+		shrinker, calls, _ = scriptedShrinker(reply("Short."))
+		if _, _, err := shrinker.Fit(context.Background(), tt.sent, validate); err != nil {
+			t.Fatalf("%s: Fit() error = %v", tt.key, err)
+		}
+		if len(*calls) != 1 || (*calls)[0].field.Key != tt.key {
+			t.Fatalf("%s: shrink calls = %+v, want one for %s", tt.key, *calls, tt.key)
+		}
+		if d := (*calls)[0].deadline; d <= tt.min || d > tt.max {
+			t.Errorf("%s shrink deadline = %v, want more than %v and at most %v", tt.key, d, tt.min, tt.max)
+		}
 	}
 }
 
 // TestFitLeavesAnyOtherViolationToTheModel pins that one violation of any
-// other kind, or one overrun past half its limit, keeps every overrun away
-// from the shrink model and returns the refusal the writer built.
+// other kind, one overrun past half its limit, or a digest over its budget
+// by any amount keeps every overrun away from the shrink model and returns
+// the refusal the writer built.
 func TestFitLeavesAnyOtherViolationToTheModel(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +414,7 @@ func TestFitLeavesAnyOtherViolationToTheModel(t *testing.T) {
 		{name: "a reserved heading in another projection", mutate: func(p *Payload) { p.Teaser = "## Digest\n\nsmuggled" }},
 		{name: "a line break in the over-budget projection", mutate: func(p *Payload) { p.StatusLine += "\nmore" }},
 		{name: "a second overrun past half its limit", mutate: func(p *Payload) { p.Teaser = strings.Repeat("t", teaserMaxRunes*3/2+1) }},
+		{name: "a digest one character over", mutate: func(p *Payload) { p.Digest = strings.Repeat("d", digestMaxRunes+1) }},
 		{name: "within half its words but past half its characters", mutate: func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+2, "fifteencharsxyz") }},
 		{name: "a writer's own rule", domain: func(Payload) error { return errors.New("status_line repeats the subject name") }},
 	}

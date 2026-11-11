@@ -16,7 +16,7 @@ import (
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
-// shrinkTargets are the budgeted projections a shrink can touch, each with
+// shrinkTargets are the projections a shrink can touch, each with
 // a sent value a quarter over its budget (status_line's in words), the
 // clean reply it gets when another projection carries the case's reply, and
 // the length of a multi-byte reply that sits within its limits.
@@ -26,7 +26,6 @@ var shrinkTargets = []struct {
 }{
 	{key: "status_line", sent: strings.TrimSpace(strings.Repeat("s ", 25)), clean: "Clean status.", replyRunes: 96},
 	{key: "teaser", sent: strings.Repeat("t", 625), clean: "Clean teaser.", replyRunes: 400},
-	{key: "digest", sent: strings.Repeat("d", 2560), clean: "Clean digest.", replyRunes: 1638},
 }
 
 // glyphImpostors are the characters the store folds before it saves.
@@ -48,7 +47,7 @@ type hostileReply struct {
 	full        string
 }
 
-var everywhere = []string{"status_line", "teaser", "digest"}
+var everywhere = []string{"status_line", "teaser"}
 
 // hostileShrinkReplies is doc_write's invariant corpus (the dossier test
 // carries its own, with the dossier's rules added): every glyph impostor
@@ -182,8 +181,8 @@ func keyShrinker(replies map[string]string) *documentfacets.Shrinker {
 // shortened projection read back from disk equal to the saved_text the
 // result reports, or it returns byte for byte the refusal the same write
 // returns with no shrinker, and leaves nothing on disk. Every reply runs
-// in each budgeted projection, once as the only overrun and once with all
-// three over and the others given clean replies.
+// in each projection a shrink can touch, once as the only overrun and once
+// with both over and the other given a clean reply.
 func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +192,7 @@ func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 			for _, together := range []bool{false, true} {
 				name := fmt.Sprintf("%s/in %s", row.name, target.key)
 				if together {
-					name += " with every projection over"
+					name += " with both over"
 				}
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()
@@ -239,8 +238,6 @@ func setProjection(payload *documentfacets.Payload, key, value string) {
 		payload.StatusLine = value
 	case "teaser":
 		payload.Teaser = value
-	case "digest":
-		payload.Digest = value
 	}
 }
 

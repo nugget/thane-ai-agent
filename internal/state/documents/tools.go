@@ -34,8 +34,8 @@ type Tools struct {
 }
 
 // NewTools creates a document tool surface. A non-nil shrinker lets a
-// faceted write refused only for small projection overruns land shortened
-// ([documentfacets.Shrinker.Fit]); nil refuses it as written.
+// faceted write refused only for small status_line or teaser overruns land
+// shortened ([documentfacets.Shrinker.Fit]); nil refuses it as written.
 func NewTools(store *Store, shrinker *documentfacets.Shrinker) *Tools {
 	return &Tools{
 		store:    store,

@@ -65,8 +65,9 @@ func TestFacetShrinkerIsOffUntilAModelIsConfigured(t *testing.T) {
 
 // TestShrinkFacetTextAsksOnceWithNoTools pins the call shape: one bounded,
 // tool-free request naming the limit and asking to keep the text's line
-// structure (a digest may be a list; a single-line projection only reaches
-// a shrink already single-line), with the projection text as the user turn.
+// structure (a teaser may run to several lines; a single-line projection
+// only reaches a shrink already single-line), with the projection text as
+// the user turn.
 // A reply cut off at the output bound is refused rather than saved, whether
 // the provider reports the stop reason or only the tokens it spent, and its
 // text comes back with the refusal for the shrinker's rejected-reply log.

@@ -51,8 +51,8 @@ type DossierReadArgs struct {
 // ConfigureDossierDocuments installs the managed document surface used by
 // [Tools.ReadDossier] and [Tools.WriteDossier]. Configure it only after the
 // document store has been initialized so every advertised tool is callable.
-// A non-nil shrinker lets a dossier refused only for small projection
-// overruns land shortened ([documentfacets.Shrinker.Fit]).
+// A non-nil shrinker lets a dossier refused only for small status_line or
+// teaser overruns land shortened ([documentfacets.Shrinker.Fit]).
 func (t *Tools) ConfigureDossierDocuments(
 	read func(context.Context, documents.RefArgs) (string, error),
 	write func(context.Context, documents.FacetedWriteArgs) (string, error),
