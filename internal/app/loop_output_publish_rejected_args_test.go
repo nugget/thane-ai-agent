@@ -24,7 +24,7 @@ func TestPublishToolMarksRejectedArguments(t *testing.T) {
 	}{
 		{
 			name: "over budget",
-			args: map[string]any{"status_line": strings.Repeat("s", 121), "teaser": "Open for the hook.", "full": "Complete detail."},
+			args: map[string]any{"status_line": strings.TrimSpace(strings.Repeat("word ", 21)), "teaser": "Open for the hook.", "full": "Complete detail."},
 			want: []string{"status_line"},
 		},
 		{

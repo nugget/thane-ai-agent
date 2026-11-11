@@ -112,7 +112,12 @@ type Payload struct {
 
 // Field describes one projection field exposed by a structured writer.
 type Field struct {
-	Key         string                         `json:"key"`
+	Key string `json:"key"`
+	// MaxWords is the most words the value may hold, counted by
+	// [WordCount]; zero sets no word limit.
+	MaxWords int `json:"max_words,omitempty"`
+	// MaxRunes is the most characters the value may hold; zero sets no
+	// character limit.
 	MaxRunes    int                            `json:"max_runes"`
 	SingleLine  bool                           `json:"single_line"`
 	Guidance    string                         `json:"guidance"`

@@ -484,15 +484,23 @@ write therefore does not create ordering-only Git noise.
 `doc_write` is the normal logical mutation surface for a document with no
 narrower owner. It can create one at a deliberate ref, self-migrate a legacy or
 body-only document, or update an existing faceted document. The model supplies
-projections, not headings; Go applies the shared single-line and rune budgets,
-requires every already-present projection, renders the canonical section
-order, and stamps `managed_by: doc_write`. The document store independently
+projections, not headings; Go applies the shared single-line, word and
+character budgets, requires every already-present projection, renders the
+canonical section order, and stamps `managed_by: doc_write`. The document store independently
 rejects malformed or over-budget facet envelopes before any filesystem or Git
 mutation, regardless of which internal caller reached it. A refused write
 stores nothing and reports every violation together. An over-budget projection
-carries its overage and a fix sized to it: rewording for a gap within a tenth
-of the limit or 30 characters, whichever is larger, and removing whole items
-past that. The error names no retry count.
+carries its overage, in the unit of the limit it broke, and a fix sized to it:
+rewording for a gap within a tenth of the limit or 30 characters (five words
+for `status_line`, whose budget is 20 words), whichever is larger, and removing
+whole items past that. A status line within its words but past its
+180-character backstop is refused in characters. One over both is refused in
+words alone, with a cut that clears both whichever words are cut. A
+`status_line` declared `json` has no word budget and is held to its 180
+characters; only a loop declares one, and `loop_create`'s `output.initial`
+and `output.migration` seeds say so beside the word budget because they
+describe `status_line` before `output.facets` fixes its format. The error
+names no retry count.
 
 `doc_body_write` is the narrow exception for a document intentionally kept as
 one undifferentiated Markdown body. It still uses managed-root policy,
@@ -646,9 +654,10 @@ manually transcribed refs.
 `contact_dossier_write` is the canonical mutation door on a managed-writable
 root. It accepts the contact UUID plus status-line, teaser, digest, and full
 content, then derives the ref, exact private tag, frontmatter, and section
-layout in Go. Projection budgets are advertised in the schema, and one failed
-call stores nothing and reports every independently correctable projection
-violation together.
+layout in Go. Projection budgets are advertised in the schema, `status_line`'s
+in words; its 180-character backstop, which no ordinary line reaches, is named
+only by the refusal that enforces it. One failed call stores nothing and
+reports every independently correctable projection violation together.
 Generic document mutators reject the dossier and name
 `contact_dossier_write`; operator recovery remains available through Git
 history and direct repository administration rather than a second model-facing

@@ -15,20 +15,26 @@ import (
 )
 
 // shrinkReply scripts one call of a fake Shrink.
-type shrinkReply func(ctx context.Context, text string, limit int) (string, error)
+type shrinkReply func(ctx context.Context, text string, field Field, limits string) (string, error)
 
 func reply(text string) shrinkReply {
-	return func(context.Context, string, int) (string, error) { return text, nil }
+	return func(context.Context, string, Field, string) (string, error) { return text, nil }
 }
 
 func replyErr(err error) shrinkReply {
-	return func(context.Context, string, int) (string, error) { return "", err }
+	return func(context.Context, string, Field, string) (string, error) { return "", err }
+}
+
+// wordsOf returns n copies of word separated by single spaces.
+func wordsOf(n int, word string) string {
+	return strings.TrimSpace(strings.Repeat(word+" ", n))
 }
 
 // shrinkCall records what one call of a fake Shrink received.
 type shrinkCall struct {
 	text     string
-	limit    int
+	field    Field
+	limits   string
 	deadline time.Duration
 }
 
@@ -41,13 +47,13 @@ func scriptedShrinker(replies ...shrinkReply) (*Shrinker, *[]shrinkCall, *bytes.
 	return &Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewJSONHandler(logs, nil)),
-		Shrink: func(ctx context.Context, text string, limit int) (string, error) {
-			call := shrinkCall{text: text, limit: limit}
+		Shrink: func(ctx context.Context, text string, field Field, limits string) (string, error) {
+			call := shrinkCall{text: text, field: field, limits: limits}
 			if deadline, ok := ctx.Deadline(); ok {
 				call.deadline = time.Until(deadline)
 			}
 			*calls = append(*calls, call)
-			return replies[min(len(*calls), len(replies))-1](ctx, text, limit)
+			return replies[min(len(*calls), len(replies))-1](ctx, text, field, limits)
 		},
 	}, calls, logs
 }
@@ -93,53 +99,113 @@ func assertRefusedUnchanged(t *testing.T, got Payload, shortened []Shortened, er
 	}
 }
 
+// budgetLimit is one limit of one projection, with text generated to any
+// length in its unit and a text that sits exactly at it.
+type budgetLimit struct {
+	unit  unit
+	limit int
+	text  func(n int) string
+	fits  string
+}
+
+// limitsOf returns every limit field carries. Characters are counted in
+// runes, so character text is multi-byte; words are runs between spaces, so
+// a word overrun is many short words and a character overrun one long word.
+func limitsOf(field Field) []budgetLimit {
+	var limits []budgetLimit
+	if field.MaxWords > 0 {
+		limits = append(limits, budgetLimit{unitWords, field.MaxWords, func(n int) string { return wordsOf(n, "é") }, wordsOf(field.MaxWords, "y")})
+	}
+	if field.MaxRunes > 0 {
+		limits = append(limits, budgetLimit{unitCharacters, field.MaxRunes, func(n int) string { return strings.Repeat("é", n) }, strings.Repeat("y", field.MaxRunes)})
+	}
+	return limits
+}
+
 // TestFitShrinksOnlyOverrunsWithinHalfTheLimit generates every budgeted
-// projection at three overages — one rune over, exactly half the limit over
-// (the last overage that shrinks), and one past that — and checks only the
-// first two reach the shrink model. Overruns are counted in runes, so the
-// generated text is multi-byte.
+// projection over each of its limits at three overages — one over, exactly
+// half the limit over (the last overage that shrinks), and one past that —
+// and checks only the first two reach the shrink model, which is handed the
+// projection's field, and that the result reports the limit in its unit.
 func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, field := range DefaultContract().Fields() {
-		if field.MaxRunes == 0 {
-			continue
-		}
-		for _, overage := range []int{1, field.MaxRunes / 2, field.MaxRunes/2 + 1} {
-			wantShrink := overage <= field.MaxRunes/2
-			t.Run(fmt.Sprintf("%s %d over", field.Key, overage), func(t *testing.T) {
-				t.Parallel()
-				sent := validShrinkPayload()
-				item, _ := sectionByKey(field.Key)
-				*item.value(&sent) = strings.Repeat("é", field.MaxRunes+overage)
-				fits := strings.Repeat("y", field.MaxRunes)
-				shrinker, calls, _ := scriptedShrinker(reply(fits))
-				validate, refusals := writerValidate(nil)
+		for _, limit := range limitsOf(field) {
+			for _, overage := range []int{1, limit.limit / 2, limit.limit/2 + 1} {
+				wantShrink := overage <= limit.limit/2
+				t.Run(fmt.Sprintf("%s %s over", field.Key, limit.unit.count(overage)), func(t *testing.T) {
+					t.Parallel()
+					sent := validShrinkPayload()
+					item, _ := sectionByKey(field.Key)
+					*item.value(&sent) = limit.text(limit.limit + overage)
+					shrinker, calls, _ := scriptedShrinker(reply(limit.fits))
+					validate, refusals := writerValidate(nil)
 
-				got, shortened, err := shrinker.Fit(context.Background(), sent, validate)
-				if !wantShrink {
-					assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
-					if len(*calls) != 0 {
-						t.Fatalf("shrink called %d times for an overage past half the limit", len(*calls))
+					got, shortened, err := shrinker.Fit(context.Background(), sent, validate)
+					if !wantShrink {
+						assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
+						if len(*calls) != 0 {
+							t.Fatalf("shrink called %d times for an overage past half the limit", len(*calls))
+						}
+						return
 					}
-					return
-				}
-				if err != nil {
-					t.Fatalf("Fit() error = %v, want the shortened payload", err)
-				}
-				if len(*calls) != 1 || (*calls)[0].limit != field.MaxRunes || (*calls)[0].text != *item.value(&sent) {
-					t.Fatalf("shrink calls = %+v, want one with the sent text and limit %d", *calls, field.MaxRunes)
-				}
-				if value := *item.value(&got); value != fits {
-					t.Fatalf("%s = %q, want the shortened text", field.Key, value)
-				}
-				want := Shortened{Projection: field.Key, Limit: field.MaxRunes, SentCharacters: field.MaxRunes + overage, SavedCharacters: field.MaxRunes, SavedText: fits}
-				if len(shortened) != 1 || shortened[0].Projection != want.Projection || shortened[0].Limit != want.Limit ||
-					shortened[0].SentCharacters != want.SentCharacters || shortened[0].SavedCharacters != want.SavedCharacters || shortened[0].SavedText != want.SavedText {
-					t.Fatalf("shortened = %+v, want %+v", shortened, want)
-				}
-			})
+					if err != nil {
+						t.Fatalf("Fit() error = %v, want the shortened payload", err)
+					}
+					if len(*calls) != 1 || (*calls)[0].field.Key != field.Key || (*calls)[0].limits != limit.unit.count(limit.limit) || (*calls)[0].text != *item.value(&sent) {
+						t.Fatalf("shrink calls = %+v, want one with the sent text, the %s field and the limit %s", *calls, field.Key, limit.unit.count(limit.limit))
+					}
+					if value := *item.value(&got); value != limit.fits {
+						t.Fatalf("%s = %q, want the shortened text", field.Key, value)
+					}
+					want := Shortened{Projection: field.Key, Limit: limit.unit.count(limit.limit), Sent: limit.unit.count(limit.limit + overage), Saved: limit.unit.count(limit.limit), SavedText: limit.fits}
+					if len(shortened) != 1 || !sameShortened(shortened[0], want) {
+						t.Fatalf("shortened = %+v, want %+v", shortened, want)
+					}
+				})
+			}
 		}
+	}
+}
+
+// sameShortened compares the fields a writer reports.
+func sameShortened(got, want Shortened) bool {
+	return got.Projection == want.Projection && got.Limit == want.Limit && got.Sent == want.Sent && got.Saved == want.Saved && got.SavedText == want.SavedText
+}
+
+// TestFitShortensAProjectionOverBothLimitsOnce pins a status line over its
+// word limit and its character backstop at once: it is refused and
+// reported in words alone, shrunk once, and a reply must fit both limits
+// to be saved.
+func TestFitShortensAProjectionOverBothLimitsOnce(t *testing.T) {
+	t.Parallel()
+
+	sent := validShrinkPayload()
+	sent.StatusLine = wordsOf(statusLineMaxWords+2, "ninechars")
+	if WordCount(sent.StatusLine) <= statusLineMaxWords || len(sent.StatusLine) <= statusLineMaxRunes {
+		t.Fatalf("status line %q is not over both limits", sent.StatusLine)
+	}
+	longWords := wordsOf(statusLineMaxWords, "ninechars")
+	shrinker, calls, logs := scriptedShrinker(reply(longWords), reply("Short."))
+	validate, _ := writerValidate(nil)
+
+	got, shortened, err := shrinker.Fit(context.Background(), sent, validate)
+	if err != nil {
+		t.Fatalf("Fit() error = %v, want the shortened payload", err)
+	}
+	if len(*calls) != 2 || got.StatusLine != "Short." {
+		t.Fatalf("Fit() = %q after %d calls, want the second reply, since the first is within 20 words but over 180 characters", got.StatusLine, len(*calls))
+	}
+	if limits := (*calls)[0].limits; limits != "20 words and 180 characters" {
+		t.Errorf("shrink asked for %q, want both limits the text broke", limits)
+	}
+	want := Shortened{Projection: "status_line", Limit: "20 words", Sent: "22 words", Saved: "1 word", SavedText: "Short."}
+	if len(shortened) != 1 || !sameShortened(shortened[0], want) {
+		t.Fatalf("shortened = %+v, want one entry %+v", shortened, want)
+	}
+	if want := "the shortened text is 199 characters, still over 180"; !strings.Contains(logs.String(), want) {
+		t.Errorf("log = %s, want the first reply rejected with %q", logs, want)
 	}
 }
 
@@ -150,8 +216,8 @@ func TestFitShrinksOnlyOverrunsWithinHalfTheLimit(t *testing.T) {
 func TestFitAcceptsOnlyAShrinkThatFits(t *testing.T) {
 	t.Parallel()
 
-	overStatus := strings.Repeat("s", statusLineMaxRunes+22)
-	fits := strings.Repeat("f", statusLineMaxRunes)
+	overStatus := wordsOf(statusLineMaxWords+3, "status")
+	fits := wordsOf(statusLineMaxWords, "fit")
 	tests := []struct {
 		name      string
 		mutate    func(*Payload)
@@ -164,9 +230,10 @@ func TestFitAcceptsOnlyAShrinkThatFits(t *testing.T) {
 	}{
 		{name: "fits on the first call", replies: []shrinkReply{reply(fits)}, wantCalls: 1, want: map[string]string{"status_line": fits}},
 		{name: "surrounding whitespace is trimmed", replies: []shrinkReply{reply("  Shorter.\n")}, wantCalls: 1, want: map[string]string{"status_line": "Shorter."}},
-		{name: "still over, then fits", replies: []shrinkReply{reply(fits + "!"), reply(fits)}, wantCalls: 2, want: map[string]string{"status_line": fits}},
+		{name: "still over, then fits", replies: []shrinkReply{reply(fits + " more"), reply(fits)}, wantCalls: 2, want: map[string]string{"status_line": fits}},
 		{name: "an error, then fits", replies: []shrinkReply{replyErr(errors.New("upstream 503")), reply(fits)}, wantCalls: 2, want: map[string]string{"status_line": fits}},
-		{name: "still over twice", replies: []shrinkReply{reply(fits + "!")}, wantCalls: 2},
+		{name: "still over twice", replies: []shrinkReply{reply(fits + " more")}, wantCalls: 2},
+		{name: "within the words but over the characters", replies: []shrinkReply{reply(wordsOf(statusLineMaxWords, "ninechars"))}, wantCalls: 2},
 		{name: "multi-line on a single-line projection", replies: []shrinkReply{reply("one\ntwo")}, wantCalls: 2},
 		{name: "empty, then only whitespace", replies: []shrinkReply{reply(""), reply(" \n ")}, wantCalls: 2},
 		{name: "an error twice", replies: []shrinkReply{replyErr(errors.New("upstream 503"))}, wantCalls: 2},
@@ -240,8 +307,8 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 	t.Parallel()
 
 	sent := validShrinkPayload()
-	sent.StatusLine = strings.Repeat("s", statusLineMaxRunes+5)
-	waits := func(ctx context.Context, _ string, _ int) (string, error) {
+	sent.StatusLine = wordsOf(statusLineMaxWords+1, "s")
+	waits := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
@@ -283,13 +350,14 @@ func TestFitLeavesAnyOtherViolationToTheModel(t *testing.T) {
 		{name: "a reserved heading in another projection", mutate: func(p *Payload) { p.Teaser = "## Digest\n\nsmuggled" }},
 		{name: "a line break in the over-budget projection", mutate: func(p *Payload) { p.StatusLine += "\nmore" }},
 		{name: "a second overrun past half its limit", mutate: func(p *Payload) { p.Teaser = strings.Repeat("t", teaserMaxRunes*3/2+1) }},
+		{name: "within half its words but past half its characters", mutate: func(p *Payload) { p.StatusLine = wordsOf(statusLineMaxWords+2, "fifteencharsxyz") }},
 		{name: "a writer's own rule", domain: func(Payload) error { return errors.New("status_line repeats the subject name") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			sent := validShrinkPayload()
-			sent.StatusLine = strings.Repeat("s", statusLineMaxRunes+10)
+			sent.StatusLine = wordsOf(statusLineMaxWords+2, "s")
 			if tt.mutate != nil {
 				tt.mutate(&sent)
 			}
@@ -312,7 +380,7 @@ func TestFitWithoutAShrinkerIsTheWritersValidation(t *testing.T) {
 	t.Parallel()
 
 	over := validShrinkPayload()
-	over.StatusLine = strings.Repeat("s", statusLineMaxRunes+1)
+	over.StatusLine = wordsOf(statusLineMaxWords+1, "s")
 	for name, shrinker := range map[string]*Shrinker{"nil shrinker": nil, "no shrink func": {Model: "fast-model"}} {
 		validate, refusals := writerValidate(nil)
 		got, shortened, err := shrinker.Fit(context.Background(), over, validate)
@@ -350,8 +418,8 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 		rejected = "projection shrink reply rejected"
 		failed   = "projection shrink failed; the original refusal stands"
 	)
-	over := strings.Repeat("s", statusLineMaxRunes+22)
-	stillOver := strings.Repeat("r", statusLineMaxRunes+10)
+	over := wordsOf(statusLineMaxWords+2, "s")
+	stillOver := wordsOf(statusLineMaxWords+1, "r")
 	overTeaser := strings.Repeat("t", teaserMaxRunes+40)
 	for _, tt := range []struct {
 		name     string
@@ -364,8 +432,8 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			name:    "shortened",
 			replies: []shrinkReply{reply("Short.")},
 			want: []map[string]any{{
-				"level": "INFO", "msg": saved, "facet": "status_line", "limit": 120.0, "original_runes": 142.0, "model": "fast-model",
-				"attempts": 1.0, "original_text": over, "new_runes": 6.0, "new_text": "Short.", "reason": nil,
+				"level": "INFO", "msg": saved, "facet": "status_line", "limit": 20.0, "unit": "word", "original_length": 22.0, "model": "fast-model",
+				"attempts": 1.0, "original_text": over, "new_length": 1.0, "new_text": "Short.", "reason": nil,
 			}},
 		},
 		{
@@ -381,7 +449,7 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			name:    "every reply the model gave",
 			replies: []shrinkReply{reply(stillOver), replyErr(errors.New("upstream 503"))},
 			want: []map[string]any{
-				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_runes": 130.0, "new_text": stillOver, "reason": "the shortened text is 130 characters, still over 120"},
+				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_length": 21.0, "new_text": stillOver, "reason": "the shortened text is 21 words, still over 20"},
 				{"msg": rejected, "facet": "status_line", "attempts": 2.0, "new_text": nil, "reason": "upstream 503"},
 				{"msg": failed, "facet": "status_line", "attempts": 2.0, "original_text": over, "new_text": nil, "reason": "status_line was not shortened: upstream 503"},
 			},
@@ -390,11 +458,11 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			// A reply refused with its text, as app wiring refuses one cut
 			// off at the output cap, keeps that text in the record.
 			name: "a reply refused with its text",
-			replies: []shrinkReply{func(context.Context, string, int) (string, error) {
+			replies: []shrinkReply{func(context.Context, string, Field, string) (string, error) {
 				return "Status OK, but cut", errors.New("the reply stopped at the 240-token output bound")
 			}},
 			want: []map[string]any{
-				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_runes": 18.0, "new_text": "Status OK, but cut", "reason": "the reply stopped at the 240-token output bound"},
+				{"msg": rejected, "facet": "status_line", "attempts": 1.0, "new_length": 4.0, "new_text": "Status OK, but cut", "reason": "the reply stopped at the 240-token output bound"},
 				{"msg": rejected, "facet": "status_line", "attempts": 2.0, "new_text": "Status OK, but cut", "reason": "the reply stopped at the 240-token output bound"},
 				{"msg": failed, "facet": "status_line", "attempts": 2.0, "new_text": nil, "reason": "status_line was not shortened: the reply stopped at the 240-token output bound"},
 			},
@@ -404,9 +472,9 @@ func TestFitLogsEveryShrinkForTheOperator(t *testing.T) {
 			mutate:  func(p *Payload) { p.Teaser = overTeaser },
 			replies: []shrinkReply{reply("Status OK."), replyErr(errors.New("upstream 503"))},
 			want: []map[string]any{
-				{"msg": rejected, "facet": "teaser", "attempts": 1.0, "reason": "upstream 503"},
+				{"msg": rejected, "facet": "teaser", "attempts": 1.0, "limit": 500.0, "unit": "character", "original_length": 540.0, "reason": "upstream 503"},
 				{"msg": rejected, "facet": "teaser", "attempts": 2.0, "reason": "upstream 503"},
-				{"msg": failed, "facet": "status_line", "attempts": 1.0, "original_text": over, "new_runes": 10.0, "new_text": "Status OK.", "reason": "teaser was not shortened: upstream 503"},
+				{"msg": failed, "facet": "status_line", "attempts": 1.0, "original_text": over, "new_length": 2.0, "new_text": "Status OK.", "reason": "teaser was not shortened: upstream 503"},
 				{"msg": failed, "facet": "teaser", "attempts": 2.0, "original_text": overTeaser, "new_text": nil, "reason": "teaser was not shortened: upstream 503"},
 			},
 		},

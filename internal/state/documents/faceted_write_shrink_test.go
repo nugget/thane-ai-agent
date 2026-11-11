@@ -14,13 +14,17 @@ import (
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
+// statusOverrun is a status line 22 words long, two over its 20-word
+// budget: an overrun small enough for a shrinker to take on.
+var statusOverrun = strings.TrimSpace(strings.Repeat("word ", 22))
+
 // replyingShrinker returns a Shrinker that answers every call with text and
 // counts the calls.
 func replyingShrinker(text string, calls *int) *documentfacets.Shrinker {
 	return &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(context.Context, string, int) (string, error) {
+		Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) {
 			*calls++
 			return text, nil
 		},
@@ -40,7 +44,7 @@ func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 	const saved = "Printer online and non-stop; two packages wait at the desk."
 	store, kbDir := newMutationStore(t)
 	calls := 0
-	sent := strings.Repeat("s", 142)
+	sent := strings.TrimSpace(strings.Repeat("word ", 22))
 	result, err := NewTools(store, replyingShrinker(reply, &calls)).Publish(context.Background(), PublishArgs{
 		Ref: "kb:status.md", StatusLine: sent, Full: "Complete detail.",
 	})
@@ -54,11 +58,11 @@ func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 		Applied   bool     `json:"applied"`
 		Warnings  []string `json:"warnings"`
 		Shortened []struct {
-			Projection      string `json:"projection"`
-			Limit           int    `json:"limit"`
-			SentCharacters  int    `json:"sent_characters"`
-			SavedCharacters int    `json:"saved_characters"`
-			SavedText       string `json:"saved_text"`
+			Projection string `json:"projection"`
+			Limit      string `json:"limit"`
+			Sent       string `json:"sent"`
+			Saved      string `json:"saved"`
+			SavedText  string `json:"saved_text"`
 		} `json:"shortened_projections"`
 	}
 	if err := json.Unmarshal([]byte(result), &decoded); err != nil {
@@ -68,8 +72,8 @@ func TestDocWriteSavesASmallOverrunShortened(t *testing.T) {
 		t.Fatalf("result = %s, want an applied write reporting one shortened projection", result)
 	}
 	got := decoded.Shortened[0]
-	if got.Projection != "status_line" || got.Limit != 120 || got.SentCharacters != 142 || got.SavedCharacters != len(saved) || got.SavedText != saved {
-		t.Errorf("shortened_projections[0] = %+v, want status_line 142 -> %d with the stored text %q", got, len(saved), saved)
+	if got.Projection != "status_line" || got.Limit != "20 words" || got.Sent != "22 words" || got.Saved != "10 words" || got.SavedText != saved {
+		t.Errorf("shortened_projections[0] = %+v, want status_line 22 -> 10 words against 20 with the stored text %q", got, saved)
 	}
 	if len(decoded.Warnings) != 1 || decoded.Warnings[0] != shortenedWarning {
 		t.Errorf("warnings = %q, want the shortened-projections note", decoded.Warnings)
@@ -139,12 +143,12 @@ func TestDocWriteRefusalIsUnchangedWhenShrinkCannotHelp(t *testing.T) {
 	}{
 		{
 			name:  "the shrink result is still over",
-			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."},
-			reply: strings.Repeat("r", 121), wantCalls: 2,
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: statusOverrun, Full: "Complete detail."},
+			reply: strings.TrimSpace(strings.Repeat("r ", 21)), wantCalls: 2,
 		},
 		{
 			name:  "another violation beside the overrun",
-			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "## Details\n\nsmuggled"},
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: statusOverrun, Full: "## Details\n\nsmuggled"},
 			reply: "Short.", wantCalls: 0,
 		},
 		{
@@ -152,14 +156,14 @@ func TestDocWriteRefusalIsUnchangedWhenShrinkCannotHelp(t *testing.T) {
 			// model wrote must come back as the model's own refusal, not
 			// as an error quoting text the model never sent.
 			name:  "the shrink result bakes in a rendered delta",
-			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."},
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: statusOverrun, Full: "Complete detail."},
 			reply: "Printer online; toner due +5d, order confirmed by email.", wantCalls: 1,
 		},
 		{
 			// The store folds a non-breaking hyphen before its guard runs,
 			// so the check of shortened text folds it first too.
 			name:  "the shrink result bakes in a delta behind a glyph artifact",
-			args:  PublishArgs{Ref: "kb:status.md", StatusLine: strings.Repeat("s", 142), Full: "Complete detail."},
+			args:  PublishArgs{Ref: "kb:status.md", StatusLine: statusOverrun, Full: "Complete detail."},
 			reply: "Printer back online ‑2h after the outage.", wantCalls: 1,
 		},
 	} {
@@ -239,10 +243,10 @@ func TestDocWriteLogsWhetherTheShortenedTextWasSaved(t *testing.T) {
 			shrinker := &documentfacets.Shrinker{
 				Model:  "fast-model",
 				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
-				Shrink: func(context.Context, string, int) (string, error) { return reply, nil },
+				Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return reply, nil },
 			}
 			args := tt.args
-			args.StatusLine = strings.Repeat("s", 142)
+			args.StatusLine = statusOverrun
 			result, err := NewTools(tt.store(t), shrinker).Publish(ctx, args)
 			if tt.wantReason != "" && (result != wantResult || fmt.Sprint(err) != fmt.Sprint(wantErr)) {
 				t.Errorf("Publish() = %s, %v; want what the author gets once it fixes the overrun itself: %s, %v", result, err, wantResult, wantErr)

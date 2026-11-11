@@ -289,9 +289,7 @@ func registerDocumentWriteTool(r *Registry, dt *documents.Tools) {
 			continue
 		}
 		description := field.Guidance + documentfacets.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
-		if field.MaxRunes > 0 {
-			description = fmt.Sprintf("%s Maximum %d characters — a ceiling, not a target; compose comfortably under it.", description, field.MaxRunes)
-		}
+		description += field.BudgetClause()
 		if key == "teaser" || key == "digest" {
 			description += " Optional when first adopting a document, but required on every later publish if the document already carries this projection."
 		}

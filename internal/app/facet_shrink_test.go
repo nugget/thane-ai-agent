@@ -73,15 +73,16 @@ func TestFacetShrinkerIsOffUntilAModelIsConfigured(t *testing.T) {
 func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 	t.Parallel()
 
+	statusLine, _ := documentfacets.FieldByKey("status_line")
 	client := &shrinkTestClient{reply: llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, StopReason: "stop"}}
-	got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120)
+	got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words and 180 characters")
 	if err != nil || got != "Shorter." {
 		t.Fatalf("shrinkFacetText() = %q, %v; want the reply text", got, err)
 	}
-	if client.model != "edge/fast-model" || client.tools != nil || client.maxOutputTokens != 240 {
-		t.Errorf("call = model %q, tools %v, max output %d; want edge/fast-model, no tools, 240", client.model, client.tools, client.maxOutputTokens)
+	if client.model != "edge/fast-model" || client.tools != nil || client.maxOutputTokens != 360 {
+		t.Errorf("call = model %q, tools %v, max output %d; want edge/fast-model, no tools, 360", client.model, client.tools, client.maxOutputTokens)
 	}
-	if len(client.messages) != 2 || client.messages[0].Role != "system" || !strings.Contains(client.messages[0].Content, "at most 120 characters") ||
+	if len(client.messages) != 2 || client.messages[0].Role != "system" || !strings.Contains(client.messages[0].Content, "at most 20 words and 180 characters.") ||
 		client.messages[1].Role != "user" || client.messages[1].Content != "A long status line." {
 		t.Errorf("messages = %+v, want the limit in the system turn and the text as the user turn", client.messages)
 	}
@@ -94,15 +95,15 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 		{Message: llm.Message{Content: "Short"}, StopReason: "max_tokens"},
 		// Ollama reports no stop reason; its token count still shows the
 		// reply spent the whole bound (thinking can, leaving a fragment).
-		{Message: llm.Message{Content: "Short"}, OutputTokens: 240},
+		{Message: llm.Message{Content: "Short"}, OutputTokens: 360},
 	} {
 		client.reply = cutOff
-		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err == nil || got != "Short" {
+		if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words"); err == nil || got != "Short" {
 			t.Errorf("cut-off reply %+v: shrinkFacetText() = %q, %v; want it refused with its text", cutOff, got, err)
 		}
 	}
-	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 239}
-	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", 120); err != nil || got != "Shorter." {
+	client.reply = llm.ChatResponse{Message: llm.Message{Content: "Shorter."}, OutputTokens: 359}
+	if got, err := shrinkFacetText(context.Background(), client, "edge/fast-model", "A long status line.", statusLine, "20 words"); err != nil || got != "Shorter." {
 		t.Errorf("reply one token under the bound: shrinkFacetText() = %q, %v; want it kept", got, err)
 	}
 }
@@ -134,9 +135,9 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 		{name: "provider classified it reasoning-only", err: reasoningOnly, wantFix: true, wantClass: llm.ErrReasoningOnly},
 		{name: "empty answer stopped by length", reply: llm.ChatResponse{StopReason: "length"}, wantFix: true},
 		{name: "blank answer stopped by max_tokens", reply: llm.ChatResponse{Message: llm.Message{Content: " \n"}, StopReason: "max_tokens"}, wantFix: true},
-		{name: "empty answer spent the bound with no stop reason", reply: llm.ChatResponse{OutputTokens: 240}, wantFix: true},
+		{name: "empty answer spent the bound with no stop reason", reply: llm.ChatResponse{OutputTokens: 360}, wantFix: true},
 		{name: "empty completion error at the bound by stop reason", reply: llm.ChatResponse{StopReason: "length", OutputTokens: 31}, err: emptyCompletion, wantFix: true, wantClass: llm.ErrEmptyCompletion},
-		{name: "empty completion error at the bound by token count", reply: llm.ChatResponse{OutputTokens: 240}, err: emptyCompletion, wantFix: true, wantClass: llm.ErrEmptyCompletion},
+		{name: "empty completion error at the bound by token count", reply: llm.ChatResponse{OutputTokens: 360}, err: emptyCompletion, wantFix: true, wantClass: llm.ErrEmptyCompletion},
 		{name: "empty completion error short of the bound", reply: llm.ChatResponse{StopReason: "stop", OutputTokens: 3}, err: emptyCompletion, wantClass: llm.ErrEmptyCompletion},
 		{name: "long answer cut off", reply: llm.ChatResponse{Message: llm.Message{Content: "Short"}, StopReason: "length"}},
 		{name: "call failed", err: errors.New("connection refused")},
@@ -164,7 +165,8 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 			}
 			defer cancel()
 			client := &shrinkTestClient{reply: tt.reply, err: tt.err, blocks: tt.blocks}
-			_, err := shrinkFacetText(ctx, client, "edge/fast-model", "A long status line.", 120)
+			statusLine, _ := documentfacets.FieldByKey("status_line")
+			_, err := shrinkFacetText(ctx, client, "edge/fast-model", "A long status line.", statusLine, "20 words")
 			if err == nil {
 				t.Fatal("shrinkFacetText() error = nil, want a refusal")
 			}
@@ -190,7 +192,7 @@ func TestPublishToolSavesASmallOverrunShortened(t *testing.T) {
 	shrinker := &documentfacets.Shrinker{
 		Model:  "fast-model",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Shrink: func(context.Context, string, int) (string, error) { return saved, nil },
+		Shrink: func(context.Context, string, documentfacets.Field, string) (string, error) { return saved, nil },
 	}
 	app := &App{documentStore: store, documentTools: documents.NewTools(store, shrinker)}
 	hydrated, err := app.hydrateLoopOutputs(facetedSpec())
@@ -199,7 +201,7 @@ func TestPublishToolSavesASmallOverrunShortened(t *testing.T) {
 	}
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
 
-	sent := strings.Repeat("s", 130)
+	sent := strings.TrimSpace(strings.Repeat("word ", 22))
 	result, err := publish.Handler(context.Background(), map[string]any{"status_line": sent, "teaser": "Fine.", "full": "Fine."})
 	if err != nil {
 		t.Fatalf("publish handler error = %v, want the shortened publish to land", err)
@@ -212,8 +214,8 @@ func TestPublishToolSavesASmallOverrunShortened(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &decoded); err != nil {
 		t.Fatalf("result is not JSON: %v\n%s", err, result)
 	}
-	if got := decoded.Published.Shortened; len(got) != 1 || got[0].SavedText != saved || got[0].SentCharacters != 130 || got[0].SavedCharacters != len(saved) {
-		t.Fatalf("result = %s, want status_line reported shortened from 130 to the saved text", result)
+	if got := decoded.Published.Shortened; len(got) != 1 || got[0].SavedText != saved || got[0].Sent != "22 words" || got[0].Saved != "8 words" {
+		t.Fatalf("result = %s, want status_line reported shortened from 22 words to the saved text", result)
 	}
 	body, err := os.ReadFile(filepath.Join(coreDir, "office.md"))
 	if err != nil {

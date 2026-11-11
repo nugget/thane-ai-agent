@@ -664,11 +664,11 @@ func TestGuidedCreateSeedValidation(t *testing.T) {
 		{
 			name: "over budget status line",
 			initial: map[string]any{
-				"status_line": strings.Repeat("x", 121),
+				"status_line": strings.TrimSpace(strings.Repeat("word ", 21)),
 				"digest":      "Fine.",
 				"full":        "Fine.",
 			},
-			wantErr: "limit is 120",
+			wantErr: "status_line is 21 words and the limit is 20",
 		},
 		{
 			name: "reserved heading inside content",

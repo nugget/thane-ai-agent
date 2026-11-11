@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
@@ -16,7 +15,23 @@ const (
 	// projection every contract carries.
 	fullKey = "full"
 
-	statusLineMaxRunes = 120
+	// statusLineMaxWords is status_line's budget. It is counted in words
+	// because a model can keep count of words while it writes and cannot
+	// keep count of characters: told 120 characters it spends the whole
+	// budget and overruns half the time, told 20 words it writes about 14
+	// with room to spare. Twenty sits above the 18 words that 19 in 20
+	// status lines stayed within under the old 120-character budget, so
+	// almost every line that fit then fits now.
+	statusLineMaxWords = 20
+	// statusLineMaxRunes bounds a status_line's length whatever its word
+	// count, because twenty words of long identifiers or URLs is not a
+	// status line any surface can show. Lines written to a twenty-word
+	// budget run to about 150 characters, so 180 refuses only text like
+	// that; a line carrying several {{delta:...}} templates, each one long
+	// word, reaches it sooner. A prose writer is told the word limit
+	// alone; a json status_line has no word limit and is told this one;
+	// and a refusal names it when a line breaks it.
+	statusLineMaxRunes = 180
 	teaserMaxRunes     = 500
 	digestMaxRunes     = 2048
 
@@ -45,6 +60,7 @@ var sections = []section{
 		heading: "Status Line",
 		field: Field{
 			Key:         string(StatusLine),
+			MaxWords:    statusLineMaxWords,
 			MaxRunes:    statusLineMaxRunes,
 			SingleLine:  true,
 			Guidance:    "The tight signal shape: one standalone line of current state, no line breaks. Reads as an ambient status: what is true right now. This is the only thing some surfaces show, so it must stand alone without the document around it.",
@@ -96,6 +112,9 @@ func DefaultContract() Contract {
 }
 
 // Fields returns declared projections followed by full in canonical order.
+// A projection declared as JSON drops its word limit: words are a budget for
+// prose, and compact JSON is a single word, so its character limit is the
+// budget its writer is told.
 func (c Contract) Fields() []Field {
 	declared := make(map[Name]Spec, len(c.Facets))
 	for _, facet := range c.Facets {
@@ -110,6 +129,9 @@ func (c Contract) Fields() []Field {
 		if facet, ok := declared[item.name]; ok {
 			field := item.field
 			field.Format = facet.EffectiveFormat()
+			if field.Format == FormatJSON {
+				field.MaxWords = 0
+			}
 			fields = append(fields, field)
 		}
 	}
@@ -178,10 +200,8 @@ func (c Contract) Validate(payload Payload) error {
 		if field.SingleLine && strings.ContainsAny(value, "\r\n") {
 			reject(field.Key, fmt.Errorf("%s must be a single line with no line breaks", field.Key))
 		}
-		if field.MaxRunes > 0 {
-			if runes := utf8.RuneCountInString(value); runes > field.MaxRunes {
-				reject(field.Key, overBudgetError(field.Key, runes, field.MaxRunes))
-			}
+		if over := field.overBudget(value); over != nil {
+			reject(field.Key, over)
 		}
 		if heading, found := firstReservedHeading(value); found {
 			reject(field.Key, fmt.Errorf("%s contains the reserved section heading %q; facet headings are rendered automatically, so pass only projection content", field.Key, heading))

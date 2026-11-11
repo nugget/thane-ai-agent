@@ -12,50 +12,92 @@ const (
 	// items than its budget holds, and removing items is what closes the gap.
 	rewordableOverageDivisor = 10
 	// minRewordableOverage keeps the tenth from shrinking below what one
-	// tightened sentence recovers: on a single-line projection a tenth of the
-	// limit is a dozen characters, and a gap of a few dozen still closes by
+	// tightened sentence recovers: a tenth of status_line's 180-character
+	// backstop is 18 characters, and a gap of a few dozen still closes by
 	// rewording without dropping a fact.
 	minRewordableOverage = 30
+	// minRewordableWords is minRewordableOverage counted in words: a few
+	// dozen characters of a status line are about five words.
+	minRewordableWords = 5
 )
 
-// rewordable reports whether an overage is small enough that tightening the
-// phrasing closes it: within a tenth of the limit or minRewordableOverage
-// characters, whichever is larger.
-func rewordable(over, limit int) bool {
-	return over <= max(limit/rewordableOverageDivisor, minRewordableOverage)
+// rewordable reports whether an overage of over u past limit is small
+// enough that tightening the phrasing closes it: within a tenth of the
+// limit or the floor for u, whichever is larger.
+func rewordable(u unit, over, limit int) bool {
+	floor := minRewordableOverage
+	if u == unitWords {
+		floor = minRewordableWords
+	}
+	return over <= max(limit/rewordableOverageDivisor, floor)
 }
 
-// overBudget is one projection over its rune budget. It is a type rather
+// overBudget is one projection over one of its limits. It is a type rather
 // than text so [Shrinker.Fit] can tell a refusal made only of small overruns
 // from one carrying any other violation.
 type overBudget struct {
 	error
-	key          string
-	runes, limit int
+	key string
+	// unit, count and limit describe the limit reported: the value is
+	// count of unit against limit. cut is how much of unit the value must
+	// lose to fit every limit, at least count-limit.
+	unit              unit
+	count, limit, cut int
+	// field is the projection's field, and words and runes the value's
+	// length in each unit, so a shrink can weigh every limit.
+	field        Field
+	words, runes int
 }
 
-func overBudgetError(key string, runes, limit int) error {
-	return &overBudget{error: overBudgetText(key, runes, limit), key: key, runes: runes, limit: limit}
-}
-
-// overBudgetText reports one projection that exceeds its rune budget: the
-// observed count, the limit, the overage, and the lever sized to that overage.
-// Naming only the limit teaches the wrong repair for a large overage — the
-// model rewords, lands still over, and resends — so a gap rewording rarely
-// closes says so and points at removing whole items instead.
-func overBudgetText(key string, runes, limit int) error {
-	over := runes - limit
-	if rewordable(over, limit) {
-		return fmt.Errorf("%s is %d characters and the limit is %d (%d over); reword to cut at least %s — a gap this small closes by tightening the phrasing without dropping content", key, runes, limit, over, characterCount(over))
+// newOverBudget reports field's value, words and runes long, over its limit
+// counted in u. A value over its words and past its character limit too
+// must lose enough words to clear both whichever words go, counted from its
+// shortest ([wordsToShed]): a cut sized at its average word length leaves
+// a line over when the words cut are its short ones. Whether rewording
+// closes that gap is weighed at the average length instead, the length the
+// rewording floor is calibrated at; weighed at its shortest words, a line
+// of function words around a few long identifiers would be told to drop
+// items that tighter phrasing keeps.
+func newOverBudget(field Field, u unit, value string, words, runes int) *overBudget {
+	count, limit := runes, field.MaxRunes
+	if u == unitWords {
+		count, limit = words, field.MaxWords
 	}
-	return fmt.Errorf("%s is %d characters and the limit is %d (%d over); rewording alone rarely closes a gap this large — remove whole items totalling at least %s: anything resolved, superseded, or already said elsewhere leaves this field entirely", key, runes, limit, over, characterCount(over))
+	cut, gap := count-limit, count-limit
+	if u == unitWords && field.MaxRunes > 0 && runes > field.MaxRunes {
+		cut = max(cut, wordsToShed(value, runes-field.MaxRunes))
+		gap = max(gap, (words*(runes-field.MaxRunes)+runes-1)/runes)
+	}
+	return &overBudget{error: overBudgetText(field.Key, u, count, limit, cut, rewordable(u, gap, limit)), key: field.Key, unit: u, count: count, limit: limit, cut: cut, field: field, words: words, runes: runes}
 }
 
-func characterCount(n int) string {
-	if n == 1 {
-		return "1 character"
+// ask names the limits a shrink of the value must reach: the one reported,
+// and the character limit too when the value is past that as well, since
+// a reply that cuts only words can stay over it.
+func (e *overBudget) ask() string {
+	ask := e.unit.count(e.limit)
+	if e.unit == unitWords && e.field.MaxRunes > 0 && e.runes > e.field.MaxRunes {
+		ask += " and " + unitCharacters.count(e.field.MaxRunes)
 	}
-	return fmt.Sprintf("%d characters", n)
+	return ask
+}
+
+// overBudgetText reports one projection that exceeds a limit counted in u:
+// the observed count, the limit, the overage, and the lever sized to cut,
+// what the value must lose to fit, which is the overage unless its words
+// run long. Naming only the limit teaches the wrong repair for a large
+// overage — the model rewords, lands still over, and resends — so unless
+// small says rewording closes the gap, the refusal says it rarely does and
+// points at removing whole items instead.
+func overBudgetText(key string, u unit, count, limit, cut int, small bool) error {
+	head := fmt.Sprintf("%s is %s and the limit is %d (%d over)", key, u.count(count), limit, count-limit)
+	if cut > count-limit {
+		head += ", and its words run long"
+	}
+	if small {
+		return fmt.Errorf("%s; reword to cut at least %s — a gap this small closes by tightening the phrasing without dropping content", head, u.count(cut))
+	}
+	return fmt.Errorf("%s; rewording alone rarely closes a gap this large — remove whole items totalling at least %s: anything resolved, superseded, or already said elsewhere leaves this field entirely", head, u.count(cut))
 }
 
 // InvalidProjectionsError frames every violation one faceted write found,

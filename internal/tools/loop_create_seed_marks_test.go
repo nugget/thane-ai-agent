@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 	"github.com/nugget/thane-ai-agent/internal/tools/toolargs"
 )
 
@@ -22,8 +23,8 @@ func TestGuidedCreateSeedRefusalMarksNoArgument(t *testing.T) {
 	}{
 		{
 			name:    "over budget status line",
-			initial: map[string]any{"status_line": strings.Repeat("x", 121), "digest": "Fine.", "full": "Fine."},
-			wantErr: "limit is 120",
+			initial: map[string]any{"status_line": strings.TrimSpace(strings.Repeat("word ", 21)), "digest": "Fine.", "full": "Fine."},
+			wantErr: "status_line is 21 words and the limit is 20",
 		},
 		{
 			name:    "projection that is not a string",
@@ -66,14 +67,56 @@ func TestGuidedCreateMigrationRefusalMarksNoArgument(t *testing.T) {
 
 	args := curateArgs(map[string]any{
 		"facets":    []any{"status_line"},
-		"migration": map[string]any{"status_line": strings.Repeat("x", 121)},
+		"migration": map[string]any{"status_line": strings.TrimSpace(strings.Repeat("word ", 21))},
 	})
 	args["replace"] = true
 	_, err := rig.tool.Handler(ctx, args)
-	if err == nil || !strings.Contains(err.Error(), "output.migration") || !strings.Contains(err.Error(), "limit is 120") {
-		t.Fatalf("error = %v, want an output.migration refusal naming the 120-character limit", err)
+	if err == nil || !strings.Contains(err.Error(), "output.migration") || !strings.Contains(err.Error(), "status_line is 21 words and the limit is 20") {
+		t.Fatalf("error = %v, want an output.migration refusal naming the 20-word limit", err)
 	}
 	if got := toolargs.RejectedArguments(err); got != nil {
 		t.Errorf("RejectedArguments() = %#v, want nil: the projections are nested under output.migration", got)
 	}
+}
+
+// TestGuidedCreateSeedPropertiesStateTheirBudgets pins that output.initial
+// and output.migration teach each compact projection's budget in the same
+// sentence the loop's publish tool will, so a model seeding a loop learns
+// status_line's word ceiling, and the character limit a json status_line
+// is held to instead, before a refusal teaches it.
+func TestGuidedCreateSeedPropertiesStateTheirBudgets(t *testing.T) {
+	rig := newCurateTestRig(t)
+	for _, seed := range []string{"initial", "migration"} {
+		properties := findSchemaProperties(rig.tool.Parameters, seed)
+		if properties == nil {
+			t.Fatalf("schema has no %s object with properties", seed)
+		}
+		for _, key := range []string{"status_line", "teaser", "digest"} {
+			field, _ := documentfacets.FieldByKey(key)
+			property, _ := properties[key].(map[string]any)
+			if got, want := property["description"], strings.TrimSpace(field.AnyFormatBudgetClause()); got != want {
+				t.Errorf("%s.%s description = %v, want %q", seed, key, got, want)
+			}
+		}
+	}
+}
+
+// findSchemaProperties returns the properties of the first object named key
+// anywhere in schema.
+func findSchemaProperties(schema any, key string) map[string]any {
+	node, ok := schema.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if child, ok := node[key].(map[string]any); ok {
+		if properties, ok := child["properties"].(map[string]any); ok {
+			return properties
+		}
+	}
+	for _, value := range node {
+		if found := findSchemaProperties(value, key); found != nil {
+			return found
+		}
+	}
+	return nil
 }

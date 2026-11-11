@@ -118,10 +118,10 @@ func TestFacetedWriteFailuresThatAreNotAboutValuesMarkNothing(t *testing.T) {
 		_, err := store.Write(context.Background(), WriteArgs{
 			Ref:            "kb:invalid.md",
 			Frontmatter:    (documentfacets.Manifest{Contract: contract, ManagedBy: DocumentWriteToolName}).Frontmatter(),
-			Body:           stringPtr("## Status Line\n\n" + strings.Repeat("x", 121) + "\n\n## Details\n\nDetail."),
+			Body:           stringPtr("## Status Line\n\n" + strings.TrimSpace(strings.Repeat("word ", 21)) + "\n\n## Details\n\nDetail."),
 			StructuredTool: DocumentWriteToolName,
 		})
-		if err == nil || !strings.Contains(err.Error(), "status_line is 121 characters") {
+		if err == nil || !strings.Contains(err.Error(), "status_line is 21 words") {
 			t.Fatalf("Write() error = %v, want the facet budget failure", err)
 		}
 		if got := toolargs.RejectedArguments(err); got != nil {

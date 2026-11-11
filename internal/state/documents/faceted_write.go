@@ -67,7 +67,7 @@ type FacetedWriteArgs struct {
 }
 
 // shortenedWarning frames shortened_projections in a write's warnings.
-const shortenedWarning = "shortened_projections were a little over their character limit, so Go had a model shorten them before saving; each saved_text is exactly what is stored now, so treat it, not what you sent, as the current projection."
+const shortenedWarning = "shortened_projections were a little over their budget, so Go had a model shorten them before saving; each saved_text is exactly what is stored now, so treat it, not what you sent, as the current projection."
 
 // StructuredDocumentMutationError redirects a mutation to the tool that owns
 // the target document's complete logical state.

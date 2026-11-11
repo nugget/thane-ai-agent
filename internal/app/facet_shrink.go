@@ -14,7 +14,7 @@ import (
 // answers, which spends the output bound thinking and never answers.
 const thinkingOffFix = "a shrink model must answer without reasoning first, so turn its thinking off (chat_template_kwargs on its resource)"
 
-const facetShrinkPrompt = "Shorten the text the user sends to at most %d characters. Keep every fact, name, number, and date, and keep the text's line structure; drop filler words and add nothing new. Reply with only the shortened text: no quotes, preamble, or explanation."
+const facetShrinkPrompt = "Shorten the text the user sends to at most %s. Keep every fact, name, number, and date, and keep the text's line structure; drop filler words and add nothing new. Reply with only the shortened text: no quotes, preamble, or explanation."
 
 // facetShrinker builds the faceted-write shrink step from
 // models.facet_shrink_model, or nil when that is empty.
@@ -28,16 +28,19 @@ func (a *App) facetShrinker() *documentfacets.Shrinker {
 	return &documentfacets.Shrinker{
 		Model:  model,
 		Logger: a.logger.With("component", "facet_shrink"),
-		Shrink: func(ctx context.Context, text string, limit int) (string, error) {
-			return shrinkFacetText(ctx, client, model, text, limit)
+		Shrink: func(ctx context.Context, text string, field documentfacets.Field, limits string) (string, error) {
+			return shrinkFacetText(ctx, client, model, text, field, limits)
 		},
 	}
 }
 
-// shrinkFacetText makes one tool-free call asking model to shorten text,
-// bounded at two output tokens per allowed character. A reply that reached
-// that bound is refused, by its stop reason or, for a provider that reports
-// none (Ollama), by the tokens it spent, and its text comes back with the
+// shrinkFacetText makes one tool-free call asking model to shorten text to
+// limits, the ones it was refused over, bounded at two output tokens per
+// character field allows. A word budget is asked for in words, the unit a
+// model can count while it writes, and every budgeted field carries a
+// character limit for the bound. A reply that reached that bound is
+// refused, by its stop reason or, for a provider that reports none
+// (Ollama), by the tokens it spent, and its text comes back with the
 // refusal so the shrink log keeps it. A model that reasoned instead of
 // answering is refused with [thinkingOffFix], because nothing else shows
 // it: the writer's refusal stands just as when the text could not be
@@ -45,13 +48,12 @@ func (a *App) facetShrinker() *documentfacets.Shrinker {
 // reports as an [llm.ErrEmptyCompletion] beside a response carrying the
 // stop reason and token count, or, on a slower model, ran out the call's
 // deadline first, which a model that answers directly but too slowly for
-// a long projection also does. The client
-// carries no sampling settings, so the deployment's own defaults,
-// temperature included, apply.
-func shrinkFacetText(ctx context.Context, client llm.Client, model, text string, limit int) (string, error) {
-	bound := 2 * limit
+// a long projection also does. The client carries no sampling settings, so
+// the deployment's own defaults, temperature included, apply.
+func shrinkFacetText(ctx context.Context, client llm.Client, model, text string, field documentfacets.Field, limits string) (string, error) {
+	bound := 2 * field.MaxRunes
 	resp, err := client.Chat(llm.WithMaxOutputTokens(ctx, bound), model, []llm.Message{
-		{Role: "system", Content: fmt.Sprintf(facetShrinkPrompt, limit)},
+		{Role: "system", Content: fmt.Sprintf(facetShrinkPrompt, limits)},
 		{Role: "user", Content: text},
 	}, nil)
 	if errors.Is(err, llm.ErrReasoningOnly) {

@@ -60,3 +60,52 @@ func TestJSONFacetStillHonorsTheOtherBudgets(t *testing.T) {
 		t.Errorf("error does not report the budget: %v", err)
 	}
 }
+
+// TestJSONStatusLineIsBudgetedInCharacters pins that a JSON-format
+// status_line drops the word limit, which means nothing for code-read JSON,
+// and is told and held to its character limit instead: spaced JSON past
+// twenty whitespace tokens fits, and one character past the limit does not.
+func TestJSONStatusLineIsBudgetedInCharacters(t *testing.T) {
+	contract := Contract{Facets: []Spec{{Name: StatusLine, Format: FormatJSON}}}
+	field := contract.Fields()[0]
+	if field.MaxWords != 0 || field.Budget() != "180 characters" || field.BudgetClause() != " Maximum 180 characters — a ceiling, not a target; compose comfortably under it." {
+		t.Fatalf("json status_line field = %+v, budget %q; want no word limit and 180 characters", field, field.Budget())
+	}
+	spaced := `{"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7, "h": 8, "i": 9, "j": 10, "k": 11}`
+	if WordCount(spaced) <= statusLineMaxWords {
+		t.Fatalf("%q is not past the word limit", spaced)
+	}
+	if err := contract.Validate(Payload{StatusLine: spaced, Full: "# x\n"}); err != nil {
+		t.Errorf("Validate() refused spaced JSON within its characters: %v", err)
+	}
+	long := `{"reading":"` + strings.Repeat("x", statusLineMaxRunes-13) + `"}`
+	err := contract.Validate(Payload{StatusLine: long, Full: "# x\n"})
+	if err == nil || !strings.Contains(err.Error(), "status_line is 181 characters and the limit is 180") {
+		t.Errorf("Validate() = %v, want the 181-character JSON refused in characters", err)
+	}
+}
+
+// TestAnyFormatBudgetClauseNamesTheJSONLimit pins what a description written
+// before the format is known says: a word budget also names the character
+// limit a json projection is held to instead, while a field budgeted in
+// characters alone, or already declared json, reads as its BudgetClause.
+func TestAnyFormatBudgetClauseNamesTheJSONLimit(t *testing.T) {
+	t.Parallel()
+
+	status, _ := FieldByKey(string(StatusLine))
+	teaser, _ := FieldByKey(string(Teaser))
+	jsonStatus := Contract{Facets: []Spec{{Name: StatusLine, Format: FormatJSON}}}.Fields()[0]
+	for _, tt := range []struct {
+		name  string
+		field Field
+		want  string
+	}{
+		{name: "word budget", field: status, want: status.BudgetClause() + " A projection declared format json is held to 180 characters instead."},
+		{name: "character budget", field: teaser, want: teaser.BudgetClause()},
+		{name: "declared json", field: jsonStatus, want: jsonStatus.BudgetClause()},
+	} {
+		if got := tt.field.AnyFormatBudgetClause(); got != tt.want {
+			t.Errorf("%s: AnyFormatBudgetClause() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

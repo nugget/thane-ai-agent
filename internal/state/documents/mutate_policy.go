@@ -177,11 +177,12 @@ func documentMutationMessage(action, root, relPath string) string {
 }
 
 // facetSubjectMaxRunes clamps a status_line borrowed into a commit
-// subject. Published projections are already budgeted below this, so
-// the clamp only fires on content that arrived through a non-publish
-// write (for example, a historical or externally authored envelope) — and a
-// commit subject is annotation, not the content itself, so clipping
-// here is honest where clipping a projection would not be.
+// subject. A status_line is budgeted in words, with a character
+// backstop above this, so a valid line of long words can still run past
+// it, as can content that arrived through a non-publish write (for
+// example, a historical or externally authored envelope). A commit
+// subject is annotation, not the content itself, so clipping here is
+// honest where clipping a projection would not be.
 const facetSubjectMaxRunes = 120
 
 // documentWriteMessage composes the commit message for a document

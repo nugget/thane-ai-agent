@@ -3,15 +3,18 @@ package documents
 import (
 	"strings"
 	"testing"
+
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // TestDocumentWriteMessageBorrowsFacets pins the commit-message
 // contract: a faceted document's status_line joins the subject and its
 // digest becomes the body, so the root's git log reads as a timeline
 // of the document's own verdicts; an unfaceted document keeps the
-// plain mechanical subject; and a runaway status_line (possible only
-// through non-publish writes) is clamped rather than allowed to
-// swallow the subject line.
+// plain mechanical subject; and a status_line longer than a subject
+// holds, whether a valid line of long words or a runaway one from a
+// non-publish write, is clamped rather than allowed to swallow the
+// subject line.
 func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 	t.Parallel()
 
@@ -44,6 +47,18 @@ func TestDocumentWriteMessageBorrowsFacets(t *testing.T) {
 		}
 		if !strings.HasSuffix(subject, "…") {
 			t.Fatalf("clamped subject should mark the clip: %q", subject)
+		}
+	})
+
+	t.Run("a valid status_line of long words clamps too", func(t *testing.T) {
+		line := strings.TrimSpace(strings.Repeat("identifier ", 15)) // 15 words, 164 runes
+		raw := "## Status Line\n\n" + line + "\n\n## Details\n\nbody\n"
+		if err := documentfacets.DefaultContract().Validate(documentfacets.Payload{StatusLine: line, Teaser: "t", Digest: "d", Full: "body"}); err != nil {
+			t.Fatalf("status line %q should be valid: %v", line, err)
+		}
+		subject := strings.SplitN(documentWriteMessage("doc_write", "kb", "x.md", raw), "\n", 2)[0]
+		if got := len([]rune(subject)); got > len([]rune("doc_write kb:x.md — "))+facetSubjectMaxRunes || !strings.HasSuffix(subject, "…") {
+			t.Fatalf("subject = %q (%d runes), want it clamped with the clip marked", subject, got)
 		}
 	})
 

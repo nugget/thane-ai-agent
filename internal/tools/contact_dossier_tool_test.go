@@ -241,7 +241,7 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 	}
 	properties := tool.Parameters["properties"].(map[string]any)
 	for field, budget := range map[string]string{
-		"status_line": "Maximum 120 characters",
+		"status_line": "Maximum 20 words",
 		"teaser":      "Maximum 500 characters",
 		"digest":      "Maximum 2048 characters",
 	} {

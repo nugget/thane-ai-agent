@@ -1761,7 +1761,7 @@ type ModelsConfig struct {
 
 	// FacetShrinkModel is a fast model (a deployment ID or model name,
 	// like recovery_model) that shortens a faceted document projection
-	// written over its character limit by at most half. The shortened
+	// written over its budget by at most half. The shortened
 	// write must still pass every validation, or the original refusal
 	// stands. When empty, an over-budget projection is refused as
 	// written. The model must answer without reasoning first: with

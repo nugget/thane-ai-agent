@@ -37,7 +37,7 @@ func TestDossierRejectionMarksRejectedArguments(t *testing.T) {
 	}{
 		{
 			name:   "facet contract over budget",
-			mutate: func(a *DossierWriteArgs, _ uuid.UUID) { a.StatusLine = strings.Repeat("s", 121) },
+			mutate: func(a *DossierWriteArgs, _ uuid.UUID) { a.StatusLine = strings.TrimSpace(strings.Repeat("word ", 21)) },
 			want:   []string{"status_line"},
 		},
 		{
@@ -61,7 +61,7 @@ func TestDossierRejectionMarksRejectedArguments(t *testing.T) {
 		{
 			name: "contract and dossier rules together",
 			mutate: func(a *DossierWriteArgs, id uuid.UUID) {
-				a.StatusLine = strings.Repeat("s", 121)
+				a.StatusLine = strings.TrimSpace(strings.Repeat("word ", 21))
 				a.Digest = "Bound to contact:" + id.String() + "."
 			},
 			want: []string{"digest", "status_line"},
@@ -124,7 +124,7 @@ func TestDossierBackstopMarksRejectedArguments(t *testing.T) {
 			name: "facet contract over budget",
 			mutate: func(c *documents.DocumentWriteCandidate) {
 				payload := validPayload
-				payload.StatusLine = strings.Repeat("s", 121)
+				payload.StatusLine = strings.TrimSpace(strings.Repeat("word ", 21))
 				c.Body = dossierOutputContract.Render(payload)
 			},
 			want: []string{"status_line"},

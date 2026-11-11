@@ -87,10 +87,12 @@ section headings; they are rendered for you. Each projection has a size
 budget, and an over-budget value is rejected rather than trimmed,
 because a clipped teaser reads as a fragment with no sign that anything
 is missing. The budget is a ceiling, not a target: compose
-comfortably under it — a projection that needs every last rune is
-carrying too much, and you cannot count runes precisely enough to
-graze a ceiling safely. When one is rejected anyway, the error gives its
-length, the limit, and the overage, and sizes the fix to the gap. A
+comfortably under it — a projection that fills its whole budget is
+carrying too much, and you cannot count characters precisely enough to
+graze a ceiling safely. The status line's budget is counted in words
+instead, which you can keep track of as you write. When one is rejected
+anyway, the error gives its length, the limit, and the overage, and
+sizes the fix to the gap. A
 small gap closes by rewording. A large one means the projection holds
 more items than its budget has room for, and rewording lands still
 over: remove whole items, starting with anything resolved, superseded,

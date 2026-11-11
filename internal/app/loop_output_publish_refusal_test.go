@@ -75,7 +75,7 @@ func TestPublishToolValidationRefusalWritesNeitherHalf(t *testing.T) {
 
 	const note = "Theory: the printer jams on Mondays."
 	_, err = publish.Handler(context.Background(), map[string]any{
-		"status_line": strings.Repeat("x", 200),
+		"status_line": strings.TrimSpace(strings.Repeat("word ", 33)),
 		"teaser":      "Fine.",
 		"full":        "Fine.",
 		"notes":       note,
@@ -83,7 +83,7 @@ func TestPublishToolValidationRefusalWritesNeitherHalf(t *testing.T) {
 	if err == nil {
 		t.Fatal("publish handler error = nil for an over-budget status line")
 	}
-	for _, want := range []string{"nothing was written", "correct every listed field", "status_line is 200 characters", "(80 over)", "remove whole items"} {
+	for _, want := range []string{"nothing was written", "correct every listed field", "status_line is 33 words", "(13 over)", "remove whole items"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("publish error = %q, want it to contain %q", err, want)
 		}

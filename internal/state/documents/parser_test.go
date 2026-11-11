@@ -47,7 +47,7 @@ func TestSplitFrontmatterSupportsBlockListValues(t *testing.T) {
 // TestParseMarkdownDocumentCapturesFacetBytes pins the index-time byte
 // measurement the context advertiser costs offers with (#1431). The
 // expectations are BYTE lengths, not rune counts, on purpose: facet
-// budgets elsewhere in the contract are runes (display budgets), but
+// budgets elsewhere in the contract count runes or words, but
 // these entries price a projection against a byte-denominated context
 // budget, and a rune count under-estimates multi-byte UTF-8 content.
 func TestParseMarkdownDocumentCapturesFacetBytes(t *testing.T) {
