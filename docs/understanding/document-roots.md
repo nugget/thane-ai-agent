@@ -495,8 +495,10 @@ rewording for a gap within a tenth of the limit or 30 characters (five words
 for `status_line`, whose budget is 20 words), whichever is larger, and removing
 whole items past that. A status line within its words but past its
 180-character backstop is refused in characters. One over both is refused in
-words alone, with a cut large enough to clear both. The error names no retry
-count.
+words alone, with a cut that clears both whichever words are cut. A
+`status_line` declared `json` has no word budget and is held to its 180
+characters, which `doc_write`'s schema states beside the word budget. The
+error names no retry count.
 
 `doc_body_write` is the narrow exception for a document intentionally kept as
 one undifferentiated Markdown body. It still uses managed-root policy,

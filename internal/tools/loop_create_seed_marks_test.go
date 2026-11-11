@@ -82,7 +82,8 @@ func TestGuidedCreateMigrationRefusalMarksNoArgument(t *testing.T) {
 // TestGuidedCreateSeedPropertiesStateTheirBudgets pins that output.initial
 // and output.migration teach each compact projection's budget in the same
 // sentence the loop's publish tool will, so a model seeding a loop learns
-// status_line's word ceiling before a refusal teaches it.
+// status_line's word ceiling, and the character limit a json status_line
+// is held to instead, before a refusal teaches it.
 func TestGuidedCreateSeedPropertiesStateTheirBudgets(t *testing.T) {
 	rig := newCurateTestRig(t)
 	for _, seed := range []string{"initial", "migration"} {
@@ -93,7 +94,7 @@ func TestGuidedCreateSeedPropertiesStateTheirBudgets(t *testing.T) {
 		for _, key := range []string{"status_line", "teaser", "digest"} {
 			field, _ := documentfacets.FieldByKey(key)
 			property, _ := properties[key].(map[string]any)
-			if got, want := property["description"], strings.TrimSpace(field.BudgetClause()); got != want {
+			if got, want := property["description"], strings.TrimSpace(field.AnyFormatBudgetClause()); got != want {
 				t.Errorf("%s.%s description = %v, want %q", seed, key, got, want)
 			}
 		}

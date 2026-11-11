@@ -99,6 +99,19 @@ func (f Field) BudgetClause() string {
 	return " Maximum " + budget + " — a ceiling, not a target; compose comfortably under it."
 }
 
+// AnyFormatBudgetClause is [Field.BudgetClause] for a description written
+// before the projection's format is known, such as a tool schema shared by
+// every document. A projection declared json has no word limit
+// ([Contract.Fields]), so a word budget here also names the character limit
+// a json projection is held to instead.
+func (f Field) AnyFormatBudgetClause() string {
+	clause := f.BudgetClause()
+	if f.MaxWords > 0 && f.MaxRunes > 0 {
+		clause += " A projection declared format json is held to " + unitCharacters.count(f.MaxRunes) + " instead."
+	}
+	return clause
+}
+
 // overBudget returns the violation to report when value breaks one of f's
 // limits, or nil when it fits them all. A value over its word limit is
 // reported in words alone: cutting words is the repair a writer can count,

@@ -84,3 +84,28 @@ func TestJSONStatusLineIsBudgetedInCharacters(t *testing.T) {
 		t.Errorf("Validate() = %v, want the 181-character JSON refused in characters", err)
 	}
 }
+
+// TestAnyFormatBudgetClauseNamesTheJSONLimit pins what a description written
+// before the format is known says: a word budget also names the character
+// limit a json projection is held to instead, while a field budgeted in
+// characters alone, or already declared json, reads as its BudgetClause.
+func TestAnyFormatBudgetClauseNamesTheJSONLimit(t *testing.T) {
+	t.Parallel()
+
+	status, _ := FieldByKey(string(StatusLine))
+	teaser, _ := FieldByKey(string(Teaser))
+	jsonStatus := Contract{Facets: []Spec{{Name: StatusLine, Format: FormatJSON}}}.Fields()[0]
+	for _, tt := range []struct {
+		name  string
+		field Field
+		want  string
+	}{
+		{name: "word budget", field: status, want: status.BudgetClause() + " A projection declared format json is held to 180 characters instead."},
+		{name: "character budget", field: teaser, want: teaser.BudgetClause()},
+		{name: "declared json", field: jsonStatus, want: jsonStatus.BudgetClause()},
+	} {
+		if got := tt.field.AnyFormatBudgetClause(); got != tt.want {
+			t.Errorf("%s: AnyFormatBudgetClause() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

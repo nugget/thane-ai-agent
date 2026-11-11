@@ -289,7 +289,7 @@ func registerDocumentWriteTool(r *Registry, dt *documents.Tools) {
 			continue
 		}
 		description := field.Guidance + documentfacets.FormatGuidance(field.Format) + documentfacets.RelativeTimeGuidance
-		description += field.BudgetClause()
+		description += field.AnyFormatBudgetClause()
 		if key == "teaser" || key == "digest" {
 			description += " Optional when first adopting a document, but required on every later publish if the document already carries this projection."
 		}

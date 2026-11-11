@@ -930,10 +930,11 @@ func declaredDocumentExists(ctx context.Context, docTools *documents.Tools, ref 
 }
 
 // seedProjectionProperty is one compact projection in output.initial or
-// output.migration, stating its budget as the loop's publish tool will.
+// output.migration, stating its budget as the loop's publish tool will for
+// whichever format output.facets declares.
 func seedProjectionProperty(name documentfacets.Name) map[string]any {
 	field, _ := documentfacets.FieldByKey(string(name))
-	return map[string]any{"type": "string", "description": strings.TrimSpace(field.BudgetClause())}
+	return map[string]any{"type": "string", "description": strings.TrimSpace(field.AnyFormatBudgetClause())}
 }
 
 func facetContractsEqual(left, right documentfacets.Contract) bool {
