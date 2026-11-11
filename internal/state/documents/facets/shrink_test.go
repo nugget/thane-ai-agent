@@ -307,21 +307,28 @@ func mentions(text, name string) error {
 // share. It is sized to the projection, at most 6.5 seconds for a status
 // line and 14.5 for a teaser, so a write with both over waits at most 21,
 // inside a delegate's default 30-second tool timeout. A reply refused
-// quickly leaves the rest of it to a second call, and a call that runs it
-// out is the last, costing the write nothing but the original refusal.
+// quickly leaves the rest of it to a second call; a call that runs it out
+// is the last, costing the write nothing but the original refusal; a reply
+// refused with too little left for another call's first token ends the
+// shrink with its own reason, not a timeout; and a reply that arrives as
+// the deadline passes is still used.
 func TestFitBoundsEachShrinkCall(t *testing.T) {
 	t.Parallel()
 
 	sent := validShrinkPayload()
 	sent.StatusLine = wordsOf(statusLineMaxWords+1, "s")
+	stillOver := wordsOf(statusLineMaxWords+1, "s")
 	validate, refusals := writerValidate(nil)
+	within := func(d time.Duration) (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), d)
+	}
 
 	waits := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
 	shrinker, calls, logs := scriptedShrinker(waits)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := within(50 * time.Millisecond)
 	defer cancel()
 	got, shortened, err := shrinker.Fit(ctx, sent, validate)
 	assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
@@ -332,17 +339,44 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 		t.Errorf("log = %s, want the deadline as the reason", logs)
 	}
 
-	shrinker, calls, _ = scriptedShrinker(reply(wordsOf(statusLineMaxWords+1, "s")), reply("Short."))
+	late := func(ctx context.Context, _ string, _ Field, _ string) (string, error) {
+		<-ctx.Done()
+		return "Short.", nil
+	}
+	shrinker, calls, _ = scriptedShrinker(late)
+	ctx, cancel = within(50 * time.Millisecond)
+	defer cancel()
+	if got, _, err := shrinker.Fit(ctx, sent, validate); err != nil || got.StatusLine != "Short." || len(*calls) != 1 {
+		t.Fatalf("Fit() = %q, %v after %d calls; want the reply that arrived as the deadline passed saved", got.StatusLine, err, len(*calls))
+	}
+
+	shrinker, calls, logs = scriptedShrinker(reply(stillOver), reply("Short."))
+	validate, refusals = writerValidate(nil)
+	ctx, cancel = within(time.Second)
+	defer cancel()
+	got, shortened, err = shrinker.Fit(ctx, sent, validate)
+	assertRefusedUnchanged(t, got, shortened, err, sent, *refusals)
+	if len(*calls) != 1 {
+		t.Fatalf("shrink calls = %d with under a first token's wait left, want 1", len(*calls))
+	}
+	if outcome := logs.String(); !strings.Contains(outcome, "still over") || strings.Contains(outcome, context.DeadlineExceeded.Error()) {
+		t.Errorf("log = %s, want the refusal to keep the reply's own reason", outcome)
+	}
+
+	slowlyOver := func(context.Context, string, Field, string) (string, error) {
+		time.Sleep(20 * time.Millisecond)
+		return stillOver, nil
+	}
+	shrinker, calls, _ = scriptedShrinker(slowlyOver, reply("Short."))
 	if _, _, err := shrinker.Fit(context.Background(), sent, validate); err != nil {
 		t.Fatalf("Fit() error = %v, want the second call's reply saved", err)
 	}
-	if len(*calls) != 2 || (*calls)[1].deadline >= (*calls)[0].deadline {
-		t.Fatalf("shrink calls = %+v, want a second call on what is left of the first's deadline", *calls)
+	if len(*calls) != 2 || (*calls)[1].deadline > (*calls)[0].deadline-20*time.Millisecond {
+		t.Fatalf("shrink calls = %+v, want the second on what the first left of one deadline", *calls)
 	}
 
 	teaser := validShrinkPayload()
 	teaser.Teaser = strings.Repeat("t", teaserMaxRunes+40)
-	var total time.Duration
 	for _, tt := range []struct {
 		key      string
 		sent     Payload
@@ -361,10 +395,6 @@ func TestFitBoundsEachShrinkCall(t *testing.T) {
 		if d := (*calls)[0].deadline; d <= tt.min || d > tt.max {
 			t.Errorf("%s shrink deadline = %v, want more than %v and at most %v", tt.key, d, tt.min, tt.max)
 		}
-		total += tt.max
-	}
-	if total >= 30*time.Second {
-		t.Errorf("a write with both over can wait %v, want it inside a delegate's 30-second tool timeout", total)
 	}
 }
 

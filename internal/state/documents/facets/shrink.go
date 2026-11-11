@@ -25,15 +25,21 @@ func shortens(field Field) bool {
 	return field.MaxRunes > 0 && field.MaxRunes <= shrinkMaxRunes
 }
 
+// shrinkFirstToken is how long a shrink call may wait for its first token.
+// Every budget includes it, and a second call goes out only while at least
+// that much of the budget is left, since one sent with less runs out the
+// budget waiting and its timeout would read as a slow model.
+const shrinkFirstToken = 2 * time.Second
+
 // shrinkBudget bounds all of one projection's Shrink calls together. It is
 // sized for one of the longest replies field accepts at the slow end of a
-// busy local model's decode, about 40 characters a second, plus two
-// seconds for the first token: 6.5 seconds for a status line and 14.5 for
-// a teaser. A reply refused quickly leaves the rest to a second call. A
-// write with both over waits at most 21 seconds, inside the 30 seconds a
-// delegate allows a tool call by default.
+// busy local model's decode, about 40 characters a second, after
+// [shrinkFirstToken]: 6.5 seconds for a status line and 14.5 for a teaser.
+// A reply refused quickly leaves the rest to a second call. A write with
+// both over waits at most 21 seconds, inside the 30 seconds a delegate
+// allows a tool call by default.
 func shrinkBudget(field Field) time.Duration {
-	return 2*time.Second + time.Duration(field.MaxRunes)*time.Second/40
+	return shrinkFirstToken + time.Duration(field.MaxRunes)*time.Second/40
 }
 
 // Shrinker lets a faceted write land when all that is wrong with it is a
@@ -167,8 +173,10 @@ func (e *Shortened) save(saved string) {
 }
 
 // shrink returns the first Shrink result entry's field accepts, counting
-// the calls it made on entry. The calls share [shrinkBudget], so one that
-// runs it out is the last.
+// the calls it made on entry. The calls share [shrinkBudget]: a reply that
+// arrives within it is judged as usual, and a second call goes out only
+// while [shrinkFirstToken] of it is left, so a refusal that stands keeps
+// the reason the last reply really failed for.
 func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error) {
 	field := entry.over.field
 	budget, cancel := context.WithTimeout(ctx, shrinkBudget(field))
@@ -192,7 +200,7 @@ func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error)
 			return candidate, nil
 		}
 		s.log(ctx, "projection shrink reply rejected", *entry, candidate, reason.Error())
-		if budget.Err() != nil {
+		if deadline, _ := budget.Deadline(); budget.Err() != nil || time.Until(deadline) < shrinkFirstToken {
 			break
 		}
 	}
