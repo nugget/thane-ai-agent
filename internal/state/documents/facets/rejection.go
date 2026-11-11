@@ -53,17 +53,22 @@ type overBudget struct {
 // counted in u. A value over its words and past its character limit too
 // must lose enough words to clear both whichever words go, counted from its
 // shortest ([wordsToShed]): a cut sized at its average word length leaves
-// a line over when the words cut are its short ones.
+// a line over when the words cut are its short ones. Whether rewording
+// closes that gap is weighed at the average length instead, the length the
+// rewording floor is calibrated at; weighed at its shortest words, a line
+// of function words around a few long identifiers would be told to drop
+// items that tighter phrasing keeps.
 func newOverBudget(field Field, u unit, value string, words, runes int) *overBudget {
 	count, limit := runes, field.MaxRunes
 	if u == unitWords {
 		count, limit = words, field.MaxWords
 	}
-	cut := count - limit
+	cut, gap := count-limit, count-limit
 	if u == unitWords && field.MaxRunes > 0 && runes > field.MaxRunes {
 		cut = max(cut, wordsToShed(value, runes-field.MaxRunes))
+		gap = max(gap, (words*(runes-field.MaxRunes)+runes-1)/runes)
 	}
-	return &overBudget{error: overBudgetText(field.Key, u, count, limit, cut), key: field.Key, unit: u, count: count, limit: limit, cut: cut, field: field, words: words, runes: runes}
+	return &overBudget{error: overBudgetText(field.Key, u, count, limit, cut, rewordable(u, gap, limit)), key: field.Key, unit: u, count: count, limit: limit, cut: cut, field: field, words: words, runes: runes}
 }
 
 // ask names the limits a shrink of the value must reach: the one reported,
@@ -81,15 +86,15 @@ func (e *overBudget) ask() string {
 // the observed count, the limit, the overage, and the lever sized to cut,
 // what the value must lose to fit, which is the overage unless its words
 // run long. Naming only the limit teaches the wrong repair for a large
-// overage — the model rewords, lands still over, and resends — so a gap
-// rewording rarely closes says so and points at removing whole items
-// instead.
-func overBudgetText(key string, u unit, count, limit, cut int) error {
+// overage — the model rewords, lands still over, and resends — so unless
+// small says rewording closes the gap, the refusal says it rarely does and
+// points at removing whole items instead.
+func overBudgetText(key string, u unit, count, limit, cut int, small bool) error {
 	head := fmt.Sprintf("%s is %s and the limit is %d (%d over)", key, u.count(count), limit, count-limit)
 	if cut > count-limit {
 		head += ", and its words run long"
 	}
-	if rewordable(u, cut, limit) {
+	if small {
 		return fmt.Errorf("%s; reword to cut at least %s — a gap this small closes by tightening the phrasing without dropping content", head, u.count(cut))
 	}
 	return fmt.Errorf("%s; rewording alone rarely closes a gap this large — remove whole items totalling at least %s: anything resolved, superseded, or already said elsewhere leaves this field entirely", head, u.count(cut))

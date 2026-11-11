@@ -93,6 +93,18 @@ func TestValidateSizesTheLeverToTheOverage(t *testing.T) {
 			wantAbsent: []string{"characters", "180"},
 		},
 		{
+			// A line of function words around long identifiers is cut by
+			// its shortest words, 8 of them, but rewording is weighed at
+			// its average word length, where the gap is 4: tighter
+			// phrasing that keeps every identifier fits.
+			name: "over both status line limits with short and long words still rewords",
+			mutate: func(p *Payload) {
+				p.StatusLine = "Watching build.example.net after deploy 1a2b3c4d: templates synced from core/templates, migrations 0042-0045 applied, metacognitive loop restarted; next is to verify kb:ops/deploy-checklist.md item 7 is done."
+			},
+			want:       []string{"status_line is 24 words and the limit is 20 (4 over), and its words run long", rewordLever + " 8 words"},
+			wantAbsent: []string{removeLever, "characters"},
+		},
+		{
 			name:       "teaser at its tier edge rewords",
 			mutate:     func(p *Payload) { p.Teaser = strings.Repeat("t", teaserMaxRunes+50) },
 			want:       []string{"teaser is 550 characters", "the limit is 500", "(50 over)", rewordLever + " 50 characters"},

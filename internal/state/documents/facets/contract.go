@@ -28,8 +28,9 @@ const (
 	// status line any surface can show. Lines written to a twenty-word
 	// budget run to about 150 characters, so 180 refuses only text like
 	// that; a line carrying several {{delta:...}} templates, each one long
-	// word, reaches it sooner. Writers are told the word limit alone, and
-	// a refusal names this one when a line breaks it.
+	// word, reaches it sooner. A prose writer is told the word limit
+	// alone; a json status_line has no word limit and is told this one;
+	// and a refusal names it when a line breaks it.
 	statusLineMaxRunes = 180
 	teaserMaxRunes     = 500
 	digestMaxRunes     = 2048

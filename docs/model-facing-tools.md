@@ -140,7 +140,10 @@ words" it keeps count and leaves room. Characters stay the right unit for
 a budget that never binds, and for a real render width. When a word budget
 needs a character backstop against pathological tokens, keep the backstop
 out of the schema and out of a refusal that is already about words, so the
-model is never handed a character target to aim at.
+model is never handed a character target to aim at. The exception is a
+format with no word budget: a json status_line is held to the backstop, so
+a description written before the format is fixed names it as the json
+limit.
 
 Size the fix to the gap. An over-budget error that names only the limit
 teaches "shorten it", and a model shortens by rewording, which rarely

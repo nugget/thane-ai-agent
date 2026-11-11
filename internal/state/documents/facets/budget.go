@@ -57,7 +57,8 @@ func wordLengths(text string) []int {
 // wordsToShed returns how many of text's words must go for it to lose over
 // characters whichever words are removed. It counts the shortest first,
 // each with the one separator removing it frees, so taking out any that
-// many whole words loses at least over.
+// many whole words loses at least over, or it returns every word when they
+// hold fewer characters than that.
 func wordsToShed(text string, over int) int {
 	lengths := wordLengths(text)
 	slices.Sort(lengths)
@@ -100,8 +101,9 @@ func (f Field) BudgetClause() string {
 }
 
 // AnyFormatBudgetClause is [Field.BudgetClause] for a description written
-// before the projection's format is known, such as a tool schema shared by
-// every document. A projection declared json has no word limit
+// before the projection's format is known: loop_create's output.initial and
+// output.migration seeds, which describe status_line before output.facets
+// fixes its format. A projection declared json has no word limit
 // ([Contract.Fields]), so a word budget here also names the character limit
 // a json projection is held to instead.
 func (f Field) AnyFormatBudgetClause() string {
@@ -117,8 +119,8 @@ func (f Field) AnyFormatBudgetClause() string {
 // reported in words alone: cutting words is the repair a writer can count,
 // and naming the character backstop beside it would hand back the
 // character target the word limit replaces. When it is past the backstop
-// too, cutting any of the words it is told to cut clears both. The
-// backstop is reported only for a value within its words.
+// too, cutting any that many of its words clears both. The backstop is
+// reported only for a value within its words.
 func (f Field) overBudget(value string) *overBudget {
 	words, runes := WordCount(value), utf8.RuneCountInString(value)
 	switch {

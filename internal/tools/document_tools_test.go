@@ -90,34 +90,28 @@ func TestDocWriteSchemaSharesFacetContract(t *testing.T) {
 // TestDocumentWritersTeachOneBudgetClause pins that every document writer
 // states each projection's budget with the shared clause, so doc_create and
 // doc_write cannot drift apart again: status_line in words, the others in
-// characters, each a ceiling rather than a target. doc_write also writes
-// documents whose status_line is declared json, held to characters, and
-// says so; doc_create only creates prose ones, and does not.
+// characters, each a ceiling rather than a target. Neither can write a
+// json status_line, which only a loop declares and its publish tool owns,
+// so neither hands a prose writer the character limit a json one has.
 func TestDocumentWritersTeachOneBudgetClause(t *testing.T) {
 	t.Parallel()
 
 	registry, _ := newTestDocumentRegistry(t)
-	for _, tt := range []struct {
-		name   string
-		clause func(documentfacets.Field) string
-	}{
-		{name: "doc_write", clause: documentfacets.Field.AnyFormatBudgetClause},
-		{name: "doc_create", clause: documentfacets.Field.BudgetClause},
-	} {
-		tool := registry.Get(tt.name)
+	for _, name := range []string{"doc_write", "doc_create"} {
+		tool := registry.Get(name)
 		if tool == nil {
-			t.Fatalf("%s not registered", tt.name)
+			t.Fatalf("%s not registered", name)
 		}
 		properties, _ := tool.Parameters["properties"].(map[string]any)
 		for _, key := range []string{"status_line", "teaser", "digest"} {
 			field, _ := documentfacets.FieldByKey(key)
 			property, _ := properties[key].(map[string]any)
 			description, _ := property["description"].(string)
-			if clause := tt.clause(field); clause == "" || strings.Count(description, clause) != 1 {
-				t.Errorf("%s %s description = %q, want the budget clause %q once", tt.name, key, description, clause)
+			if clause := field.BudgetClause(); clause == "" || strings.Count(description, clause) != 1 {
+				t.Errorf("%s %s description = %q, want the budget clause %q once", name, key, description, clause)
 			}
-			if json := strings.Contains(description, "declared format json"); json != (tt.name == "doc_write" && key == "status_line") {
-				t.Errorf("%s %s description = %q; names the json character limit = %v", tt.name, key, description, json)
+			if strings.Contains(description, "declared format json") {
+				t.Errorf("%s %s description = %q, names a json limit no write through it can meet", name, key, description)
 			}
 		}
 	}
