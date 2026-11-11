@@ -84,6 +84,15 @@ func TestValidateSizesTheLeverToTheOverage(t *testing.T) {
 			wantAbsent: []string{"characters", "180"},
 		},
 		{
+			// The cut counts the shortest words first, so removing any
+			// that many clears the backstop: cutting two of the four
+			// one-letter words here would leave 183 characters.
+			name:       "over both status line limits with uneven words, cut from the shortest",
+			mutate:     func(p *Payload) { p.StatusLine = wordsOf(18, "ninechars") + " " + wordsOf(4, "a") },
+			want:       []string{"status_line is 22 words and the limit is 20 (2 over), and its words run long", rewordLever + " 4 words"},
+			wantAbsent: []string{"characters", "180"},
+		},
+		{
 			name:       "teaser at its tier edge rewords",
 			mutate:     func(p *Payload) { p.Teaser = strings.Repeat("t", teaserMaxRunes+50) },
 			want:       []string{"teaser is 550 characters", "the limit is 500", "(50 over)", rewordLever + " 50 characters"},

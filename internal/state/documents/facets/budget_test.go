@@ -1,6 +1,7 @@
 package facets
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,34 +79,48 @@ func TestEachProjectionNamesItsBudget(t *testing.T) {
 }
 
 // TestWordCutClearsBothLimits generates status lines over their words and
-// past the backstop, of every word length from short to long, and checks
-// the refusal names a word cut that, taken from the line, fits both limits:
-// the word count, and the characters at the line's own word length.
+// past the backstop, of long words alone and of long words with short ones
+// among them, and checks the refusal names a word cut that fits both limits
+// whichever words are cut. Taking out the line's shortest words removes the
+// fewest characters any cut of that size can, so a line that still fits
+// then fits after any such cut.
 func TestWordCutClearsBothLimits(t *testing.T) {
 	t.Parallel()
 
 	field, _ := FieldByKey(string(StatusLine))
 	for words := statusLineMaxWords + 1; words <= statusLineMaxWords+10; words++ {
 		for length := 5; length <= 16; length++ {
-			line := wordsOf(words, strings.Repeat("w", length))
-			over := field.overBudget(line)
-			if over == nil || over.unit != unitWords {
-				t.Fatalf("%d words of %d: overBudget = %+v, want a word violation", words, length, over)
-			}
-			if over.cut < words-statusLineMaxWords {
-				t.Fatalf("%d words of %d: cut %d is less than the word overage", words, length, over.cut)
-			}
-			if fits := wordsOf(words-over.cut, strings.Repeat("w", length)); field.overBudget(fits) != nil {
-				t.Errorf("%d words of %d: cutting %d leaves %d characters, still over", words, length, over.cut, len(fits))
-			}
-			if want := "at least " + unitWords.count(over.cut); !strings.Contains(over.Error(), want) {
-				t.Errorf("%d words of %d: refusal %q, want it to say %q", words, length, over, want)
-			}
-			if long := over.cut > words-statusLineMaxWords; long != strings.Contains(over.Error(), "its words run long") {
-				t.Errorf("%d words of %d: refusal %q; says its words run long = %v, want %v", words, length, over, !long, long)
+			for short := 0; short <= 6; short++ {
+				line := wordsOf(words-short, strings.Repeat("w", length))
+				if short > 0 {
+					line += " " + wordsOf(short, "s")
+				}
+				over := field.overBudget(line)
+				if over == nil || over.unit != unitWords {
+					t.Fatalf("%d words of %d, %d short: overBudget = %+v, want a word violation", words, length, short, over)
+				}
+				if over.cut < words-statusLineMaxWords {
+					t.Fatalf("%d words of %d, %d short: cut %d is less than the word overage", words, length, short, over.cut)
+				}
+				if fits := withoutShortestWords(line, over.cut); field.overBudget(fits) != nil {
+					t.Errorf("%d words of %d, %d short: cutting the %d shortest leaves %d words and %d characters, still over", words, length, short, over.cut, WordCount(fits), len(fits))
+				}
+				if want := "at least " + unitWords.count(over.cut); !strings.Contains(over.Error(), want) {
+					t.Errorf("%d words of %d, %d short: refusal %q, want it to say %q", words, length, short, over, want)
+				}
+				if long := over.cut > words-statusLineMaxWords; long != strings.Contains(over.Error(), "its words run long") {
+					t.Errorf("%d words of %d, %d short: refusal %q; says its words run long = %v, want %v", words, length, short, over, !long, long)
+				}
 			}
 		}
 	}
+}
+
+// withoutShortestWords returns line without its n shortest words.
+func withoutShortestWords(line string, n int) string {
+	words := strings.Fields(line)
+	slices.SortStableFunc(words, func(a, b string) int { return len(a) - len(b) })
+	return strings.Join(words[n:], " ")
 }
 
 // TestValidateEnforcesBothStatusLineLimitsAtTheEdge pins the boundaries:

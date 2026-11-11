@@ -2,6 +2,7 @@ package facets
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -38,13 +39,37 @@ func (u unit) measure(text string) int {
 // written without spaces between words counts one word per run, so only a
 // field's character limit bounds it.
 func WordCount(text string) int {
-	words := 0
+	return len(wordLengths(text))
+}
+
+// wordLengths returns the length in characters of each of text's words, as
+// [WordCount] counts them.
+func wordLengths(text string) []int {
+	var lengths []int
 	for _, field := range strings.Fields(text) {
 		if strings.IndexFunc(field, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) >= 0 {
-			words++
+			lengths = append(lengths, utf8.RuneCountInString(field))
 		}
 	}
-	return words
+	return lengths
+}
+
+// wordsToShed returns how many of text's words must go for it to lose over
+// characters whichever words are removed. It counts the shortest first,
+// each with the one separator removing it frees, so taking out any that
+// many whole words loses at least over.
+func wordsToShed(text string, over int) int {
+	lengths := wordLengths(text)
+	slices.Sort(lengths)
+	shed := 0
+	for _, n := range lengths {
+		if over <= 0 {
+			break
+		}
+		over -= n + 1
+		shed++
+	}
+	return shed
 }
 
 // Budget names the limit a writer is told for f, as "20 words" or "500
@@ -79,15 +104,15 @@ func (f Field) BudgetClause() string {
 // reported in words alone: cutting words is the repair a writer can count,
 // and naming the character backstop beside it would hand back the
 // character target the word limit replaces. When it is past the backstop
-// too, the words it is told to cut are enough to clear both. The backstop
-// is reported only for a value within its words.
+// too, cutting any of the words it is told to cut clears both. The
+// backstop is reported only for a value within its words.
 func (f Field) overBudget(value string) *overBudget {
 	words, runes := WordCount(value), utf8.RuneCountInString(value)
 	switch {
 	case f.MaxWords > 0 && words > f.MaxWords:
-		return newOverBudget(f, unitWords, words, runes)
+		return newOverBudget(f, unitWords, value, words, runes)
 	case f.MaxRunes > 0 && runes > f.MaxRunes:
-		return newOverBudget(f, unitCharacters, words, runes)
+		return newOverBudget(f, unitCharacters, value, words, runes)
 	}
 	return nil
 }

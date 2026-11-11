@@ -51,15 +51,17 @@ type overBudget struct {
 
 // newOverBudget reports field's value, words and runes long, over its limit
 // counted in u. A value over its words and past its character limit too
-// must lose enough words to clear both, at its own characters per word.
-func newOverBudget(field Field, u unit, words, runes int) *overBudget {
+// must lose enough words to clear both whichever words go, counted from its
+// shortest ([wordsToShed]): a cut sized at its average word length leaves
+// a line over when the words cut are its short ones.
+func newOverBudget(field Field, u unit, value string, words, runes int) *overBudget {
 	count, limit := runes, field.MaxRunes
 	if u == unitWords {
 		count, limit = words, field.MaxWords
 	}
 	cut := count - limit
 	if u == unitWords && field.MaxRunes > 0 && runes > field.MaxRunes {
-		cut = max(cut, (words*(runes-field.MaxRunes)+runes-1)/runes)
+		cut = max(cut, wordsToShed(value, runes-field.MaxRunes))
 	}
 	return &overBudget{error: overBudgetText(field.Key, u, count, limit, cut), key: field.Key, unit: u, count: count, limit: limit, cut: cut, field: field, words: words, runes: runes}
 }
