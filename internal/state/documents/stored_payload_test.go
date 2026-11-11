@@ -192,7 +192,7 @@ func TestShortenedDocWriteLandsAsStoredOrNotAtAll(t *testing.T) {
 			for _, together := range []bool{false, true} {
 				name := fmt.Sprintf("%s/in %s", row.name, target.key)
 				if together {
-					name += " with every projection over"
+					name += " with both over"
 				}
 				t.Run(name, func(t *testing.T) {
 					t.Parallel()

@@ -1761,11 +1761,13 @@ type ModelsConfig struct {
 
 	// FacetShrinkModel is a fast model (a deployment ID or model name,
 	// like recovery_model) that shortens a faceted document's status_line
-	// or teaser written over its budget by at most half, in one call of
-	// at most 5 or 10 seconds. A digest is never shortened: rewriting one
-	// takes longer than a write should wait, so its author trims it. The
-	// shortened write must still pass every validation, or the original
-	// refusal stands. When empty, an over-budget projection is refused as
+	// or teaser written over its budget by at most half, in at most two
+	// calls sharing about 6.5 seconds for a status line or 14.5 for a
+	// teaser, so a write waits at most about 21 seconds before it lands
+	// shortened or its refusal stands. A digest is never shortened:
+	// rewriting one takes longer than a write should wait, so its author
+	// trims it. The shortened write must still pass every validation, or
+	// the original refusal stands. When empty, an over-budget projection is refused as
 	// written. The model must answer without reasoning first: with
 	// thinking on it spends its output cap thinking and every shrink
 	// fails, so turn thinking off on its resource (chat_template_kwargs).

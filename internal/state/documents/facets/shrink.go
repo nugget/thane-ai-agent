@@ -11,25 +11,35 @@ import (
 
 const shrinkAttempts = 2
 
-// shrinkCallTimeouts bounds one Shrink call for each projection the shrinker
-// shortens, sized to the longest reply that projection accepts: at about
-// three characters a token and 20 tokens a second, the slow end of a local
-// model's decode, a status line's 180 characters take about three seconds
-// and a teaser's 500 about eight, each with a second more for the first
-// token. A projection absent here is never shrunk, and its refusal reaches
-// the author as written. A digest's 2,048 characters would take about 35
-// seconds a call, so two calls could hold a write for over a minute, and
-// whether a shrink keeps the facts of a summary that long is unmeasured;
-// full is longer still.
-var shrinkCallTimeouts = map[string]time.Duration{
-	string(StatusLine): 5 * time.Second,
-	string(Teaser):     10 * time.Second,
+// shrinkMaxRunes is the longest character limit of a projection the
+// shrinker shortens: a teaser's. A digest's refusal reaches its author as
+// written. Rewriting 2,048 characters takes a local model most of a minute
+// at the slow end of its decode, longer than a write should wait, and a
+// digest's author is told to drop resolved items, which a shrink told to
+// keep every fact cannot do.
+const shrinkMaxRunes = teaserMaxRunes
+
+// shortens reports whether the shrinker shortens field: one with a
+// character limit no longer than [shrinkMaxRunes].
+func shortens(field Field) bool {
+	return field.MaxRunes > 0 && field.MaxRunes <= shrinkMaxRunes
+}
+
+// shrinkBudget bounds all of one projection's Shrink calls together. It is
+// sized for one of the longest replies field accepts at the slow end of a
+// busy local model's decode, about 40 characters a second, plus two
+// seconds for the first token: 6.5 seconds for a status line and 14.5 for
+// a teaser. A reply refused quickly leaves the rest to a second call. A
+// write with both over waits at most 21 seconds, inside the 30 seconds a
+// delegate allows a tool call by default.
+func shrinkBudget(field Field) time.Duration {
+	return 2*time.Second + time.Duration(field.MaxRunes)*time.Second/40
 }
 
 // Shrinker lets a faceted write land when all that is wrong with it is a
-// projection a little over its budget: an author that has stalled just over
-// the limit trims a little per refused retry, while a fast model closes the
-// gap in one call. A nil Shrinker shrinks nothing.
+// status line or teaser a little over its budget: an author that has
+// stalled just over the limit trims a little per refused retry, while a
+// fast model closes the gap in one call. A nil Shrinker shrinks nothing.
 type Shrinker struct {
 	// Model names the model Shrink calls, for the log.
 	Model string
@@ -67,10 +77,10 @@ type Shortened struct {
 //  2. Shrinking is attempted only when every violation in the refusal is a
 //     projection the shrinker shortens (status_line or teaser) over its
 //     budget and over none of its limits by more than half that limit.
-//  3. Each such projection gets at most two Shrink calls, each bounded by a
-//     deadline sized to the projection; the first result that is
-//     non-empty, within every limit of the projection, and single-line
-//     where the projection requires it replaces the projection.
+//  3. Each such projection gets at most two Shrink calls sharing one
+//     deadline sized to the projection ([shrinkBudget]); the first result
+//     that is non-empty, within every limit of the projection, and
+//     single-line where the projection requires it replaces the projection.
 //  4. validate runs again on the adjusted payload. If it passes, Fit returns
 //     that payload and one [Shortened] per replaced projection; if anything
 //     failed, the original payload and refusal, so the model only ever reads
@@ -120,16 +130,15 @@ func (s *Shrinker) Report(ctx context.Context, shortened []Shortened, err error)
 
 // smallOverruns appends each over-budget violation in err's tree to found and
 // reports whether every violation is one in a projection the shrinker
-// shortens ([shrinkCallTimeouts]), over by at most half of each of its
-// limits, the one reported and any other.
+// shortens ([shortens]), over by at most half of each of its limits, the
+// one reported and any other.
 // Wrappers (a frame, a label, a mark) are transparent; any other leaf is a
 // violation shrinking cannot repair.
 func smallOverruns(err error, found *[]*overBudget) bool {
 	switch e := err.(type) {
 	case *overBudget:
 		*found = append(*found, e)
-		_, shortens := shrinkCallTimeouts[e.key]
-		return shortens && e.withinHalf()
+		return shortens(e.field) && e.withinHalf()
 	case interface{ Unwrap() []error }:
 		for _, child := range e.Unwrap() {
 			if !smallOverruns(child, found) {
@@ -158,15 +167,16 @@ func (e *Shortened) save(saved string) {
 }
 
 // shrink returns the first Shrink result entry's field accepts, counting
-// the calls it made on entry.
+// the calls it made on entry. The calls share [shrinkBudget], so one that
+// runs it out is the last.
 func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error) {
 	field := entry.over.field
+	budget, cancel := context.WithTimeout(ctx, shrinkBudget(field))
+	defer cancel()
 	var reason error
 	for entry.attempts < shrinkAttempts {
 		entry.attempts++
-		callCtx, cancel := context.WithTimeout(ctx, shrinkCallTimeouts[field.Key])
-		candidate, err := s.Shrink(callCtx, entry.sent, field, entry.over.ask())
-		cancel()
+		candidate, err := s.Shrink(budget, entry.sent, field, entry.over.ask())
 		candidate = strings.TrimSpace(candidate)
 		over := field.overBudget(candidate)
 		switch {
@@ -182,6 +192,9 @@ func (s *Shrinker) shrink(ctx context.Context, entry *Shortened) (string, error)
 			return candidate, nil
 		}
 		s.log(ctx, "projection shrink reply rejected", *entry, candidate, reason.Error())
+		if budget.Err() != nil {
+			break
+		}
 	}
 	return "", reason
 }
