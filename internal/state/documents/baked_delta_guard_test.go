@@ -184,7 +184,7 @@ func TestGuardWarningReachesTheModel(t *testing.T) {
 
 	ctx := context.Background()
 	store, _ := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 
 	out, err := tools.Write(ctx, WriteArgs{
 		Ref:   "kb:narrative.md",
@@ -220,7 +220,7 @@ func TestGuardCleanWriteCarriesNoWarningsField(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	tools := NewTools(mustMutationStore(t))
+	tools := NewTools(mustMutationStore(t), nil)
 
 	out, err := tools.Write(ctx, WriteArgs{
 		Ref:   "kb:clean.md",

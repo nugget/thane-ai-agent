@@ -44,7 +44,7 @@ func TestSearchContentBodyOptInAndRootCoverage(t *testing.T) {
 	for _, dir := range roots {
 		writeFile(t, filepath.Join(dir, "notes.md"), "# Inventory\n\nAuthored opening summary.\n\nThe buried cobalt retrieval token is here.\n")
 	}
-	result, err := NewTools(store).SearchContent(context.Background(), SearchQuery{Query: "cobalt retrieval"})
+	result, err := NewTools(store, nil).SearchContent(context.Background(), SearchQuery{Query: "cobalt retrieval"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSearchContentFacetProjectionAndWriter(t *testing.T) {
 	store, roots := newContentSearchStore(t, map[string]RootPolicy{"kb": {Indexing: true, Authoring: AuthoringManaged, Context: RootContextPolicy{SearchBody: true}}})
 	teaser := "Authored reason to open the source."
 	digest := "Digestonlymarker belongs to the condensed view."
-	if _, err := NewTools(store).Publish(context.Background(), PublishArgs{Ref: "kb:plan.md", Title: "Plan", StatusLine: "Ready.", Teaser: &teaser, Digest: &digest, Full: "The verified xenon finding is in the full source."}); err != nil {
+	if _, err := NewTools(store, nil).Publish(context.Background(), PublishArgs{Ref: "kb:plan.md", Title: "Plan", StatusLine: "Ready.", Teaser: &teaser, Digest: &digest, Full: "The verified xenon finding is in the full source."}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := store.SearchContent(context.Background(), SearchQuery{Query: "xenon finding"})

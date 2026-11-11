@@ -42,7 +42,7 @@ func TestPublishToolMarksRejectedArguments(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			store, _ := newLoopOutputDocumentStore(t)
-			app := &App{documentStore: store, documentTools: documents.NewTools(store)}
+			app := &App{documentStore: store, documentTools: documents.NewTools(store, nil)}
 			hydrated, err := app.hydrateLoopOutputs(facetedSpec())
 			if err != nil {
 				t.Fatalf("hydrateLoopOutputs: %v", err)

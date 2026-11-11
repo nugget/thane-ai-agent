@@ -194,7 +194,7 @@ func TestOwnOutputDocReadSatisfiesReplacePrecondition(t *testing.T) {
 	t.Parallel()
 	store, _ := newReceiptLoopOutputStore(t)
 	seedDocument(t, store, "core:office.md", "Bay 1 open.")
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 	outputs := officeOutputs()
 	replace := buildLoopOutputTools(docTools, outputs)[0]
 	read := ownDocRead(docTools, outputs)
@@ -238,7 +238,7 @@ func TestReplaceOutputStaleReceiptIsErrorCarryingDiff(t *testing.T) {
 	t.Parallel()
 	store, backend := newReceiptLoopOutputStore(t)
 	seedDocument(t, store, "core:office.md", "Bay 1 open.")
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 	outputs := officeOutputs()
 	replace := buildLoopOutputTools(docTools, outputs)[0]
 	read := ownDocRead(docTools, outputs)
@@ -278,7 +278,7 @@ func TestOutputContextRenderIsTheWakeRead(t *testing.T) {
 	t.Parallel()
 	store, _ := newReceiptLoopOutputStore(t)
 	seedDocument(t, store, "core:office.md", "Bay 1 open.")
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 	outputs := officeOutputs()
 	replace := buildLoopOutputTools(docTools, outputs)[0]
 
@@ -341,7 +341,7 @@ func TestOutputContextRenderIsTheWakeRead(t *testing.T) {
 func TestPublishOutputRefusalSkipsWorkingNotes(t *testing.T) {
 	t.Parallel()
 	store, _ := newReceiptLoopOutputStore(t)
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 	outputs := []looppkg.OutputSpec{
 		{
 			Name:   "office status",

@@ -206,7 +206,7 @@ func seedDocumentTools(t *testing.T, store *documents.Store, body string) *docum
 	if _, err := store.Write(t.Context(), documents.WriteArgs{Ref: "core:office.md", Frontmatter: manifest.Frontmatter(), Body: &body}); err != nil {
 		t.Fatalf("seed document: %v", err)
 	}
-	return documents.NewTools(store)
+	return documents.NewTools(store, nil)
 }
 
 func TestDocReadAtALevelReturnsOnlyThatProjection(t *testing.T) {

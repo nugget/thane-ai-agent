@@ -51,15 +51,19 @@ type DossierReadArgs struct {
 // ConfigureDossierDocuments installs the managed document surface used by
 // [Tools.ReadDossier] and [Tools.WriteDossier]. Configure it only after the
 // document store has been initialized so every advertised tool is callable.
+// A non-nil shrinker lets a dossier refused only for small projection
+// overruns land shortened ([documentfacets.Shrinker.Fit]).
 func (t *Tools) ConfigureDossierDocuments(
 	read func(context.Context, documents.RefArgs) (string, error),
 	write func(context.Context, documents.FacetedWriteArgs) (string, error),
+	shrinker *documentfacets.Shrinker,
 ) {
 	if t == nil {
 		return
 	}
 	t.dossierRead = read
 	t.dossierWrite = write
+	t.dossierShrinker = shrinker
 }
 
 // DossierReadsEnabled reports whether the configured canonical dossier root
@@ -142,21 +146,39 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Full:       args.Full,
 	}
 	canonicalized := canonicalizeDossierCitations(&payload)
-	var validationErrs []error
-	if err := dossierOutputContract.Validate(payload); err != nil {
-		validationErrs = append(validationErrs, err)
-	}
-	if err := validateDossierSubjectIdentity(id, payload); err != nil {
-		validationErrs = append(validationErrs, err)
-	}
-	if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
-		validationErrs = append(validationErrs, err)
-	}
-	if err := validateDossierEvidenceCitations(ctx, payload, t.dossierSessions); err != nil {
-		validationErrs = append(validationErrs, err)
-	}
-	if len(validationErrs) > 0 {
-		return "", documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)
+	sent := payload
+	payload, shortened, err := t.dossierShrinker.Fit(ctx, sent, func(payload documentfacets.Payload) error {
+		// Shortened text is judged as the store will save it, by the
+		// same checks the contacts-root validator runs on that stored
+		// body; the author's own text still meets the store's folding
+		// and that validator in Store.Write, as before.
+		if payload != sent {
+			stored, err := documents.StoredPayload(DossierRef(id), dossierOutputContract, payload)
+			if err != nil {
+				return err
+			}
+			payload = stored
+		}
+		var validationErrs []error
+		if err := dossierOutputContract.Validate(payload); err != nil {
+			validationErrs = append(validationErrs, err)
+		}
+		if err := validateDossierSubjectIdentity(id, payload); err != nil {
+			validationErrs = append(validationErrs, err)
+		}
+		if err := validateDossierSubjectName(contact.FormattedName, payload); err != nil {
+			validationErrs = append(validationErrs, err)
+		}
+		if err := validateDossierEvidenceCitations(ctx, payload, t.dossierSessions); err != nil {
+			validationErrs = append(validationErrs, err)
+		}
+		if len(validationErrs) > 0 {
+			return documentfacets.InvalidProjectionsError("contact dossier projections", validationErrs...)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	result, err := t.dossierWrite(ctx, documents.FacetedWriteArgs{
 		Ref:          DossierRef(id),
@@ -166,12 +188,14 @@ func (t *Tools) WriteDossier(ctx context.Context, args DossierWriteArgs) (string
 		Payload:      payload,
 		WriteTool:    DossierWriteToolName,
 		ReceiptScope: args.ReceiptScope,
+		Shortened:    shortened,
 		// A refused replacement (no read on record, or a read the dossier
 		// has moved past) must read as a failed call, not an applied:false
 		// success: the loop runtime counts a successful call as a landed
 		// dossier, so an inline refusal would hide the loss.
 		RejectionIsError: true,
 	})
+	t.dossierShrinker.Report(ctx, shortened, err)
 	if err != nil {
 		return result, err
 	}

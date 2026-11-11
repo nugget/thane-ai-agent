@@ -25,7 +25,7 @@ const authorTemplate = "{{delta:2026-12-25}}"
 // expand and this one must not.
 func TestLoopOwnOutputInjectionKeepsRawTemplates(t *testing.T) {
 	store, _ := newLoopOutputDocumentStore(t)
-	docTools := documents.NewTools(store)
+	docTools := documents.NewTools(store, nil)
 
 	body := "# Winter\n\nThe hard freeze lands " + authorTemplate + " and the pipes need wrapping.\n"
 	if _, err := store.Write(context.Background(), documents.WriteArgs{

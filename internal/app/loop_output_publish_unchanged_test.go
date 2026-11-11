@@ -48,7 +48,7 @@ func TestPublishReportsAPublishThatChangedNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	app.documentStore, app.documentTools = store, documents.NewTools(store)
+	app.documentStore, app.documentTools = store, documents.NewTools(store, nil)
 	spec := facetedSpec()
 	spec.Outputs = []looppkg.OutputSpec{{
 		Name:   "office status",
@@ -61,7 +61,7 @@ func TestPublishReportsAPublishThatChangedNothing(t *testing.T) {
 		t.Fatalf("hydrateLoopOutputs: %v", err)
 	}
 	publish := findRuntimeTool(t, hydrated, "publish_output_office_status")
-	if !strings.Contains(publish.Description, "byte-identical to the stored document succeeds but creates no revision, and its result says unchanged: true") {
+	if !strings.Contains(publish.Description, "would save exactly the stored document succeeds but creates no revision, and its result says unchanged: true") {
 		t.Errorf("publish description = %q, want it to say what an unchanged publish returns", publish.Description)
 	}
 
@@ -100,7 +100,7 @@ func TestPublishReportsAPublishThatChangedNothing(t *testing.T) {
 			t.Fatalf("%s: result is not JSON: %v\n%s", step.name, err, result)
 		}
 		got := decoded.Published
-		warned := strings.Contains(strings.Join(got.Warnings, "\n"), "unchanged: everything you sent matches the stored document byte for byte, so no new revision was created and it still reads as last changed ")
+		warned := strings.Contains(strings.Join(got.Warnings, "\n"), "unchanged: the document this write would save is byte for byte the one already stored, so no new revision was created and it still reads as last changed ")
 		if !got.Applied || got.Unchanged != step.wantUnchanged || warned != step.wantUnchanged {
 			t.Errorf("%s: result = %s, want applied with unchanged and its warning = %v", step.name, result, step.wantUnchanged)
 		}

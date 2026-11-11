@@ -44,7 +44,7 @@ func newRevisionTools(t *testing.T, roots map[string]string, revisers map[string
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	return NewTools(store)
+	return NewTools(store, nil)
 }
 
 func testRevisions() (RevisionRef, RevisionRef) {

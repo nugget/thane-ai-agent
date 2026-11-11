@@ -1012,7 +1012,8 @@ func TestLookupContactIncludesConfiguredDossierTrailhead(t *testing.T) {
 	tools.ConfigureDossierRoot(true, true)
 	tools.ConfigureDossierDocuments(func(_ context.Context, args documents.RefArgs) (string, error) {
 		return args.Ref, nil
-	}, (&recordingDossierWriter{}).Write)
+	}, (&recordingDossierWriter{}).Write, nil)
+
 	writable, err := tools.LookupContact(`{"name":"Dossier Person"}`)
 	if err != nil {
 		t.Fatal(err)

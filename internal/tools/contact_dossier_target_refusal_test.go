@@ -31,7 +31,7 @@ func TestContactDossierWriteToolMarksTargetRefusals(t *testing.T) {
 	}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, true)
-	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write)
+	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 	handler := registry.Get("contact_dossier_write").Handler

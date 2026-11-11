@@ -162,6 +162,17 @@ func (f *fenceState) consume(line string) bool {
 	return false
 }
 
+// LeavesFenceOpen reports whether text ends inside a fenced code block
+// as [FindBakedDeltas] reads it, so that text set into a longer body
+// would exempt everything after it from that scan.
+func LeavesFenceOpen(text string) bool {
+	var fence fenceState
+	for _, line := range strings.Split(text, "\n") {
+		fence.consume(strings.TrimRight(line, "\r"))
+	}
+	return fence.open
+}
+
 // fenceDelimiter reports the marker byte and run length of a fence
 // line: up to three leading spaces, then three or more backticks or
 // tildes.

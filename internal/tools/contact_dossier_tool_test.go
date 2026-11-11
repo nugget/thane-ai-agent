@@ -52,7 +52,7 @@ func TestContactDossierReadToolOwnsRefAndMakesAbsenceActionable(t *testing.T) {
 	writer := &contactDossierWriterRecorder{}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, true)
-	contactTools.ConfigureDossierDocuments(reader.Read, writer.Write)
+	contactTools.ConfigureDossierDocuments(reader.Read, writer.Write, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 
@@ -118,7 +118,7 @@ func TestContactDossierReadToolRejectsMistypedContactBeforeDocumentRead(t *testi
 	reader := &contactDossierReaderRecorder{}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, false)
-	contactTools.ConfigureDossierDocuments(reader.Read, nil)
+	contactTools.ConfigureDossierDocuments(reader.Read, nil, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 
@@ -159,7 +159,7 @@ func TestContactDossierReadToolReturnsExistingDocumentPayload(t *testing.T) {
 	reader := &contactDossierReaderRecorder{result: `{"ref":"contacts:existing.md","body":"current","word_count":1}`}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, false)
-	contactTools.ConfigureDossierDocuments(reader.Read, nil)
+	contactTools.ConfigureDossierDocuments(reader.Read, nil, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 
@@ -208,7 +208,7 @@ func TestContactDossierWriteToolOwnsStructureAndRevisionScope(t *testing.T) {
 	writer := &contactDossierWriterRecorder{}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, true)
-	contactTools.ConfigureDossierDocuments(nil, writer.Write)
+	contactTools.ConfigureDossierDocuments(nil, writer.Write, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 
@@ -302,7 +302,7 @@ func TestContactDossierWriteToolUnavailableWithoutManagedDocuments(t *testing.T)
 	}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, false)
-	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write)
+	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write, nil)
 
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
@@ -323,7 +323,7 @@ func TestContactDossierWriteToolRejectsEveryUnknownArgument(t *testing.T) {
 	}
 	contactTools := contacts.NewTools(store, nil)
 	contactTools.ConfigureDossierRoot(true, true)
-	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write)
+	contactTools.ConfigureDossierDocuments(nil, (&contactDossierWriterRecorder{}).Write, nil)
 	registry := NewEmptyRegistry()
 	registry.SetContactTools(contactTools)
 

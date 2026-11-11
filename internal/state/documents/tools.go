@@ -26,16 +26,20 @@ const (
 // Tools exposes model-facing document navigation tools.
 type Tools struct {
 	store     *Store
+	shrinker  *documentfacets.Shrinker
 	intakeMu  sync.Mutex
 	intakes   map[string]intakeEntry
 	receiptMu sync.Mutex
 	receipts  map[string]revisionReceipt
 }
 
-// NewTools creates a document tool surface.
-func NewTools(store *Store) *Tools {
+// NewTools creates a document tool surface. A non-nil shrinker lets a
+// faceted write refused only for small projection overruns land shortened
+// ([documentfacets.Shrinker.Fit]); nil refuses it as written.
+func NewTools(store *Store, shrinker *documentfacets.Shrinker) *Tools {
 	return &Tools{
 		store:    store,
+		shrinker: shrinker,
 		intakes:  make(map[string]intakeEntry),
 		receipts: make(map[string]revisionReceipt),
 	}

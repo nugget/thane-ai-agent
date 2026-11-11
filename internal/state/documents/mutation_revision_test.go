@@ -125,7 +125,7 @@ func TestHiddenRevisionReceiptReturnsConflictDiffAndAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	ctx := t.Context()
 
 	createdJSON, err := tools.Write(ctx, WriteArgs{
@@ -238,7 +238,7 @@ func TestHiddenRevisionReceiptAdvancesFromConflictWhenSnapshotFails(t *testing.T
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	ctx := t.Context()
 	const scope = "loop:archivist-contacts"
 
@@ -303,7 +303,7 @@ func TestDocumentCommitUpdateAndAppendHonorHiddenRevisionReceipts(t *testing.T) 
 			if err != nil {
 				t.Fatalf("NewStoreWithOptions: %v", err)
 			}
-			tools := NewTools(store)
+			tools := NewTools(store, nil)
 			ctx := t.Context()
 			const (
 				ref   = "kb:person.md"

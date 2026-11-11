@@ -1,6 +1,10 @@
 package documents
 
-import "time"
+import (
+	"time"
+
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
+)
 
 type modelMutationResult struct {
 	Action        string   `json:"action"`
@@ -23,6 +27,9 @@ type modelMutationResult struct {
 	// reservation says so. Without this field the store's warnings stop
 	// at the envelope and the advisory tier is a no-op.
 	Warnings []string `json:"warnings,omitempty"`
+	// ShortenedProjections gives the exact saved text of each projection
+	// a model shortened to fit, so the author's view matches the store.
+	ShortenedProjections []documentfacets.Shortened `json:"shortened_projections,omitempty"`
 	// Unchanged says the write matched the stored document byte for byte
 	// and created no revision.
 	Unchanged bool `json:"unchanged,omitempty"`
@@ -134,6 +141,8 @@ func toModelMutationResult(result *MutationResult, now time.Time) *modelMutation
 		Window:        result.Window,
 		Warnings:      append([]string(nil), result.Warnings...),
 		Unchanged:     result.Unchanged,
+
+		ShortenedProjections: result.Shortened,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
@@ -59,7 +60,14 @@ type FacetedWriteArgs struct {
 	// PreviousWriteTools permits a trusted adapter to rename its own write
 	// surface while atomically migrating the document contract.
 	PreviousWriteTools []string `json:"-"`
+	// Shortened lists projections the adapter's own [documentfacets.Shrinker.Fit]
+	// shortened, reported in the result with any this write shortens. A
+	// payload carrying any is validated as the store will save it.
+	Shortened []documentfacets.Shortened `json:"-"`
 }
+
+// shortenedWarning frames shortened_projections in a write's warnings.
+const shortenedWarning = "shortened_projections were a little over their character limit, so Go had a model shorten them before saving; each saved_text is exactly what is stored now, so treat it, not what you sent, as the current projection."
 
 // StructuredDocumentMutationError redirects a mutation to the tool that owns
 // the target document's complete logical state.
@@ -151,17 +159,36 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 		}
 	}
 
-	var validationErrors []error
-	if err := args.Contract.Validate(args.Payload); err != nil {
-		validationErrors = append(validationErrors, err)
-	}
-	if args.Validate != nil {
-		if err := args.Validate(args.Payload); err != nil {
+	sent := args.Payload
+	var shortened []documentfacets.Shortened
+	args.Payload, shortened, err = t.shrinker.Fit(ctx, sent, func(payload documentfacets.Payload) error {
+		// Shortened text is judged as the store will save it, including
+		// text the adapter's own Fit shortened, which arrives here as
+		// sent; the author's own text still meets the store's folding
+		// and checks in Store.Write, as before.
+		if payload != sent || len(args.Shortened) > 0 {
+			stored, err := StoredPayload(args.Ref, args.Contract, payload)
+			if err != nil {
+				return err
+			}
+			payload = stored
+		}
+		var validationErrors []error
+		if err := args.Contract.Validate(payload); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
-	}
-	if len(validationErrors) > 0 {
-		return "", documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
+		if args.Validate != nil {
+			if err := args.Validate(payload); err != nil {
+				validationErrors = append(validationErrors, err)
+			}
+		}
+		if len(validationErrors) > 0 {
+			return documentfacets.InvalidProjectionsError("faceted document projections", validationErrors...)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	body := args.Contract.Render(args.Payload)
@@ -184,8 +211,20 @@ func (t *Tools) WriteFaceted(ctx context.Context, args FacetedWriteArgs) (string
 	}
 	t.prepareWriteReceipt(&writeArgs)
 	result, err := t.store.Write(ctx, writeArgs)
+	t.shrinker.Report(ctx, shortened, err)
 	if result != nil {
 		result.Action = args.WriteTool
+		// The store saved the body with its glyph artifacts folded, and
+		// the validation above passed only a payload whose projections
+		// read back as written once folded ([StoredPayload]), so each
+		// saved_text folded the same way is the stored projection.
+		for _, entry := range append(args.Shortened, shortened...) {
+			entry.SavedText = normalizeGlyphArtifacts(entry.SavedText)
+			result.Shortened = append(result.Shortened, entry)
+		}
+		if len(result.Shortened) > 0 {
+			result.Warnings = append(result.Warnings, shortenedWarning)
+		}
 	}
 	payload, err := t.marshalMutationResult(ctx, args.WriteTool, args.Ref, args.ReceiptScope, writeArgs.ExpectedRevision, result, err)
 	return deliverMutation(payload, err, args.RejectionIsError)
@@ -250,6 +289,45 @@ func validateFacetedDocumentBody(body string, frontmatter map[string][]string) e
 		return errors.Join(validationErrors...)
 	}
 	return nil
+}
+
+// StoredPayload returns payload as [Store.Write] would save it under ref,
+// or why the store's handling of the body would refuse it: the body payload
+// renders to, with its glyph artifacts folded and its prose guarded as the
+// store does, parsed back with contract. A body that does not render back
+// to itself, the rule validateFacetedDocumentBody applies, is refused here
+// too, and so is a projection that leaves a code fence open, since the
+// guard would skip every projection after it.
+//
+// A faceted writer runs all of its validation on this stored form of a
+// shortened payload ([documentfacets.Shrinker.Fit]) rather than on the
+// shrink model's reply, which is what keeps the shrinker to two outcomes.
+// For any shrink reply, a write either lands, with every shortened
+// projection read back from the store equal to the saved_text its result
+// reports, or returns byte for byte the refusal the same write returns with
+// no shrinker. Never a third: a reply the store would fold into a reserved
+// heading, a rendered delta or the subject's name cannot become a refusal
+// about text the author never sent, nor open a fence that carries the
+// author's own rendered delta past the guard. Only a refusal the store
+// makes for something other than the body, a stale read, a placement rule
+// or a root closed to authoring, can take the place of the over-budget
+// refusal, and the author reads it as it would once it fixed the overrun
+// itself.
+func StoredPayload(ref string, contract documentfacets.Contract, payload documentfacets.Payload) (documentfacets.Payload, error) {
+	body := normalizeGlyphArtifacts(contract.Render(payload))
+	if _, err := guardAuthoredProse(ref, body); err != nil {
+		return documentfacets.Payload{}, err
+	}
+	stored := contract.Parse(body)
+	if contract.Render(stored) != strings.TrimSpace(body) {
+		return documentfacets.Payload{}, fmt.Errorf("%s would not read back as the projections written once its glyph artifacts are folded", ref)
+	}
+	for _, field := range contract.Fields() {
+		if text, _ := stored.ByKey(field.Key); promptfmt.LeavesFenceOpen(text) {
+			return documentfacets.Payload{}, fmt.Errorf("%s would leave a code fence open in %s, hiding the projections after it from the prose guard", ref, field.Key)
+		}
+	}
+	return stored, nil
 }
 
 func structuredWriteTool(record *DocumentRecord) string {

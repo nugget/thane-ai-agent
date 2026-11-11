@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/state/documents"
+	documentfacets "github.com/nugget/thane-ai-agent/internal/state/documents/facets"
 )
 
 // EmbeddingClient generates embeddings for semantic search.
@@ -60,6 +61,7 @@ type Tools struct {
 	dossiersWritable     bool
 	dossierRead          func(context.Context, documents.RefArgs) (string, error)
 	dossierWrite         func(context.Context, documents.FacetedWriteArgs) (string, error)
+	dossierShrinker      *documentfacets.Shrinker
 	dossierExists        func(context.Context, string) (bool, error)
 	dossierSessions      ArchiveSessionResolver
 	mutationSink         func(context.Context, ContactMutation) error

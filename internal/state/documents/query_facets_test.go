@@ -92,7 +92,7 @@ func TestSearchToolResultCarriesFacetsAcrossModelBoundary(t *testing.T) {
 		t.Fatalf("write plain: %v", err)
 	}
 
-	out, err := NewTools(store).Search(ctx, SearchArgs{Query: "capybara"})
+	out, err := NewTools(store, nil).Search(ctx, SearchArgs{Query: "capybara"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

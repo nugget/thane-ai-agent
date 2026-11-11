@@ -17,7 +17,7 @@ func TestToolsPublishCreatesCanonicalFacetedDocument(t *testing.T) {
 	t.Parallel()
 
 	store, kbDir := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	teaser := "Open this for the current migration state."
 	digest := "The migration is complete and the old write path is retired."
 
@@ -86,7 +86,7 @@ func TestDirectWritersRequireFlatNewDossierRefs(t *testing.T) {
 	t.Parallel()
 
 	store, dossiersDir := newMutationStoreForRoot(t, "dossiers")
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	ctx := context.Background()
 	const nestedRef = "dossiers:entity/new-cat.md"
 
@@ -142,7 +142,7 @@ func TestToolsPublishEquivalentLogicalStateIsByteStable(t *testing.T) {
 	t.Parallel()
 
 	store, kbDir := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	contract := documentfacets.Contract{Facets: []documentfacets.Spec{{Name: documentfacets.StatusLine}}}
 	body := contract.Render(documentfacets.Payload{
 		StatusLine: "Production is healthy.",
@@ -195,7 +195,7 @@ func TestWriteFacetedUsesOwningToolInRootCommitMessage(t *testing.T) {
 	writer.root = kbDir
 	contract := documentfacets.Contract{Facets: []documentfacets.Spec{{Name: documentfacets.StatusLine}, {Name: documentfacets.Digest}}}
 
-	if _, err := NewTools(store).WriteFaceted(context.Background(), FacetedWriteArgs{
+	if _, err := NewTools(store, nil).WriteFaceted(context.Background(), FacetedWriteArgs{
 		Ref:       "kb:owned.md",
 		Contract:  contract,
 		Payload:   documentfacets.Payload{StatusLine: "Current state.", Digest: "Current summary.", Full: "Current detail."},
@@ -212,7 +212,7 @@ func TestToolsPublishRequiresEveryExistingProjectionWithoutChangingDocument(t *t
 	t.Parallel()
 
 	store, kbDir := newMutationStore(t)
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	teaser := "Open this for detail."
 	digest := "The current standalone summary."
 	_, err := tools.Publish(context.Background(), PublishArgs{
@@ -261,7 +261,7 @@ func TestToolsPublishAdoptsOrdinaryDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Write: %v", err)
 	}
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	full := "Replacement detail with a nested section.\n\n### Evidence\n\nThe exact supplied body."
 	_, err = tools.Publish(ctx, PublishArgs{
 		Ref:        "kb:notes.md",
@@ -295,7 +295,7 @@ func TestGenericMutationsRedirectFacetedDocuments(t *testing.T) {
 
 	store, _ := newMutationStore(t)
 	ctx := context.Background()
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 	_, err := tools.Publish(ctx, PublishArgs{
 		Ref:        "kb:status.md",
 		StatusLine: "Current state.",
@@ -445,7 +445,7 @@ func TestToolsPublishHonorsNarrowerOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed owner document: %v", err)
 	}
-	_, err = NewTools(store).Publish(ctx, PublishArgs{
+	_, err = NewTools(store, nil).Publish(ctx, PublishArgs{
 		Ref:        "kb:owned.md",
 		StatusLine: "Replacement state.",
 		Full:       "Replacement detail.",
@@ -480,7 +480,7 @@ PRIVATE_FULL_MARKER
 	if err := store.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	tools := NewTools(store)
+	tools := NewTools(store, nil)
 
 	_, err := tools.Read(context.Background(), RefArgs{Ref: "kb:malformed.md"})
 	if err == nil {

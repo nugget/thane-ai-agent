@@ -227,6 +227,38 @@ func TestFindBakedDeltasFencesReopen(t *testing.T) {
 	}
 }
 
+// TestLeavesFenceOpenAgreesWithTheScan pins LeavesFenceOpen to the scan it
+// speaks for: text leaves a fence open exactly when a delta on the line
+// after it goes unfound.
+func TestLeavesFenceOpenAgreesWithTheScan(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		text string
+		open bool
+	}{
+		{text: "Plain prose.", open: false},
+		{text: "Intro.\n```\ncode", open: true},
+		{text: "Intro.\n```\ncode\n```", open: false},
+		{text: "~~~ an info string", open: true},
+		{text: "```\n~~~\n```", open: false},
+		{text: "~~~\n```\n", open: true},
+		{text: "````\n```", open: true},
+		{text: "   ```", open: true},
+		{text: "    ```", open: false},
+		{text: "```\r\ncode\r\n```\r", open: false},
+	} {
+		next := strings.Count(tt.text, "\n") + 2
+		scanned := false
+		for _, finding := range FindBakedDeltas(tt.text + "\n-3d") {
+			scanned = scanned || finding.Line == next
+		}
+		if got := LeavesFenceOpen(tt.text); got != tt.open || scanned == tt.open {
+			t.Errorf("LeavesFenceOpen(%q) = %v, want %v; the line after it scanned = %v", tt.text, got, tt.open, scanned)
+		}
+	}
+}
+
 // TestFindBakedDeltasCleanProse pins the common case: prose with
 // nothing to report allocates nothing.
 func TestFindBakedDeltasCleanProse(t *testing.T) {

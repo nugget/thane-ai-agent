@@ -158,7 +158,7 @@ func TestWriteDossier_SecondDossierRefusal(t *testing.T) {
 			}
 			writer := &recordingDossierWriter{}
 			tools.ConfigureDossierRoot(true, true)
-			tools.ConfigureDossierDocuments(nil, writer.Write)
+			tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 			tools.ConfigureDossierPresence(presence.exists)
 
 			target := records[tt.target]
@@ -196,7 +196,7 @@ func TestWriteDossier_SecondDossierRefusal(t *testing.T) {
 		records := seedForkRecords(t, tools.store, carolPair)
 		writer := &recordingDossierWriter{}
 		tools.ConfigureDossierRoot(true, true)
-		tools.ConfigureDossierDocuments(nil, writer.Write)
+		tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 		if _, err := tools.WriteDossier(context.Background(), validDossierArgs(records["Carol"])); err != nil || writer.calls != 1 {
 			t.Errorf("WriteDossier() = %v, calls %d; want one write", err, writer.calls)
 		}
@@ -207,7 +207,7 @@ func TestWriteDossier_SecondDossierRefusal(t *testing.T) {
 		records := seedForkRecords(t, tools.store, carolPair)
 		writer := &recordingDossierWriter{}
 		tools.ConfigureDossierRoot(true, true)
-		tools.ConfigureDossierDocuments(nil, writer.Write)
+		tools.ConfigureDossierDocuments(nil, writer.Write, nil)
 		tools.ConfigureDossierPresence((&fakeDossierPresence{err: errors.New("document index offline")}).exists)
 		_, err := tools.WriteDossier(context.Background(), validDossierArgs(records["Carol"]))
 		requireContains(t, err, "already has a dossier", "document index offline")

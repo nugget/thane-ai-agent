@@ -747,6 +747,7 @@ func normalizeConfiguredModelRefs(cfg *config.Config, catalog *fleet.Catalog) {
 		return ref
 	}
 
+	cfg.Models.FacetShrinkModel = resolve(cfg.Models.FacetShrinkModel)
 	cfg.Archive.MetadataModel = resolve(cfg.Archive.MetadataModel)
 	cfg.Extraction.Model = resolve(cfg.Extraction.Model)
 	cfg.Media.SummarizeModel = resolve(cfg.Media.SummarizeModel)

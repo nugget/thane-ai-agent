@@ -25,7 +25,7 @@ func newReceiptLifecycleTools(t *testing.T) (*Tools, *Store, *revisionMutationBa
 	if err != nil {
 		t.Fatalf("NewStoreWithOptions: %v", err)
 	}
-	return NewTools(store), store, backend
+	return NewTools(store, nil), store, backend
 }
 
 // TestDeleteAdvancesReceiptToAbsent pins the receipt lifecycle across a

@@ -39,7 +39,7 @@ func TestKnowledgeSearchAcrossEvidenceAndDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	RegisterDocumentTools(registry, documents.NewTools(store))
+	RegisterDocumentTools(registry, documents.NewTools(store, nil))
 	for _, tc := range []struct {
 		name     string
 		tools    []string
@@ -86,7 +86,7 @@ func TestKnowledgeSearchAcrossEvidenceAndDocuments(t *testing.T) {
 	}
 	// Composition must work when document tools are registered first too.
 	reordered := NewEmptyRegistry()
-	RegisterDocumentTools(reordered, documents.NewTools(store))
+	RegisterDocumentTools(reordered, documents.NewTools(store, nil))
 	reordered.SetArchiveStore(registry.archiveStore)
 	raw, err := reordered.Execute(context.Background(), "search", `{"query":"MQTT"}`)
 	if err != nil || !strings.Contains(raw, `"source":"archives"`) || !strings.Contains(raw, `"source":"documents"`) {
