@@ -112,7 +112,8 @@ func TestShrinkFacetTextAsksOnceWithNoTools(t *testing.T) {
 // spends the output bound reasoning, so every shrink fails and the writer's
 // refusal stands exactly as when the text could not be shortened. Whether
 // the provider classifies the reply as reasoning-only, reports an empty
-// answer at the bound, or, on a model too slow to reach the bound, the
+// answer at the bound (as an answer, or as an empty-completion error beside
+// the response that says so), or, on a model too slow to reach the bound, the
 // call runs out its deadline, the refusal names the fix; a call that failed
 // for another reason, including the turn being cancelled, or a long answer
 // cut off, does not.
@@ -120,6 +121,7 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 	t.Parallel()
 
 	reasoningOnly := llm.WithErrorClass(llm.ErrReasoningOnly, errors.New("openai_compat produced only reasoning"))
+	emptyCompletion := llm.WithErrorClass(llm.ErrEmptyCompletion, errors.New("openai_compat returned an empty assistant completion"))
 	tests := []struct {
 		name      string
 		reply     llm.ChatResponse
@@ -133,6 +135,9 @@ func TestShrinkFacetTextNamesAModelThatReasonedInsteadOfAnswering(t *testing.T) 
 		{name: "empty answer stopped by length", reply: llm.ChatResponse{StopReason: "length"}, wantFix: true},
 		{name: "blank answer stopped by max_tokens", reply: llm.ChatResponse{Message: llm.Message{Content: " \n"}, StopReason: "max_tokens"}, wantFix: true},
 		{name: "empty answer spent the bound with no stop reason", reply: llm.ChatResponse{OutputTokens: 240}, wantFix: true},
+		{name: "empty completion error at the bound by stop reason", reply: llm.ChatResponse{StopReason: "length", OutputTokens: 31}, err: emptyCompletion, wantFix: true, wantClass: llm.ErrEmptyCompletion},
+		{name: "empty completion error at the bound by token count", reply: llm.ChatResponse{OutputTokens: 240}, err: emptyCompletion, wantFix: true, wantClass: llm.ErrEmptyCompletion},
+		{name: "empty completion error short of the bound", reply: llm.ChatResponse{StopReason: "stop", OutputTokens: 3}, err: emptyCompletion, wantClass: llm.ErrEmptyCompletion},
 		{name: "long answer cut off", reply: llm.ChatResponse{Message: llm.Message{Content: "Short"}, StopReason: "length"}},
 		{name: "call failed", err: errors.New("connection refused")},
 		{
