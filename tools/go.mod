@@ -76,7 +76,7 @@ require (
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.7 // indirect
 	github.com/dave/dst v0.28.0 // indirect
-	github.com/daveshanley/vacuum v0.36.2 // indirect
+	github.com/daveshanley/vacuum v0.39.3 // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.12.0 // indirect
 	github.com/dop251/goja v0.0.0-20261021140635-64adc8bb4d51 // indirect
