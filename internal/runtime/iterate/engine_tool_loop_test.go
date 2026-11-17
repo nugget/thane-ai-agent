@@ -15,9 +15,11 @@ import (
 // The contract for ending a run on refused repeats (Engine.Run):
 //
 //   - L1: an iteration in which every call was refused as a repeat
-//     (past MaxToolRepeat identical calls) is a strike. An iteration
-//     with any call that was not refused — one that ran, failed, or was
-//     blocked as unavailable — clears the strikes.
+//     (past MaxToolRepeat identical calls) is a strike. Any other
+//     iteration clears the strikes: one with a call that was not refused
+//     (it ran, failed, or was blocked as unavailable), and one with no
+//     calls (a reply the closure hold keeps open, or an empty response
+//     the nudge answers).
 //   - L2: at MaxToolLoopStrikes strikes in a row the run ends. It is
 //     exhausted with reason tool_loop, the striking iteration is the last
 //     tool iteration and records that reason, and one forced-text call
@@ -40,17 +42,22 @@ const (
 	stepFailed      loopStep = "F"  // a call with new arguments that fails
 	stepMixed       loopStep = "M"  // the repeated call beside a new call that succeeds
 	stepUnavailable loopStep = "U"  // a call to a tool that is not available
+	stepHeld        loopStep = "H"  // a reply, held open by input arriving at closure
+	stepEmpty       loopStep = "E"  // an empty response, which the nudge answers (once per run)
 )
 
-var allLoopSteps = []loopStep{stepRefused, stepRefusedTwo, stepRan, stepFailed, stepMixed, stepUnavailable}
+var allLoopSteps = []loopStep{stepRefused, stepRefusedTwo, stepRan, stepFailed, stepMixed, stepUnavailable, stepHeld}
 
 // loopScriptLLM replies from a script while tools are offered and with
-// "forced" when they are not, which only the forced-text call does.
+// "forced" when they are not, which only the forced-text call does. A
+// "held" reply leaves one message for pullInput, so the closure poll
+// that follows it holds the turn open.
 type loopScriptLLM struct {
 	mu      sync.Mutex
 	script  []*llm.ChatResponse
 	next    int
 	offered []bool
+	pending bool
 }
 
 func (m *loopScriptLLM) Chat(ctx context.Context, model string, msgs []llm.Message, tls []map[string]any) (*llm.ChatResponse, error) {
@@ -69,7 +76,18 @@ func (m *loopScriptLLM) ChatStream(_ context.Context, _ string, _ []llm.Message,
 	}
 	resp := m.script[m.next]
 	m.next++
+	m.pending = resp.Message.Content == "held"
 	return resp, nil
+}
+
+func (m *loopScriptLLM) pullInput(context.Context) []llm.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.pending {
+		return nil
+	}
+	m.pending = false
+	return []llm.Message{{Role: "user", Content: "One more thing."}}
 }
 
 func (m *loopScriptLLM) Ping(context.Context) error { return nil }
@@ -108,6 +126,12 @@ func loopScript(steps []loopStep, repeat int) []*llm.ChatResponse {
 			calls = []llm.ToolCall{repeated(), fresh("search")}
 		case stepUnavailable:
 			calls = []llm.ToolCall{fresh("banned")}
+		case stepHeld:
+			script = append(script, textResponse("held"))
+			continue
+		case stepEmpty:
+			script = append(script, textResponse(""))
+			continue
 		}
 		script = append(script, toolCallResponse(calls...))
 	}
@@ -171,6 +195,8 @@ func checkLoopRun(steps []loopStep, limit int) error {
 	cfg := baseCfg(nil, exec)
 	cfg.LLM = mock
 	cfg.CheckToolAvail = func(name string) bool { return name != "banned" }
+	cfg.PullInput = mock.pullInput
+	cfg.NudgeOnEmpty = true
 	cfg.MaxToolLoopStrikes = limit
 	cfg.MaxIterations = DefaultMaxToolRepeat + len(steps) + 1
 
@@ -287,7 +313,7 @@ func TestEngineEndsTheRunOnRefusedStreaksAtTheDefaultLimit(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1630, 1))
 	weighted := []loopStep{
 		stepRefused, stepRefused, stepRefused, stepRefused, stepRefusedTwo,
-		stepRan, stepFailed, stepFailed, stepMixed, stepUnavailable,
+		stepRan, stepFailed, stepFailed, stepMixed, stepUnavailable, stepHeld,
 	}
 	failures := 0
 	for range 4000 {
@@ -302,6 +328,36 @@ func TestEngineEndsTheRunOnRefusedStreaksAtTheDefaultLimit(t *testing.T) {
 				return
 			}
 		}
+	}
+}
+
+// A reply held open for new input, and an empty response the nudge
+// answers, sit between refused iterations without continuing a streak:
+// the run that replied is not ended by its next refusal.
+func TestEngineToolLoopStreaksEndAtAnIterationWithoutCalls(t *testing.T) {
+	t.Parallel()
+
+	four := []loopStep{stepRefused, stepRefused, stepRefused, stepRefused}
+	five := append([]loopStep{stepRefused}, four...)
+	cases := []struct {
+		name       string
+		steps      []loopStep
+		wantReason string
+	}{
+		{"four refused, a held reply, one refused, then a reply", append(append(four[:4:4], stepHeld), stepRefused), ""},
+		{"four refused, an empty response, one refused, then a reply", append(append(four[:4:4], stepEmpty), stepRefused), ""},
+		{"four refused, a held reply, then five refused", append(append(four[:4:4], stepHeld), five...), ExhaustToolLoop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, reason := expectedLoopEnding(tc.steps, DefaultMaxToolLoopStrikes); reason != tc.wantReason {
+				t.Fatalf("contract reads ending %q, want %q", reason, tc.wantReason)
+			}
+			if err := checkLoopRun(tc.steps, 0); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

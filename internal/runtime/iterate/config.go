@@ -40,8 +40,10 @@ type Config struct {
 
 	// MaxToolLoopStrikes is the number of consecutive iterations in
 	// which every call was refused under MaxToolRepeat before the
-	// engine ends the run with [ExhaustToolLoop] and forces text. Zero
-	// uses [DefaultMaxToolLoopStrikes].
+	// engine ends the run with [ExhaustToolLoop] and forces text. Any
+	// other iteration, with a call that was not refused or with no
+	// calls at all, breaks the run of strikes. Zero uses
+	// [DefaultMaxToolLoopStrikes].
 	MaxToolLoopStrikes int
 
 	// --- LLM ---

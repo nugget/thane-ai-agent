@@ -443,6 +443,11 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterRec.DurationMs = time.Since(iterStart).Milliseconds()
 		iterations = append(iterations, iterRec)
 
+		// An iteration with no calls is not a strike, so it ends any run
+		// of them: after a reply the closure hold keeps open, or an empty
+		// response the nudge answers, refusals are counted afresh.
+		loopStrikes = 0
+
 		// If the model produced fresh text after tool execution, discard
 		// any deferred text — the model is providing a new response.
 		if llmResp.Message.Content != "" && deferredText != "" {
