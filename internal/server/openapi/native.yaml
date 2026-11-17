@@ -2949,14 +2949,14 @@ components:
           example: { "weather_lookup": 1, "macos_calendar_events": 2 }
         exhausted:
           type: boolean
-          description: Whether the model loop terminated by exhausting its iteration budget rather than completing normally.
+          description: Whether the model loop stopped before finishing rather than completing normally, either at a limit exhaust_reason names or because a model call failed.
           readOnly: true
           example: false
         exhaust_reason:
           type: string
-          description: Explanation of why the iteration budget was exhausted, when applicable.
+          description: Why the model loop stopped at a limit before finishing, for example max_iterations when it ran out of iterations, or tool_loop when every call in several iterations in a row was refused as an identical repeat. Omitted when the run completed or a model call failed.
           readOnly: true
-          example: "max iterations reached"
+          example: max_iterations
         created_at:
           type: string
           format: date-time

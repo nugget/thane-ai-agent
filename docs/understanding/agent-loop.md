@@ -111,13 +111,21 @@ projection, a dossier rule the value broke — never because its text
 happens to mention the argument, so a database, network or lookup
 failure never earns the note.
 
+If every call in five iterations in a row is refused this way, the run
+ends there instead of going on toward its iteration limit: it is marked
+exhausted with reason `tool_loop` and gets the same final tool-free call
+as a run that runs out of iterations. Any iteration with a call that was
+not refused, or with no calls at all, starts the count again.
+
 ### 5. Response Shaping
 
 When the agent has enough information — or hits the iteration limit — it
 generates a final text response formatted for the requesting interface.
 
-If the loop exhausts its ten iterations without producing a response, a
-final LLM call with no tools available forces a text response.
+If the loop ends without producing a response, because it reached its
+iteration limit (50 unless the request sets another), kept calling tools
+it does not have, or sent only refused repeats five iterations in a row,
+a final LLM call with no tools available forces a text response.
 
 ## Durable Outputs
 
