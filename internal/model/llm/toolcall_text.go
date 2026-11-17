@@ -74,8 +74,10 @@ type TextToolAction string
 
 const (
 	// TextToolActionNone means the fallback left the response as it
-	// arrived: it already had structured calls, had no content, or its
-	// content held no tool-call shape.
+	// arrived: it had no content; it had structured calls and its content
+	// was not bare tool-call JSON naming offered tools they lack (a
+	// fenced, tagged or prose-led call, or one call followed by text,
+	// stays as written, unrun); or its content held no tool-call shape.
 	TextToolActionNone TextToolAction = "none"
 	// TextToolActionRecovered means the content, or the payload inside
 	// its leading fence or its first <tool_call> tag, parsed as calls
@@ -97,6 +99,16 @@ const (
 	// TextToolActionStrippedTrailing means a tool-call payload after
 	// prose was removed and the prose kept. The call is not executed.
 	TextToolActionStrippedTrailing TextToolAction = "stripped_trailing"
+	// TextToolActionRecoveredBesideNative means the response had
+	// structured calls and its content, past leading whitespace, was
+	// bare tool-call JSON naming offered tools: one object or array that
+	// is the whole content, or a run of two or more calls, after which
+	// any text is ignored as it is without structured calls. Those whose
+	// names no structured call shares go ahead of the structured calls,
+	// in the order written, and the content is cleared. One that shares
+	// a structured call's name is dropped, since the structured call is
+	// the model's own statement of it.
+	TextToolActionRecoveredBesideNative TextToolAction = "recovered_beside_native"
 )
 
 // ApplyTextToolCallFallback upgrades raw-text tool call emissions into
@@ -105,7 +117,8 @@ const (
 // It returns the action it took, which is also stored on
 // resp.TextToolAction, and records resp.ToolCallSource: native when the
 // response arrived with structured calls, text_fallback when this
-// function recovered them.
+// function recovered them, and native_and_text_fallback when it
+// recovered calls beside structured ones.
 func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
 	if resp == nil {
 		return TextToolActionNone
@@ -117,13 +130,18 @@ func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, prof
 	switch resp.TextToolAction {
 	case TextToolActionRecovered, TextToolActionRepairRecoveredUnoffered:
 		resp.ToolCallSource = ToolCallSourceTextFallback
+	case TextToolActionRecoveredBesideNative:
+		resp.ToolCallSource = ToolCallSourceNativeAndText
 	}
 	return resp.TextToolAction
 }
 
 func applyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
-	if len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
+	if resp.Message.Content == "" {
 		return TextToolActionNone
+	}
+	if len(resp.Message.ToolCalls) > 0 {
+		return recoverTextCallsBesideNative(resp, validToolNames, profile)
 	}
 	if parsed := ParseTextToolCalls(resp.Message.Content, validToolNames, profile); len(parsed) > 0 {
 		resp.Message.ToolCalls = parsed

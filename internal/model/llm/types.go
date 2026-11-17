@@ -58,6 +58,11 @@ const (
 	// ToolCallSourceTextFallback means the provider returned text and
 	// [ApplyTextToolCallFallback] recovered the calls from it.
 	ToolCallSourceTextFallback ToolCallSource = "text_fallback"
+	// ToolCallSourceNativeAndText means the provider returned some calls
+	// in its structured tool_calls field and
+	// [ApplyTextToolCallFallback] recovered the rest from the text
+	// beside them.
+	ToolCallSourceNativeAndText ToolCallSource = "native_and_text_fallback"
 )
 
 // ChatResponse is the unified response from any LLM provider.
@@ -85,8 +90,8 @@ type ChatResponse struct {
 	StopReason string
 
 	// ToolCallSource names the channel Message.ToolCalls arrived
-	// through: the provider's structured tool_calls field, or Thane's
-	// recovery of a call the model wrote as text. It is set by
+	// through: the provider's structured tool_calls field, Thane's
+	// recovery of a call the model wrote as text, or both. It is set by
 	// [ApplyTextToolCallFallback], so it is empty when that fallback did
 	// not run on the response or the response had no tool calls.
 	ToolCallSource ToolCallSource

@@ -415,6 +415,8 @@ func TestOpenAICompatStreamHoldOverHTTP(t *testing.T) {
 	offered := []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "tag_activate", "parameters": map[string]any{"type": "object"}}},
 	}
+	offeredBoth := append(slices.Clone(offered),
+		map[string]any{"type": "function", "function": map[string]any{"name": "tag_deactivate", "parameters": map[string]any{"type": "object"}}})
 	nativeCall := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"tag_activate","arguments":"{}"}}]}}]}`
 	tests := []struct {
 		name       string
@@ -437,6 +439,8 @@ func TestOpenAICompatStreamHoldOverHTTP(t *testing.T) {
 			wantTokens: []string{`{"temperature": 72}`}, wantText: `{"temperature": 72}`},
 		{name: "call-shaped text beside a native call", parts: []string{`{"name":"tag_deactivate","arguments":{}}`}, extra: []string{nativeCall},
 			tools: offered, wantTokens: []string{`{"name":"tag_deactivate","arguments":{}}`}, wantCalls: []string{"tag_activate"}, wantText: `{"name":"tag_deactivate","arguments":{}}`},
+		{name: "offered call written beside a native call", parts: []string{`{"name":"tag_deactivate",`, `"arguments":{}}`}, extra: []string{nativeCall},
+			tools: offeredBoth, wantCalls: []string{"tag_deactivate", "tag_activate"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -461,6 +465,11 @@ func TestOpenAICompatStreamHoldOverHTTP(t *testing.T) {
 			}
 			if !slices.Equal(calls, tt.wantCalls) {
 				t.Errorf("calls = %v, want %v", calls, tt.wantCalls)
+			}
+			for _, tc := range resp.Message.ToolCalls {
+				if tc.ID == "" {
+					t.Errorf("call %q has no ID; the next request cannot answer it", tc.Function.Name)
+				}
 			}
 		})
 	}
