@@ -74,8 +74,10 @@ type TextToolAction string
 
 const (
 	// TextToolActionNone means the fallback left the response as it
-	// arrived: it already had structured calls, had no content, or its
-	// content held no tool-call shape.
+	// arrived: it had no content; it had structured calls and its content
+	// was not bare tool-call JSON naming offered tools they lack (a
+	// fenced, tagged or prose-led call, or one call followed by text,
+	// stays as written, unrun); or its content held no tool-call shape.
 	TextToolActionNone TextToolAction = "none"
 	// TextToolActionRecovered means the content, or the payload inside
 	// its leading fence or its first <tool_call> tag, parsed as calls
@@ -97,6 +99,16 @@ const (
 	// TextToolActionStrippedTrailing means a tool-call payload after
 	// prose was removed and the prose kept. The call is not executed.
 	TextToolActionStrippedTrailing TextToolAction = "stripped_trailing"
+	// TextToolActionRecoveredBesideNative means the response had
+	// structured calls and its content, past leading whitespace, was
+	// bare tool-call JSON naming offered tools: one object or array that
+	// is the whole content, or a run of two or more calls, after which
+	// any text is ignored as it is without structured calls. Those whose
+	// names no structured call shares go ahead of the structured calls,
+	// in the order written, and the content is cleared. One that shares
+	// a structured call's name is dropped, since the structured call is
+	// the model's own statement of it.
+	TextToolActionRecoveredBesideNative TextToolAction = "recovered_beside_native"
 )
 
 // ApplyTextToolCallFallback upgrades raw-text tool call emissions into
@@ -105,7 +117,8 @@ const (
 // It returns the action it took, which is also stored on
 // resp.TextToolAction, and records resp.ToolCallSource: native when the
 // response arrived with structured calls, text_fallback when this
-// function recovered them.
+// function recovered them, and native_and_text_fallback when it
+// recovered calls beside structured ones.
 func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
 	if resp == nil {
 		return TextToolActionNone
@@ -117,13 +130,18 @@ func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, prof
 	switch resp.TextToolAction {
 	case TextToolActionRecovered, TextToolActionRepairRecoveredUnoffered:
 		resp.ToolCallSource = ToolCallSourceTextFallback
+	case TextToolActionRecoveredBesideNative:
+		resp.ToolCallSource = ToolCallSourceNativeAndText
 	}
 	return resp.TextToolAction
 }
 
 func applyTextToolCallFallback(resp *ChatResponse, validToolNames []string, profile ToolCallTextProfile) TextToolAction {
-	if len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
+	if resp.Message.Content == "" {
 		return TextToolActionNone
+	}
+	if len(resp.Message.ToolCalls) > 0 {
+		return recoverTextCallsBesideNative(resp, validToolNames, profile)
 	}
 	if parsed := ParseTextToolCalls(resp.Message.Content, validToolNames, profile); len(parsed) > 0 {
 		resp.Message.ToolCalls = parsed
@@ -352,13 +370,21 @@ func parseSingleToolCallJSON(content string, validTools []string) []ToolCall {
 	return []ToolCall{toolCallFromParts(single.Name, single.Arguments)}
 }
 
+// parseConcatenatedToolCallJSON reads tool calls written as JSON
+// objects one after another at the start of content, glued ("}{") or
+// separated by JSON whitespace (Qwen puts a newline between them). A
+// call is what the single-object form reads: an object with a non-empty
+// string name and arguments, if any, that are an object or null. Null
+// and objects without a name are skipped. The run ends at the first
+// text that is not a JSON value or a value of the wrong shape, and
+// whatever follows is ignored. It needs two calls in the run, since one
+// call alone is the single-object form's to judge, and like the array
+// form it returns the calls whose names were offered, in order.
 func parseConcatenatedToolCallJSON(content string, validTools []string) []ToolCall {
-	if strings.Count(content, `"name"`) <= 1 || !strings.Contains(content, "}{") {
-		return nil
-	}
 	dec := json.NewDecoder(strings.NewReader(content))
 	var out []ToolCall
-	for dec.More() {
+	calls := 0
+	for {
 		var tc struct {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
@@ -366,10 +392,16 @@ func parseConcatenatedToolCallJSON(content string, validTools []string) []ToolCa
 		if err := dec.Decode(&tc); err != nil {
 			break
 		}
-		if tc.Name == "" || !isValidToolName(tc.Name, validTools) {
+		if tc.Name == "" {
 			continue
 		}
-		out = append(out, toolCallFromParts(tc.Name, tc.Arguments))
+		calls++
+		if isValidToolName(tc.Name, validTools) {
+			out = append(out, toolCallFromParts(tc.Name, tc.Arguments))
+		}
+	}
+	if calls < 2 {
+		return nil
 	}
 	return out
 }
