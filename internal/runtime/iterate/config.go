@@ -11,6 +11,10 @@ const (
 	DefaultMaxIterations     = 50
 	DefaultMaxIllegalStrikes = 2
 	DefaultMaxToolRepeat     = 3
+	// DefaultMaxToolLoopStrikes is one more than the longest streak of
+	// wholly refused iterations a run has been seen to recover from;
+	// runs that did not recover went on for twenty or more.
+	DefaultMaxToolLoopStrikes = 5
 )
 
 // Config controls an [Engine.Run] execution. Callbacks are optional;
@@ -33,6 +37,12 @@ type Config struct {
 	// may be called with the same arguments before the engine
 	// injects a loop-break error. Zero uses [DefaultMaxToolRepeat].
 	MaxToolRepeat int
+
+	// MaxToolLoopStrikes is the number of consecutive iterations in
+	// which every call was refused under MaxToolRepeat before the
+	// engine ends the run with [ExhaustToolLoop] and forces text. Zero
+	// uses [DefaultMaxToolLoopStrikes].
+	MaxToolLoopStrikes int
 
 	// --- LLM ---
 
@@ -244,5 +254,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxToolRepeat <= 0 {
 		c.MaxToolRepeat = DefaultMaxToolRepeat
+	}
+	if c.MaxToolLoopStrikes <= 0 {
+		c.MaxToolLoopStrikes = DefaultMaxToolLoopStrikes
 	}
 }

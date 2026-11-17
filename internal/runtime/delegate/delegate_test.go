@@ -963,6 +963,40 @@ func TestNowToolHandler_RoutesToSyncPath(t *testing.T) {
 	}
 }
 
+func TestNowToolHandler_ToolLoopExhaustionSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	runner := &mockLoopRunner{
+		resp: &looppkg.Response{
+			Content:      "partial answer",
+			Model:        "test-model",
+			Exhausted:    true,
+			FinishReason: ExhaustToolLoop,
+		},
+	}
+	exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "test-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := NowToolHandler(exec)(context.Background(), map[string]any{
+		"task": "What's the office temperature?",
+	})
+	if err != nil {
+		t.Fatalf("NowToolHandler error: %v", err)
+	}
+	for _, want := range []string{
+		"[Delegate FAILED:",
+		"reason=tool_loop",
+		"kept repeating tool calls with the same arguments after they were refused",
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("result lacks %q:\n%s", want, result)
+		}
+	}
+	if strings.Contains(result, "used all available iterations") {
+		t.Fatalf("result blames the iteration limit:\n%s", result)
+	}
+}
+
 func TestNowToolHandler_ContextModeFull(t *testing.T) {
 	t.Parallel()
 

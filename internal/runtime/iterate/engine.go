@@ -44,6 +44,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		totalCacheCreate1h int
 		totalCacheRead     int
 		illegalStrikes     int
+		loopStrikes        int
 		emptyRetried       bool
 		deferredText       string
 		heldReply          string
@@ -272,7 +273,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 			var illegalCall bool
 			var batchHasNonMetaTool bool
-			var toolLoopDetected bool
+			var refusedCalls int
 
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
@@ -304,7 +305,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						ToolCallID: tc.ID,
 					})
 					ledger.blocked(toolName, target)
-					toolLoopDetected = true
+					refusedCalls++
 					continue // skip execution; move to next tool in batch
 				}
 
@@ -390,8 +391,27 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				})
 			}
 
-			if toolLoopDetected {
-				iterRec.BreakReason = "tool_loop"
+			if refusedCalls > 0 {
+				iterRec.BreakReason = ExhaustToolLoop
+			}
+
+			// An iteration in which every call was refused ran nothing,
+			// and a model that keeps doing that is not reading the
+			// refusals: left alone it repeats them until MaxIterations or
+			// the context window ends the run. Any call that was not
+			// refused clears the count, since the model changed something.
+			if refusedCalls == len(llmResp.Message.ToolCalls) {
+				loopStrikes++
+				if loopStrikes >= cfg.MaxToolLoopStrikes {
+					iterLog.Warn("every call refused as a repeat, breaking loop",
+						"strikes", loopStrikes)
+					breakReason = ExhaustToolLoop
+					iterRec.DurationMs = time.Since(iterStart).Milliseconds()
+					iterations = append(iterations, iterRec)
+					break
+				}
+			} else {
+				loopStrikes = 0
 			}
 
 			// Illegal tool strike counting.
