@@ -352,13 +352,21 @@ func parseSingleToolCallJSON(content string, validTools []string) []ToolCall {
 	return []ToolCall{toolCallFromParts(single.Name, single.Arguments)}
 }
 
+// parseConcatenatedToolCallJSON reads tool calls written as JSON
+// objects one after another at the start of content, glued ("}{") or
+// separated by JSON whitespace (Qwen puts a newline between them). A
+// call is what the single-object form reads: an object with a non-empty
+// string name and arguments, if any, that are an object or null. Null
+// and objects without a name are skipped. The run ends at the first
+// text that is not a JSON value or a value of the wrong shape, and
+// whatever follows is ignored. It needs two calls in the run, since one
+// call alone is the single-object form's to judge, and like the array
+// form it returns the calls whose names were offered, in order.
 func parseConcatenatedToolCallJSON(content string, validTools []string) []ToolCall {
-	if strings.Count(content, `"name"`) <= 1 || !strings.Contains(content, "}{") {
-		return nil
-	}
 	dec := json.NewDecoder(strings.NewReader(content))
 	var out []ToolCall
-	for dec.More() {
+	calls := 0
+	for {
 		var tc struct {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
@@ -366,10 +374,16 @@ func parseConcatenatedToolCallJSON(content string, validTools []string) []ToolCa
 		if err := dec.Decode(&tc); err != nil {
 			break
 		}
-		if tc.Name == "" || !isValidToolName(tc.Name, validTools) {
+		if tc.Name == "" {
 			continue
 		}
-		out = append(out, toolCallFromParts(tc.Name, tc.Arguments))
+		calls++
+		if isValidToolName(tc.Name, validTools) {
+			out = append(out, toolCallFromParts(tc.Name, tc.Arguments))
+		}
+	}
+	if calls < 2 {
+		return nil
 	}
 	return out
 }
