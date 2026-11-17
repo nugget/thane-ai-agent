@@ -63,6 +63,7 @@ const (
 	ExhaustWallClock     = iterate.ExhaustWallClock
 	ExhaustNoOutput      = iterate.ExhaustNoOutput
 	ExhaustIllegalTool   = iterate.ExhaustIllegalTool
+	ExhaustToolLoop      = iterate.ExhaustToolLoop
 )
 
 type executionOptions struct {

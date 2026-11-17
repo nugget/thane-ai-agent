@@ -222,6 +222,8 @@ func runNow(ctx context.Context, exec *Executor, req delegateRequest) string {
 		out.WriteString("The delegate exceeded its output token budget before completing the task.")
 	case ExhaustIllegalTool:
 		out.WriteString("The delegate attempted to call a tool it does not have access to and was stopped.")
+	case ExhaustToolLoop:
+		out.WriteString("The delegate kept repeating tool calls with the same arguments after they were refused, and was stopped.")
 	default:
 		out.WriteString("The delegate used all available iterations before completing the task.")
 	}

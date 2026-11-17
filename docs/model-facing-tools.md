@@ -160,7 +160,9 @@ turn someone is waiting on. Inside a loop wake it reads as "abandon the write",
 so the refusal a loop sees says only that the identical call was not run and
 stays refused, and points at the earlier result or at the arguments its error
 names. It claims nothing about what a repeat would return, which for a read of
-changing state would be false.
+changing state would be false. The engine does end a run whose every call has
+been refused five iterations in a row (`tool_loop`), but no refusal says so:
+like a retry count, a stated limit is a stopping rule the model would obey.
 
 ### Multi-account ambiguity
 

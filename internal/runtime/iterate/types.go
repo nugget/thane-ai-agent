@@ -13,6 +13,7 @@ const (
 	ExhaustWallClock     = "wall_clock"
 	ExhaustNoOutput      = "no_output"
 	ExhaustIllegalTool   = "illegal_tool"
+	ExhaustToolLoop      = "tool_loop"
 )
 
 // IterationRecord collects per-iteration trace data. This replaces the
