@@ -6,9 +6,12 @@ import "github.com/nugget/thane-ai-agent/internal/state/contacts"
 // attachment_list, attachment_search and attachment_describe.
 const attachmentsTag = "attachments"
 
-// grantsAttachmentTools decides whether a turn whose messages carry
-// attachments starts with the attachment tools active, and records the
-// decision in the turn summary and the log.
+// grantsAttachmentTools decides whether a turn whose waking messages
+// carry attachments starts with the attachment tools active, and
+// records the decision in the turn summary and the log. Only the
+// messages that start the turn count: a message merged in while the
+// turn runs cannot change its tags, though the model can still activate
+// the tag itself.
 //
 // A message line describes an attachment but cannot show it. With the
 // tools the model can ask for a description, or learn why there is
