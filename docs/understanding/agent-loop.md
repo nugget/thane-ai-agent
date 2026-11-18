@@ -42,6 +42,37 @@ A **loop registry** tracks all active loops, enforces concurrency limits,
 and coordinates graceful shutdown. The registry provides operational
 visibility into what's running, health status, and resource consumption.
 
+### Mailbox delivery
+
+A loop with a durable mailbox, such as a Signal sender loop, takes its
+work in batches drained at each wake and acknowledges them only at the
+end of a clean turn, so a turn that fails leaves its items pending for
+the next wake. Each drain that hands an item to a turn counts one
+delivery, written to the queue before any turn code runs, so a process
+that dies mid-turn still counts it.
+
+A failed turn keeps the count only when building the turn failed, which
+is where an item is decoded, rendered and its attachments processed:
+that failure is the item's. A stopping loop, a Handler error, and any
+failure after the turn was built (the model, the provider, the reply
+send, the turn timeout) give the delivery back, because those say
+nothing about the item. An item delivered before is delivered again
+only alone, at the head of a wake and with no mid-turn input, so its
+outcome is its own; a fresh batch is the leading run of items never
+delivered before.
+
+An item whose delivery was counted three times is set aside instead of
+delivered again: its row moves to the `set_aside` status, out of every
+pending view, and the loop goes on to later items. Each one logs
+`loop mailbox item set aside after repeated failed deliveries` at Warn
+under the iteration, the loop's error streak clears when the item that
+caused it is set aside, and `system_health`'s `queue_set_aside` row
+degrades for a day after the newest. Rows are kept; nothing prunes them.
+A turn that finished cleanly but whose ack failed gives its delivery
+back, so the items come back as one batch rather than one at a time.
+Inspecting, replaying and discarding them is described under Signal
+Messaging in the configuration guide.
+
 ## The Reasoning Cycle
 
 Each loop iteration runs through the same steps:

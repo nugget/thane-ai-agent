@@ -264,6 +264,10 @@ type Loop struct {
 	contextWindow       int
 	lastError           string
 
+	// lastMailboxFailure names the last counted mailbox delivery failure
+	// this process saw. Owned by the run goroutine; no lock.
+	lastMailboxFailure mailboxFailure
+
 	// sleepUntil is the scheduled wake instant while the loop is in a
 	// timer-based sleep (zero when processing or event-driven); currentSleep
 	// is the post-clamp/post-jitter duration being honored. Both are set in
@@ -1601,15 +1605,9 @@ func (l *Loop) run(ctx context.Context) {
 		}
 
 		signals, forceSupervisor, wakeTags := l.consumePendingNotifies()
-		mailboxItems, mailboxErr := l.DrainMailbox(ctx, maxMailboxItemsPerWake)
 
 		// --- PROCESSING PHASE ---
-		// Reset tool-provided sleep override and set current conversation ID.
 		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
-		l.mu.Lock()
-		l.nextSleep = 0
-		l.currentConvID = convID
-		l.mu.Unlock()
 
 		// Determine if this iteration runs a supervisor turn and
 		// stamp the cause once so downstream surfaces (events,
@@ -1622,6 +1620,16 @@ func (l *Loop) run(ctx context.Context) {
 			"supervisor_trigger", string(supervisorTrigger),
 			"attempt", attemptCount+1,
 		)
+		// Drained after iterLog exists so its set-aside and redelivery
+		// decisions log under this iteration.
+		delivery, mailboxErr := l.deliverMailbox(ctx, iterLog)
+		mailboxItems := delivery.items
+
+		// Reset tool-provided sleep override and set current conversation ID.
+		l.mu.Lock()
+		l.nextSleep = 0
+		l.currentConvID = convID
+		l.mu.Unlock()
 		iterCtx := logging.WithLogger(ctx, iterLog)
 		attribution := llm.AttributionFromContext(iterCtx)
 		attribution.ConversationID = convID
@@ -1649,6 +1657,9 @@ func (l *Loop) run(ctx context.Context) {
 		var err error
 		var handlerSummary map[string]any
 		var noOp bool
+		// builderFailed is true when a TurnBuilder error ended the turn;
+		// only that failure counts against the wake batch.
+		var builderFailed bool
 		// midTurnPulled collects mailbox items delivered into the live turn
 		// after the wake snapshot (#1221) so the turn-end ack covers them
 		// alongside the wake batch.
@@ -1794,6 +1805,7 @@ func (l *Loop) run(ctx context.Context) {
 					noOp = true
 				} else {
 					err = fmt.Errorf("turn builder: %w", buildErr)
+					builderFailed = true
 				}
 			} else if turn == nil {
 				noOp = true
@@ -1817,7 +1829,9 @@ func (l *Loop) run(ctx context.Context) {
 					// the prepared request (set here, after preparation, so no
 					// request-base merge can wipe it). Items it delivers are
 					// acked with the wake batch at turn end.
-					if turn.PullRender != nil && l.deps.Mailbox != nil {
+					// An isolated redelivery takes no mid-turn input, so its
+					// outcome is the item's own.
+					if turn.PullRender != nil && l.deps.Mailbox != nil && !delivery.isolated {
 						req.PullInput = l.buildMailboxPullInput(convID, mailboxItems, &midTurnPulled, turn.PullRender)
 					}
 					runCtx, runCancel := mergeTurnRunContext(iterCtx, turn.RunContext)
@@ -1852,13 +1866,20 @@ func (l *Loop) run(ctx context.Context) {
 			ackItems = append(append([]MailboxItem(nil), mailboxItems...), midTurnPulled...)
 		}
 		if mailboxErr == nil && len(ackItems) > 0 && err == nil && (result != nil || noOp) {
-			if ackErr := l.AckMailbox(ctx, ackItems); ackErr != nil {
+			// The turn finished, so its ack lands even if the loop is
+			// stopping: a lost ack redelivers and counts the items again.
+			ackCtx, ackCancel := mailboxSettleContext(ctx)
+			if ackErr := l.AckMailbox(ackCtx, ackItems); ackErr != nil {
 				iterLog.Warn("loop mailbox ack failed",
 					"error", ackErr,
 					"items", len(ackItems),
 				)
+				l.refundAfterFailedAck(ctx, iterLog, delivery)
 			}
+			ackCancel()
 			l.wakeIfMailboxNonEmpty(ctx)
+		} else if mailboxErr == nil && len(mailboxItems) > 0 && err != nil {
+			l.settleFailedMailboxDelivery(ctx, iterLog, delivery, err, builderFailed)
 		}
 
 		// Clear in-flight state after iteration completes.
