@@ -359,7 +359,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						result = fmt.Sprintf(prompts.IllegalToolMessage, toolName)
 						iterLog.Warn("illegal tool call", "tool", toolName)
 					} else {
-						result = "Error: " + errMsg
+						result = "Error: " + modelFacingToolError(toolErr)
 						iterLog.Error("tool exec failed", "tool", toolName, "error", toolErr)
 					}
 				} else {

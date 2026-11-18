@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3420,17 +3419,11 @@ func isUserFixableModelError(err error) bool {
 		}
 		return apiErr.StatusCode >= 400 && apiErr.StatusCode < 500
 	}
-	msg := strings.TrimSpace(err.Error())
-	if !strings.HasPrefix(msg, "API error ") {
-		return false
-	}
-	rest := strings.TrimPrefix(msg, "API error ")
-	codeField, _, ok := strings.Cut(rest, ":")
+	// The legacy branch reads only the top-level message, never a
+	// wrapped one: llm.HTTPStatus walks the chain, which would change
+	// which wrapped failures skip failover.
+	code, ok := llm.LegacyAPIErrorStatus(err.Error())
 	if !ok {
-		return false
-	}
-	code, parseErr := strconv.Atoi(strings.TrimSpace(codeField))
-	if parseErr != nil {
 		return false
 	}
 	return code >= 400 && code < 500

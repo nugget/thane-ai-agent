@@ -3,11 +3,13 @@ package attachments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
@@ -144,7 +146,7 @@ func (t *Tools) Describe(ctx context.Context, args map[string]any) (string, erro
 		if rec.Description != "" {
 			return rec.Description, nil
 		}
-		return "Vision analysis is not configured. Enable attachments.vision in config to analyze images.", nil
+		return fmt.Sprintf("Attachment %s has no description, and vision analysis is not enabled here, so it cannot be analyzed. You do not know what this image shows.", id), nil
 	}
 
 	reanalyze, _ := args["reanalyze"].(bool)
@@ -166,10 +168,7 @@ func (t *Tools) Describe(ctx context.Context, args map[string]any) (string, erro
 
 		desc, err := analyzer.Reanalyze(ctx, rec, modelOverride)
 		if err != nil {
-			return "", fmt.Errorf("attachment_describe: reanalyze: %w", err)
-		}
-		if desc == "" {
-			return "Vision model returned an empty description.", nil
+			return "", describeFailure(id, fmt.Errorf("attachment_describe: reanalyze: %w", err))
 		}
 		return desc, nil
 	}
@@ -177,12 +176,28 @@ func (t *Tools) Describe(ctx context.Context, args map[string]any) (string, erro
 	// Standard analyze — uses cache when available.
 	desc, err := t.analyzer.Analyze(ctx, rec)
 	if err != nil {
-		return "", fmt.Errorf("attachment_describe: %w", err)
-	}
-	if desc == "" {
-		return "Vision model returned an empty description.", nil
+		return "", describeFailure(id, fmt.Errorf("attachment_describe: %w", err))
 	}
 	return desc, nil
+}
+
+// describeFailure attaches to a failed analysis the text the model
+// reads in place of the error's own, which carries the stored file's
+// path and the provider's raw response: why the image has no
+// description, and whether calling again can help.
+func describeFailure(id string, err error) error {
+	text := fmt.Sprintf("Attachment %s was not analyzed: %s. You do not know what this image shows.", id, VisionFailureReason(err))
+	switch {
+	case errors.Is(err, ErrNoDescription):
+		text += " Calling again may produce a description."
+	case errors.Is(err, ErrVisionCall):
+		if llm.ClassifyCallFailure(err).Persistent() {
+			text += " Calling again with the same model will fail the same way; the model argument can name a different image-capable model."
+		} else {
+			text += " Calling again may succeed."
+		}
+	}
+	return &promptfmt.ModelFacingError{Text: text, Err: err}
 }
 
 // Search performs a text search across attachment metadata and returns

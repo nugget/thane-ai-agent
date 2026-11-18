@@ -1484,7 +1484,7 @@ func TestDescribeAttachment(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := describeAttachment(tt.attachment, tt.pathOrNote)
+			got := describeAttachment(tt.attachment, "", tt.pathOrNote)
 			for _, part := range tt.wantParts {
 				if !strings.Contains(got, part) {
 					t.Errorf("description should contain %q, got: %q", part, got)
