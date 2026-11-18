@@ -264,3 +264,61 @@ func TestSignalTurnCarriesImageNotSeen(t *testing.T) {
 		t.Errorf("an error's own text reached the turn:\n%s", content.String())
 	}
 }
+
+// TestRetriedSignalTurnReusesItsAttachmentRecords checks that building a
+// turn again for the same message, as the mailbox retry does after a
+// failed turn, reuses the attachment record the first attempt stored:
+// the line carries the same attachment_id and the store holds one row.
+func TestRetriedSignalTurnReusesItsAttachmentRecords(t *testing.T) {
+	const sender = "+15551234567"
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "image-id"), []byte("image bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newTestAttachmentStore(t, filepath.Join(dir, "attachments.db"), filepath.Join(dir, "store"))
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{}, Runner: &testRunner{},
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments:     AttachmentConfig{SourceDir: source},
+		AttachmentStore: store,
+		VisionAnalyzer:  &countingVisionAnalyzer{err: sentinelVisionCallError(503)},
+	})
+	payload, err := json.Marshal(Envelope{
+		Source: sender, Timestamp: 1794960952450,
+		DataMessage: &DataMessage{Timestamp: 1794960952450, Attachments: []Attachment{
+			{ID: "image-id", Filename: "photo.jpg", ContentType: "image/jpeg"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ids []string
+	for attempt := 0; attempt < 3; attempt++ {
+		turn, err := bridge.buildSignalTurn(context.Background(), sender, loop.TurnInput{
+			MailboxItems: []loop.MailboxItem{{Payload: payload}},
+		})
+		if err != nil || turn == nil {
+			t.Fatalf("attempt %d: buildSignalTurn = %+v, %v", attempt, turn, err)
+		}
+		var content strings.Builder
+		for _, m := range turn.Request.Messages {
+			content.WriteString(m.Content)
+		}
+		ids = append(ids, attachmentIDField.FindString(content.String()))
+	}
+	if ids[0] == "" || ids[1] != ids[0] || ids[2] != ids[0] {
+		t.Errorf("attachment ids across attempts = %q, want one id reused", ids)
+	}
+	total, _, _, err := store.TelemetryStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 {
+		t.Errorf("attachment rows after three attempts = %d, want 1", total)
+	}
+}

@@ -88,8 +88,11 @@ func NewStore(db *sql.DB, rootDir string, logger *slog.Logger) (*Store, error) {
 // Ingest reads the attachment from params.Source, computes its SHA-256
 // hash, stores it content-addressed on disk, and records metadata in the
 // index. If a file with the same hash already exists on disk, the file is
-// not rewritten (dedup). A new metadata record is always created so that
-// provenance is tracked per ingest. Returns the created [Record].
+// not rewritten (dedup). Each receipt gets its own metadata record so
+// that provenance is tracked per receipt. Ingesting the same receipt
+// again, as a retried message does, returns the record already stored
+// instead of adding another; see [Store.priorIngest]. Returns the
+// [Record].
 func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error) {
 	// Write to a temp file while hashing the content.
 	tmp, err := os.CreateTemp(s.rootDir, ".ingest-*")
@@ -145,6 +148,17 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 			cleanup = false // temp file successfully renamed; nothing to clean up.
 			createdBlob = true
 		}
+	}
+
+	// A message whose turn fails is retried, and every retry ingests its
+	// attachments again. Return the record the first ingest made rather
+	// than adding a duplicate row each time.
+	existing, err := s.priorIngest(ctx, hash, params)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
 	}
 
 	rec := &Record{
@@ -205,6 +219,31 @@ func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
 		return fmt.Errorf("attachments: insert record: %w", err)
 	}
 	return nil
+}
+
+// priorIngest returns the record an earlier ingest made of the same
+// receipt: the same content, channel, sender, conversation, receipt time
+// and original name. A message carries its receipt time with it, so a
+// retry matches its first attempt while a later message sending the same
+// file does not. When earlier failures left several such records, the
+// one already analyzed is preferred. An ingest without a channel or a
+// receipt time has nothing to match on and never reuses a record.
+func (s *Store) priorIngest(ctx context.Context, hash string, params IngestParams) (*Record, error) {
+	if params.Channel == "" || params.ReceivedAt.IsZero() {
+		return nil, nil
+	}
+	return s.queryOne(ctx, `SELECT
+		id, hash, store_path, original_name, content_type,
+		size, width, height, channel, sender,
+		conversation_id, received_at,
+		description, analyzed_at, analysis_model
+		FROM attachments
+		WHERE hash = ? AND channel = ? AND sender = ? AND conversation_id = ?
+			AND received_at = ? AND original_name = ?
+		ORDER BY analyzed_at DESC, id
+		LIMIT 1`,
+		hash, params.Channel, params.Sender, params.ConversationID,
+		params.ReceivedAt.UTC().Format(time.RFC3339Nano), params.OriginalName)
 }
 
 // ByHash returns the first metadata record matching the given SHA-256 hash,
