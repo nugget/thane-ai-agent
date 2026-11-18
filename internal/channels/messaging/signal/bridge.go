@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -634,11 +636,21 @@ func (b *Bridge) logReactionRemoval(env *Envelope) {
 // callable. Task loops get that merge from the runtime's own turn
 // builder; a TurnBuilder owns its Request outright, so for this loop it
 // happens here or not at all.
-func (b *Bridge) buildSignalTurn(ctx context.Context, sender string, input loop.TurnInput) (*loop.AgentTurn, error) {
-	var (
-		turn *loop.AgentTurn
-		err  error
-	)
+func (b *Bridge) buildSignalTurn(ctx context.Context, sender string, input loop.TurnInput) (turn *loop.AgentTurn, err error) {
+	// Turn preparation runs on the sender loop's goroutine, so a panic
+	// here would end the process, and the mailbox would hand the same
+	// items back on the next boot. As an error the items stay pending
+	// and the loop retries them after its error backoff.
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error("signal turn preparation panicked",
+				"sender", sender,
+				"panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()),
+			)
+			turn, err = nil, fmt.Errorf("signal turn preparation panicked: %v", r)
+		}
+	}()
 	switch {
 	case len(input.MailboxItems) > 0:
 		turn, err = b.prepareSignalMailboxTurn(ctx, sender, input.MailboxItems, input.NotifyEnvelopes)
@@ -1450,7 +1462,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 	descs := make([]string, 0, len(atts))
 	for _, a := range atts {
 		if b.attachments.MaxSize > 0 && a.Size > b.attachments.MaxSize {
-			descs = append(descs, describeAttachment(a, "exceeds size limit"))
+			descs = append(descs, describeUnanalyzed(a, "exceeds size limit"))
 			continue
 		}
 
@@ -1460,9 +1472,9 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 			continue
 		}
 
-		// Legacy copy path.
+		// Legacy copy path. It never runs vision analysis.
 		if b.attachments.SourceDir == "" || b.attachments.DestDir == "" {
-			descs = append(descs, describeAttachment(a, ""))
+			descs = append(descs, describeUnanalyzed(a, ""))
 			continue
 		}
 
@@ -1473,7 +1485,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 				"path", srcPath,
 				"error", err,
 			)
-			descs = append(descs, describeAttachment(a, "file not available"))
+			descs = append(descs, describeUnanalyzed(a, "file not available"))
 			continue
 		}
 
@@ -1501,7 +1513,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 				"dest", destPath,
 				"error", err,
 			)
-			descs = append(descs, describeAttachment(a, "copy failed"))
+			descs = append(descs, describeUnanalyzed(a, "copy failed"))
 			continue
 		}
 
@@ -1511,7 +1523,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 			"size", a.Size,
 			"content_type", a.ContentType,
 		)
-		descs = append(descs, describeAttachment(a, destPath))
+		descs = append(descs, describeUnanalyzed(a, destPath))
 	}
 	return descs
 }
@@ -1520,7 +1532,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 // store and returns a human-readable description.
 func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, convID string, receivedAt time.Time) string {
 	if b.attachments.SourceDir == "" {
-		return describeAttachment(a, "source dir not configured")
+		return describeUnanalyzed(a, "source dir not configured")
 	}
 
 	srcPath := filepath.Join(b.attachments.SourceDir, a.ID)
@@ -1531,7 +1543,7 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 			"path", srcPath,
 			"error", err,
 		)
-		return describeAttachment(a, "file not available")
+		return describeUnanalyzed(a, "file not available")
 	}
 	defer f.Close()
 
@@ -1546,13 +1558,14 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 		Sender:         sender,
 		ConversationID: convID,
 		ReceivedAt:     receivedAt,
+		SourceID:       a.ID,
 	})
 	if err != nil {
 		b.logger.Warn("signal attachment ingest failed",
 			"id", a.ID,
 			"error", err,
 		)
-		return describeAttachment(a, "ingest failed")
+		return describeUnanalyzed(a, "ingest failed")
 	}
 
 	absPath := b.attachmentStore.AbsPath(rec)
@@ -1564,43 +1577,79 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 		"content_type", rec.ContentType,
 	)
 
-	desc := describeAttachment(a, absPath)
+	desc := describeAttachment(a, rec.ID, absPath)
+	if !strings.HasPrefix(a.ContentType, "image/") {
+		return desc + "\n" + attachmentNotSeen(a.ContentType, "")
+	}
+	if b.visionAnalyzer == nil {
+		return desc + "\n" + attachmentNotSeen(a.ContentType, "vision analysis was not enabled")
+	}
 
 	// Vision analysis: analyze images on ingest and enrich the
 	// description with the LLM-generated summary.
-	if b.visionAnalyzer != nil && strings.HasPrefix(a.ContentType, "image/") {
-		// TurnBuilder runs before the loop adopts the Signal conversation.
-		// Charge ingestion to the attachment's conversation while retaining
-		// the responsible loop; an earlier conversation's session cannot
-		// follow it across that boundary.
-		visionCtx := ctx
-		attribution := llm.AttributionFromContext(ctx)
-		if rec.ConversationID != "" && attribution.ConversationID != rec.ConversationID {
-			attribution.ConversationID = rec.ConversationID
-			attribution.SessionID = ""
-			visionCtx = llm.WithAttribution(ctx, attribution)
-		}
-		visionDesc, err := b.visionAnalyzer.Analyze(visionCtx, rec)
-		if err != nil {
-			b.logger.Warn("vision analysis failed",
-				"id", a.ID,
-				"hash", rec.Hash,
-				"error", err,
-			)
-		}
-		if visionDesc != "" {
-			desc += "\n[Vision: " + visionDesc + "]"
-		}
+	//
+	// TurnBuilder runs before the loop adopts the Signal conversation.
+	// Charge ingestion to the attachment's conversation while retaining
+	// the responsible loop; an earlier conversation's session cannot
+	// follow it across that boundary.
+	visionCtx := ctx
+	attribution := llm.AttributionFromContext(ctx)
+	if rec.ConversationID != "" && attribution.ConversationID != rec.ConversationID {
+		attribution.ConversationID = rec.ConversationID
+		attribution.SessionID = ""
+		visionCtx = llm.WithAttribution(ctx, attribution)
 	}
+	visionDesc, err := b.visionAnalyzer.Analyze(visionCtx, rec)
+	if err == nil && visionDesc == "" {
+		err = attachments.ErrNoDescription
+	}
+	if err != nil {
+		logArgs := []any{"id", a.ID, "attachment_id", rec.ID, "hash", rec.Hash, "error", err}
+		if errors.Is(err, attachments.ErrVisionCall) {
+			logArgs = append(logArgs, "call_failure", llm.ClassifyCallFailure(err).String())
+		}
+		b.logger.Warn("vision analysis failed", logArgs...)
+		return desc + "\n" + attachmentNotSeen(a.ContentType, attachments.VisionFailureReason(err))
+	}
+	return desc + "\n[Vision: " + visionDesc + "]"
+}
 
-	return desc
+// describeUnanalyzed describes an attachment that was not ingested into
+// the attachment store, so nothing analyzed it, and says so.
+func describeUnanalyzed(a Attachment, pathOrNote string) string {
+	return describeAttachment(a, "", pathOrNote) + "\n" + attachmentNotSeen(a.ContentType, "it was not analyzed")
+}
+
+// attachmentNotSeen is the line under an attachment whose contents did
+// not come with the message. Every attachment line is followed by one
+// outcome line, "[Vision: …]" or this one, because a bare attachment
+// line reads the same whether analysis failed or never ran, and a model
+// shown one has described a photo it never saw. The wording is past
+// tense and scoped to the message because the line is stored and
+// replayed on later turns, after a retry may have succeeded. For an
+// image, imageReason completes "because …".
+func attachmentNotSeen(contentType, imageReason string) string {
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return "[Image not seen: no description came with this message because " + imageReason + ".]"
+	case strings.HasPrefix(contentType, "audio/"):
+		return "[Audio not heard: no transcript came with this message.]"
+	case strings.HasPrefix(contentType, "video/"):
+		return "[Video not seen: no description came with this message.]"
+	}
+	return "[File not read: no account of its contents came with this message.]"
 }
 
 // describeAttachment builds a human-readable description of a single
-// attachment for inclusion in the agent wake message.
-func describeAttachment(a Attachment, pathOrNote string) string {
+// attachment for inclusion in the agent wake message. recordID is the
+// attachment store's id for the attachment, which attachment_describe
+// takes; it is empty for an attachment that was not stored.
+func describeAttachment(a Attachment, recordID, pathOrNote string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[Attachment: %s", a.ContentType)
+	if recordID != "" {
+		fmt.Fprintf(&sb, ", attachment_id=%s", recordID)
+	}
 	if a.Filename != "" {
 		fmt.Fprintf(&sb, ", filename=%q", a.Filename)
 	}

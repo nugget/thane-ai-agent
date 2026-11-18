@@ -25,6 +25,29 @@ These are independent surfaces, not a funnel — you don't have to
 list before describing, or search before listing. Each accepts
 different arguments and answers different questions.
 
+## Reading an attachment in a message
+
+An inbound message shows each attachment as an `[Attachment: …]`
+line, carrying its `attachment_id` when it was stored, followed by
+one line saying what came with it:
+
+- `[Vision: …]` is a description of the image, written by a vision
+  model when the message arrived.
+- `[Image not seen: …]` means no description of the image came with
+  the message, and says why.
+- `[Audio not heard: …]`, `[Video not seen: …]` and `[File not read: …]`
+  mean nothing about the contents came with the message: audio is
+  not transcribed, and video and other files are not read, when a
+  message arrives.
+
+Without a description you do not know what the attachment contains,
+so say that rather than describing it: the file name and the
+conversation around it are not evidence of what is in it. For an
+image with an `attachment_id`, `attachment_describe` with that id
+returns a description if one has been made since, or fails saying
+why and whether calling again, or naming another image-capable
+model, can help.
+
 ## Browse — `attachment_list`
 
 ```json
@@ -90,7 +113,9 @@ with filters — by conversation, sender, or content type.
 Returns a vision description for an image. If a cached description
 exists, returns that immediately. If not, runs vision analysis,
 caches the result, and returns it. The default prompt covers
-"describe what's in this image" generically.
+"describe what's in this image" generically. When analysis cannot
+run, the call fails with the reason and whether calling again can
+help.
 
 For targeted analysis, pass a custom prompt:
 

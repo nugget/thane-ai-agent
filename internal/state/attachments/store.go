@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,7 @@ type Record struct {
 	Sender         string    // channel-specific sender identifier
 	ConversationID string    // conversation the attachment belongs to
 	ReceivedAt     time.Time // when the attachment was received
+	SourceID       string    // channel's own identifier for the attachment ("" if none)
 
 	// Vision analysis fields (populated by Analyzer).
 	Description   string    // vision analysis text (empty = not analyzed)
@@ -56,6 +58,15 @@ type IngestParams struct {
 	Sender         string    // channel-specific sender identifier
 	ConversationID string    // conversation context
 	ReceivedAt     time.Time // when the attachment was received
+
+	// SourceID is the channel's own identifier for this attachment,
+	// such as signal-cli's attachment id, which a retried message
+	// carries unchanged. A channel may give the same id to an upload
+	// that several messages reference, so a retry is recognized by the
+	// id together with the receipt's sender, conversation and time.
+	// Empty when the channel has none, in which case every ingest makes
+	// a new record.
+	SourceID string
 }
 
 // Store manages content-addressed file storage with a SQLite metadata index.
@@ -63,6 +74,10 @@ type Store struct {
 	db      *sql.DB
 	rootDir string
 	logger  *slog.Logger
+
+	// blobLocks serialize ingests of the same content; see
+	// [Store.blobLock].
+	blobLocks [64]sync.Mutex
 }
 
 // NewStore creates an attachment store backed by db with content
@@ -88,8 +103,11 @@ func NewStore(db *sql.DB, rootDir string, logger *slog.Logger) (*Store, error) {
 // Ingest reads the attachment from params.Source, computes its SHA-256
 // hash, stores it content-addressed on disk, and records metadata in the
 // index. If a file with the same hash already exists on disk, the file is
-// not rewritten (dedup). A new metadata record is always created so that
-// provenance is tracked per ingest. Returns the created [Record].
+// not rewritten (dedup). Each receipt gets its own metadata record so
+// that provenance is tracked per receipt. Ingesting the same attachment
+// again, as a retried message does, returns the record already stored
+// instead of adding another; see [Store.priorIngest]. Returns the
+// [Record].
 func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error) {
 	// Write to a temp file while hashing the content.
 	tmp, err := os.CreateTemp(s.rootDir, ".ingest-*")
@@ -121,6 +139,14 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 	storePath := filepath.Join(hash[:2], hash[2:4], hash+ext)
 	absPath := filepath.Join(s.rootDir, storePath)
 
+	// Storing the file, recording it and any rollback are one step to
+	// every other ingest of the same content. Without the lock, two
+	// ingests can each find no file and both rename theirs into place,
+	// and one that then fails removes the file the other recorded.
+	lock := s.blobLock(hash)
+	lock.Lock()
+	defer lock.Unlock()
+
 	// Check if content already exists on disk (dedup).
 	// Track whether this call created the blob so we can roll it back
 	// if the metadata insert fails without removing pre-existing files.
@@ -147,6 +173,21 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 		}
 	}
 
+	// A message whose turn fails is retried, and every retry ingests its
+	// attachments again. Return the record the first ingest made rather
+	// than adding a duplicate row each time.
+	existing, err := s.priorIngest(ctx, hash, params)
+	if err != nil {
+		// Roll back a blob this call created, as a failed insert does.
+		if createdBlob {
+			os.Remove(absPath)
+		}
+		return nil, err
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
 	rec := &Record{
 		ID:             uuid.New().String(),
 		Hash:           hash,
@@ -160,6 +201,7 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 		Sender:         params.Sender,
 		ConversationID: params.ConversationID,
 		ReceivedAt:     params.ReceivedAt,
+		SourceID:       params.SourceID,
 	}
 
 	if err := s.insertRecord(ctx, rec); err != nil {
@@ -194,12 +236,12 @@ func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
 			id, hash, store_path, original_name, content_type,
 			size, width, height, channel, sender,
 			conversation_id, received_at,
-			description, analyzed_at, analysis_model
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			description, analyzed_at, analysis_model, source_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID, rec.Hash, rec.StorePath, rec.OriginalName, rec.ContentType,
 		rec.Size, rec.Width, rec.Height, rec.Channel, rec.Sender,
 		rec.ConversationID, rec.ReceivedAt.UTC().Format(time.RFC3339Nano),
-		rec.Description, analyzedAt, rec.AnalysisModel,
+		rec.Description, analyzedAt, rec.AnalysisModel, rec.SourceID,
 	)
 	if err != nil {
 		return fmt.Errorf("attachments: insert record: %w", err)
@@ -214,7 +256,7 @@ func (s *Store) ByHash(ctx context.Context, hash string) (*Record, error) {
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments WHERE hash = ? LIMIT 1`, hash)
 }
 
@@ -224,7 +266,7 @@ func (s *Store) ByID(ctx context.Context, id string) (*Record, error) {
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments WHERE id = ?`, id)
 }
 
@@ -330,7 +372,7 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, err
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments`
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -352,7 +394,7 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, err
 			&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
 			&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
 			&rec.ConversationID, &receivedAt,
-			&rec.Description, &analyzedAt, &rec.AnalysisModel,
+			&rec.Description, &analyzedAt, &rec.AnalysisModel, &rec.SourceID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("attachments: scan search result: %w", err)
@@ -396,7 +438,7 @@ func (s *Store) queryOne(ctx context.Context, query string, args ...any) (*Recor
 		&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
 		&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
 		&rec.ConversationID, &receivedAt,
-		&rec.Description, &analyzedAt, &rec.AnalysisModel,
+		&rec.Description, &analyzedAt, &rec.AnalysisModel, &rec.SourceID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

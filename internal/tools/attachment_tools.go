@@ -49,13 +49,14 @@ func (r *Registry) registerAttachmentTools() {
 		Description: "Get or generate a vision description for an image attachment. " +
 			"Returns the cached description if available, or triggers vision analysis " +
 			"if not yet analyzed. Supports re-analysis with a different model or custom prompt " +
-			"to improve descriptions as better models become available.",
+			"to improve descriptions as better models become available. " +
+			"When analysis cannot run, fails with the reason and whether calling again can help.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id": map[string]any{
 					"type":        "string",
-					"description": "The attachment UUID to describe",
+					"description": "The attachment_id shown on an [Attachment: …] line in a message, or an id from attachment_list",
 				},
 				"reanalyze": map[string]any{
 					"type":        "boolean",

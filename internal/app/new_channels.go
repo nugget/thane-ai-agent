@@ -870,7 +870,7 @@ func (a *App) initChannels(s *newState) error {
 					MaxSize:   a.cfg.Signal.MaxAttachmentSize,
 				},
 				AttachmentStore: a.attachmentStore,
-				VisionAnalyzer:  a.visionAnalyzer,
+				VisionAnalyzer:  signalVisionAnalyzer(a.visionAnalyzer),
 				Registry:        a.loopRegistry,
 				Mailbox:         looppkg.NewMailbox(a.loopQueue),
 				EventBus:        a.eventBus,

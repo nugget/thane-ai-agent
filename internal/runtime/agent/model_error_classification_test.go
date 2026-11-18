@@ -53,6 +53,14 @@ func TestIsUserFixableModelError(t *testing.T) {
 			true,
 		},
 		{"legacy bare-prefix 400", fmt.Errorf("API error 400: bad request"), true},
+		{
+			// The legacy branch reads only the top-level message, as it
+			// always has; llm.HTTPStatus walks the chain, and adopting
+			// it here would change which wrapped failures fail over.
+			"legacy text under a wrapper keeps failover available",
+			fmt.Errorf("loop LLM call: %w", fmt.Errorf("API error 404: model not found")),
+			false,
+		},
 		{"legacy bare-prefix 503", fmt.Errorf("API error 503: unavailable"), false},
 		{"legacy anthropic string no longer slips through", fmt.Errorf("anthropic API error 400: bad request"), false},
 		{"unrelated error", fmt.Errorf("connection refused"), false},
