@@ -54,6 +54,20 @@ partitions. Completion counts measure consumer throughput: coalesced
 re-enqueues refresh a pending item in place and never appear as
 completions.
 
+A `queue_set_aside` row in `system_health` means a loop stopped
+delivering queued items because no delivery of them completed a turn:
+three times, preparing a turn from them failed or the process died
+while handling them. That is how one bad Signal message stops wedging
+the rest of a person's thread, and it also means nobody answered that
+message. Nothing retries it; only the operator can replay or discard
+it, so tell them. The row names the partition (a `signal/sender-…`
+partition is that person's sender loop; while it runs, its
+`loop_status` metadata names them) and how long ago. `logs_query` with
+that `loop_name` and pattern `set aside` returns each `item_id` and,
+when this process saw it, the last error. Several items set aside from
+one partition in a short time usually means something already in that
+conversation's history is failing, not each message.
+
 `doc_activity` watches the managed document corpus for churn: per
 document in the window, revision count, net line delta, size, and who
 wrote it — authorship comes from commit trailers, so a row authored

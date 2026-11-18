@@ -26,10 +26,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
-// StatusPending marks an item available for draining. v1 only ever
-// stores pending items (Ack deletes); the column exists so a future
-// claim/visibility model can add intermediate states without a
-// migration.
+// StatusPending marks an item available for draining. Ack deletes a
+// pending item; the only other state is [StatusSetAside].
 const StatusPending = "pending"
 
 // AckOutcome reports whether a receipt-guarded acknowledgement removed its
@@ -53,6 +51,10 @@ type Item struct {
 	Priority   int
 	EnqueuedAt time.Time
 	Payload    []byte
+	// Attempts counts the times the item was taken up and left
+	// unfinished: each [Store.Defer], and each [Store.RecordDelivery]
+	// not taken back by [Store.RefundDelivery].
+	Attempts int
 }
 
 // Store is a durable, deduped, per-consumer-loop work queue backed by a
@@ -216,7 +218,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 		return nil, fmt.Errorf("loopqueue: consumer_loop is required")
 	}
 	query := `
-		SELECT dedup_key, receipt, priority, payload, enqueued_at
+		SELECT dedup_key, receipt, priority, attempts, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
 		ORDER BY priority DESC, enqueued_at ASC, dedup_key ASC`
@@ -238,7 +240,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 			payload     string
 			enqueuedRaw any
 		)
-		if err := rows.Scan(&it.DedupKey, &it.Receipt, &it.Priority, &payload, &enqueuedRaw); err != nil {
+		if err := rows.Scan(&it.DedupKey, &it.Receipt, &it.Priority, &it.Attempts, &payload, &enqueuedRaw); err != nil {
 			return nil, err
 		}
 		it.Payload = []byte(payload)
@@ -361,8 +363,8 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey, expectedReceipt
 		actualReceipt string
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT enqueued_at, receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
-		consumerLoop, dedupKey,
+		`SELECT enqueued_at, receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = ?`,
+		consumerLoop, dedupKey, StatusPending,
 	).Scan(&enqueuedRaw, &actualReceipt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AckMissing, nil
@@ -374,8 +376,8 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey, expectedReceipt
 		return AckSuperseded, nil
 	}
 	res, err := tx.ExecContext(ctx,
-		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ?`,
-		consumerLoop, dedupKey, expectedReceipt,
+		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ? AND status = ?`,
+		consumerLoop, dedupKey, expectedReceipt, StatusPending,
 	)
 	if err != nil {
 		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)

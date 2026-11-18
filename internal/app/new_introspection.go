@@ -175,6 +175,7 @@ func (a *App) initInspector() {
 		src.QueueStats = func(ctx context.Context) ([]loopqueue.ConsumerPending, error) {
 			return a.loopQueue.PendingStats(ctx)
 		}
+		src.QueueSetAside = a.loopQueue.CountSetAside
 	}
 	if a.loopRegistry != nil {
 		src.LoopStatuses = a.loopRegistry.Statuses

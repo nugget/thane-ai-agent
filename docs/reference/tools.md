@@ -773,7 +773,7 @@ and pinning a loop definition is `loop_definition_update` under `loops`.
 | `get_version` | Agent version, build info, and commit SHA. |
 | `cost_summary` | Typed JSON for reported token usage and stored cost estimates over a time window, globally or by exact loop ID/captured name. Bounded breakdowns include loop ID, captured loop name across lifetimes, model, provider, resource, role, and task, with pricing coverage and unattributed usage kept explicit. Includes agent and auxiliary calls; counts records rather than logical requests. |
 | `logs_query` | Query the structured log index with attribute filters. |
-| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem, plus host basics, queue depths, 24h telemetry, the deploy story, WARN/ERROR rates, and cached recorded spend with provider/role headlines, pricing coverage, and secondary direct loop detail. |
+| `system_health` | The annunciator panel: one ok/degraded/failed row per subsystem (including queued items set aside after every delivery failed), plus host basics, queue depths, 24h telemetry, the deploy story, WARN/ERROR rates, and cached recorded spend with provider/role headlines, pricing coverage, and secondary direct loop detail. |
 | `queue_status` | Read-only work-queue audit: live pending depth and oldest-item age per consumer, completion statistics over a window, and the most recent completions. |
 | `doc_activity` | Revision-churn report over the managed document roots: revisions, net line delta, size, and authorship per document, with runaway-growth flagging. |
 | `loop_activity` | Journal-backed loop history: every wake with its attributed cause and sender, iteration outcomes, errors, and state changes — survives restarts and covers stopped loops. |
