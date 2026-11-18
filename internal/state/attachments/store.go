@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,10 +60,12 @@ type IngestParams struct {
 	ReceivedAt     time.Time // when the attachment was received
 
 	// SourceID is the channel's own identifier for this attachment,
-	// such as signal-cli's attachment id: unique to one received
-	// attachment and the same each time its message is retried. Empty
-	// when the channel has none, in which case every ingest makes a new
-	// record.
+	// such as signal-cli's attachment id, which a retried message
+	// carries unchanged. A channel may give the same id to an upload
+	// that several messages reference, so a retry is recognized by the
+	// id together with the receipt's sender, conversation and time.
+	// Empty when the channel has none, in which case every ingest makes
+	// a new record.
 	SourceID string
 }
 
@@ -71,6 +74,10 @@ type Store struct {
 	db      *sql.DB
 	rootDir string
 	logger  *slog.Logger
+
+	// blobLocks serialize ingests of the same content; see
+	// [Store.blobLock].
+	blobLocks [64]sync.Mutex
 }
 
 // NewStore creates an attachment store backed by db with content
@@ -131,6 +138,14 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 	ext := extensionForType(params.ContentType, params.OriginalName)
 	storePath := filepath.Join(hash[:2], hash[2:4], hash+ext)
 	absPath := filepath.Join(s.rootDir, storePath)
+
+	// Storing the file, recording it and any rollback are one step to
+	// every other ingest of the same content. Without the lock, two
+	// ingests can each find no file and both rename theirs into place,
+	// and one that then fails removes the file the other recorded.
+	lock := s.blobLock(hash)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Check if content already exists on disk (dedup).
 	// Track whether this call created the blob so we can roll it back
@@ -232,30 +247,6 @@ func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
 		return fmt.Errorf("attachments: insert record: %w", err)
 	}
 	return nil
-}
-
-// priorIngest returns the record an earlier ingest made of the same
-// attachment: the same channel, the channel's own identifier for it, and
-// the same content. A retried message carries the same identifiers, so it
-// matches its first attempt, while two attachments in one message, or the
-// same file sent again, are different attachments and get their own
-// records. When earlier failures left several records of one attachment,
-// the analyzed one is preferred. An attachment without a source
-// identifier never reuses a record.
-func (s *Store) priorIngest(ctx context.Context, hash string, params IngestParams) (*Record, error) {
-	if params.Channel == "" || params.SourceID == "" {
-		return nil, nil
-	}
-	return s.queryOne(ctx, `SELECT
-		id, hash, store_path, original_name, content_type,
-		size, width, height, channel, sender,
-		conversation_id, received_at,
-		description, analyzed_at, analysis_model, source_id
-		FROM attachments
-		WHERE channel = ? AND source_id = ? AND hash = ?
-		ORDER BY analyzed_at DESC, id
-		LIMIT 1`,
-		params.Channel, params.SourceID, hash)
 }
 
 // ByHash returns the first metadata record matching the given SHA-256 hash,

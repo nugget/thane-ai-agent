@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -43,6 +45,21 @@ func TestIngestReusesTheRecordOfARetriedAttachment(t *testing.T) {
 		{"same id on another channel", retryParams("att-1", photo), func() IngestParams {
 			p := retryParams("att-1", photo)
 			p.Channel = "email"
+			return p
+		}(), false},
+		{"same upload in a later message", retryParams("att-1", photo), func() IngestParams {
+			p := retryParams("att-1", photo)
+			p.ReceivedAt = p.ReceivedAt.Add(time.Second)
+			return p
+		}(), false},
+		{"same upload from another sender", retryParams("att-1", photo), func() IngestParams {
+			p := retryParams("att-1", photo)
+			p.Sender = "+15559876543"
+			return p
+		}(), false},
+		{"same upload in another conversation", retryParams("att-1", photo), func() IngestParams {
+			p := retryParams("att-1", photo)
+			p.ConversationID = "signal-group"
 			return p
 		}(), false},
 		{"no source id", retryParams("", photo), retryParams("", photo), false},
@@ -147,6 +164,56 @@ func TestIngestRemovesANewFileWhenTheLookupFails(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".ingest-") {
 			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestConcurrentIngestKeepsEveryRecordedFile ingests identical content
+// from many receipts at once, half of them failing after the file is
+// stored (their context is already canceled, so the lookup or insert
+// fails and rolls back). Every record that was made must still find its
+// file: a failing ingest may only remove a file no other ingest relies
+// on.
+func TestConcurrentIngestKeepsEveryRecordedFile(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		store := newTestStore(t)
+		content := []byte(fmt.Sprintf("shared content %d", round))
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var (
+			wg   sync.WaitGroup
+			mu   sync.Mutex
+			recs []*Record
+		)
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				ctx := context.Background()
+				if i%2 == 1 {
+					ctx = canceled
+				}
+				params := retryParams(fmt.Sprintf("att-%d", i), content)
+				params.ReceivedAt = params.ReceivedAt.Add(time.Duration(i) * time.Millisecond)
+				rec, err := store.Ingest(ctx, params)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				recs = append(recs, rec)
+				mu.Unlock()
+			}(i)
+		}
+		wg.Wait()
+
+		if len(recs) == 0 {
+			t.Fatalf("round %d: no ingest succeeded", round)
+		}
+		for _, rec := range recs {
+			if _, err := os.Stat(store.AbsPath(rec)); err != nil {
+				t.Fatalf("round %d: record %s lost its file: %v", round, rec.ID, err)
+			}
 		}
 	}
 }
