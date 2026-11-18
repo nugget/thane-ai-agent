@@ -101,6 +101,16 @@ func TestPullInputTagRequestReachesNextModelCall(t *testing.T) {
 			if tt.before >= 0 && slices.Contains(toolNames(mock.calls[tt.before].Tools), tt.wantTool) {
 				t.Errorf("call %d already offered %s before the pull", tt.before, tt.wantTool)
 			}
+			// The prompt of the call that offers the tool must also list the
+			// tag as active, including call 0, whose prompt was built before
+			// the pull at its top.
+			wantEntry := `"tag":"` + tt.requestTag + `"`
+			if tt.requestTag != "" {
+				listed := strings.Contains(mock.calls[tt.after].Messages[0].Content, wantEntry)
+				if listed != tt.wantGranted {
+					t.Errorf("call %d system prompt lists %s as active = %v, want %v", tt.after, tt.requestTag, listed, tt.wantGranted)
+				}
+			}
 			offered := slices.Contains(toolNames(mock.calls[tt.after].Tools), tt.wantTool)
 			if offered != tt.wantGranted {
 				t.Errorf("call %d offers %s = %v, want %v (tools %v)", tt.after, tt.wantTool, offered, tt.wantGranted, toolNames(mock.calls[tt.after].Tools))

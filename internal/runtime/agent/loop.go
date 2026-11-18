@@ -1041,8 +1041,9 @@ func (l *Loop) RequestCapability(ctx context.Context, tag string) error {
 // pull's context carries. It activates tags electively on this run's
 // scope, as InitialTags do at Run start, so a protected tag is refused,
 // and logs each activation on the run's logger so the line carries the
-// request and iteration.
-func (l *Loop) pullTagRequester(ctx context.Context, scope *capabilityScope) agentctx.TagRequester {
+// request and iteration. activated runs after each activation, so the
+// run can rebuild a system prompt that was built before the tag was on.
+func (l *Loop) pullTagRequester(ctx context.Context, scope *capabilityScope, activated func()) agentctx.TagRequester {
 	return func(tag string) error {
 		if scope == nil {
 			return nil // capability tagging is off: every tool is already offered
@@ -1051,6 +1052,7 @@ func (l *Loop) pullTagRequester(ctx context.Context, scope *capabilityScope) age
 			return err
 		}
 		l.updateLastRunTags(scope)
+		activated()
 		logging.Logger(ctx).Info("capability activated", "tag", tag, "via", "mid_turn_input")
 		return nil
 	}
@@ -1925,6 +1927,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// conversation bindings so tool gating can rely on Go-validated
 	// metadata instead of prompt reconstruction.
 	var scope *capabilityScope
+	// pullActivatedTags records that a mid-turn input pull activated a tag
+	// since the system prompt was last built. The engine polls and builds
+	// on one goroutine, so it needs no lock.
+	var pullActivatedTags bool
 	if l.capTags != nil {
 		var lenses []string
 		if l.lensProvider != nil {
@@ -2460,7 +2466,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			if req.PullInput == nil {
 				return nil
 			}
-			pulled := req.PullInput(agentctx.WithTagRequester(pctx, l.pullTagRequester(pctx, scope)))
+			requester := l.pullTagRequester(pctx, scope, func() { pullActivatedTags = true })
+			pulled := req.PullInput(agentctx.WithTagRequester(pctx, requester))
 			for _, m := range pulled {
 				if m.Role != "user" || m.Content == "" {
 					continue
@@ -2496,8 +2503,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// - Watchlist entities, state changes, and conditions are fresh
 			// - KB articles and live providers see current tag state
 			// Skip rebuild when a custom SystemPrompt is in use for callers
-			// that assemble their own context externally.
-			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
+			// that assemble their own context externally. The first
+			// iteration uses the prompt built before the engine started,
+			// unless the pull at its top activated a tag: then that prompt
+			// lacks the tag's talents and Active Tags entry while the tool
+			// list already has its tools, so it is rebuilt before call 0.
+			rebuildForPull := pullActivatedTags
+			pullActivatedTags = false
+			if (i > 0 || rebuildForPull) && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
 				profile := l.modelInteractionProfileForModel(currentModel)
 				rebuilt, sections := l.buildSystemPromptWithProfileSections(iterCtx, userMessage, profile)
 				promptProfile = profile.Name
