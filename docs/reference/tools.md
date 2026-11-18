@@ -567,6 +567,14 @@ loop; when set, they route to that loop instead (e.g. a
 Attachment list and search results report arrival recency as
 `received_delta`.
 
+A Signal turn whose waking messages carry an attachment starts with
+this tag active when the sender is the owner, or is in the admin or
+household trust zone. These tools read every stored attachment, not
+only that conversation's, so other senders do not get them this way.
+Once active, the tag carries into the sender's later turns like any
+tag the model activates itself. A message merged into a turn that is
+already running does not change that turn's tags.
+
 ## `forge` — GitHub/code collaboration
 
 | Tool | Description |

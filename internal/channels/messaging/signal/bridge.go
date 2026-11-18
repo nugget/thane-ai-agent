@@ -760,7 +760,11 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 	if messageCount > 0 {
 		origin = memory.OriginChannel
 	}
+	grantAttachmentTools := b.grantsAttachmentTools(scaffold, intSummary(summary, "attachments"), summary)
 	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary, origin)
+	if grantAttachmentTools {
+		turn.Request.InitialTags = mergeInitialTags(turn.Request.InitialTags, []string{attachmentsTag})
+	}
 	// Mid-turn input merge (#1221): let the loop pull messages that arrive
 	// while this turn is composing, rendered in channel voice. The loop owns
 	// delta-gating, the drain budget, and the ack; this only renders. Close
