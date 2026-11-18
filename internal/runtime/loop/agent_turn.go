@@ -82,6 +82,12 @@ type AgentTurn struct {
 	// it in a delta-gated, budget-capped PullInput over its mailbox and wires
 	// that into the turn. Nil (the default) means the turn takes no mid-turn
 	// input — its reply is composed from the wake snapshot alone.
+	//
+	// A call that returns messages delivers its items: the loop merges
+	// those messages into the live turn and acks the items with it. A call
+	// that returns none delivers nothing, and the items stay pending. ctx is
+	// the live run's and carries that run's tag requester (agentctx), so a
+	// renderer can activate a tag that the input it delivers earns.
 	PullRender func(ctx context.Context, items []MailboxItem) []llm.Message
 }
 
