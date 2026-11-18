@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	sigcli "github.com/nugget/thane-ai-agent/internal/channels/messaging/signal"
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 	"github.com/nugget/thane-ai-agent/internal/platform/paths"
 	"github.com/nugget/thane-ai-agent/internal/state/attachments"
@@ -50,6 +51,18 @@ func (a *App) initAttachmentRuntime() error {
 	}
 
 	return nil
+}
+
+// signalVisionAnalyzer returns the vision analyzer as the Signal bridge's
+// interface, or a nil interface when vision is disabled. Passing the nil
+// *attachments.Analyzer straight through would make a non-nil interface
+// wrapping a nil pointer: the bridge's nil check would pass, and the
+// first image would dereference it and take the process down.
+func signalVisionAnalyzer(an *attachments.Analyzer) sigcli.VisionAnalyzer {
+	if an == nil {
+		return nil
+	}
+	return an
 }
 
 func (a *App) initFileTools(s *newState) {

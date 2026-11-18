@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -635,11 +636,21 @@ func (b *Bridge) logReactionRemoval(env *Envelope) {
 // callable. Task loops get that merge from the runtime's own turn
 // builder; a TurnBuilder owns its Request outright, so for this loop it
 // happens here or not at all.
-func (b *Bridge) buildSignalTurn(ctx context.Context, sender string, input loop.TurnInput) (*loop.AgentTurn, error) {
-	var (
-		turn *loop.AgentTurn
-		err  error
-	)
+func (b *Bridge) buildSignalTurn(ctx context.Context, sender string, input loop.TurnInput) (turn *loop.AgentTurn, err error) {
+	// Turn preparation runs on the sender loop's goroutine, so a panic
+	// here would end the process, and the mailbox would hand the same
+	// items back on the next boot. As an error the items stay pending
+	// and the loop retries them after its error backoff.
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error("signal turn preparation panicked",
+				"sender", sender,
+				"panic", fmt.Sprint(r),
+				"stack", string(debug.Stack()),
+			)
+			turn, err = nil, fmt.Errorf("signal turn preparation panicked: %v", r)
+		}
+	}()
 	switch {
 	case len(input.MailboxItems) > 0:
 		turn, err = b.prepareSignalMailboxTurn(ctx, sender, input.MailboxItems, input.NotifyEnvelopes)
