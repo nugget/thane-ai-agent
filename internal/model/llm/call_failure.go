@@ -89,6 +89,10 @@ const (
 	// CallFailureProvider is a 5xx: the provider failed while handling
 	// the request.
 	CallFailureProvider
+	// CallFailureAmbiguousModel is a model name that matched more than
+	// one deployment, so no provider was called; see
+	// [AmbiguousModelError] for the names that would resolve.
+	CallFailureAmbiguousModel
 )
 
 // ClassifyCallFailure classifies a failed model call from its error.
@@ -98,6 +102,10 @@ func ClassifyCallFailure(err error) CallFailure {
 	}
 	if IsBillingBlocked(err) {
 		return CallFailureRefused
+	}
+	var ambiguous *AmbiguousModelError
+	if errors.As(err, &ambiguous) {
+		return CallFailureAmbiguousModel
 	}
 	if code, ok := HTTPStatus(err); ok {
 		switch {
@@ -149,6 +157,8 @@ func (f CallFailure) String() string {
 		return "unreachable"
 	case CallFailureProvider:
 		return "provider_error"
+	case CallFailureAmbiguousModel:
+		return "ambiguous_model"
 	}
 	return "unknown"
 }
@@ -173,13 +183,30 @@ func (f CallFailure) Phrase() string {
 		return "the provider could not be reached"
 	case CallFailureProvider:
 		return "the provider failed while handling the request"
+	case CallFailureAmbiguousModel:
+		return "the model name matched more than one deployment"
 	}
 	return "the request failed"
 }
 
 // Persistent reports whether repeating the same call is expected to
-// fail the same way until something is reconfigured. Transient classes
-// and unknown failures report false.
+// fail the same way until something changes: the configuration, or the
+// model named. Unknown failures report false.
 func (f CallFailure) Persistent() bool {
-	return f == CallFailureModelNotFound || f == CallFailureRefused || f == CallFailureRejected
+	switch f {
+	case CallFailureModelNotFound, CallFailureRefused, CallFailureRejected, CallFailureAmbiguousModel:
+		return true
+	}
+	return false
+}
+
+// Retryable reports whether the same call may succeed if repeated: the
+// failure was a condition that passes. Unknown failures report false,
+// since nothing says a retry would help.
+func (f CallFailure) Retryable() bool {
+	switch f {
+	case CallFailureRateLimited, CallFailureTimeout, CallFailureUnreachable, CallFailureProvider:
+		return true
+	}
+	return false
 }

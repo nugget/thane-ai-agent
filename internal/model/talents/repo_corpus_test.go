@@ -173,6 +173,13 @@ var nonToolTokens = map[string]struct{}{
 	// `session_` is a real tool prefix.
 	"session_id": {},
 
+	// Inbound attachment field. A stored attachment's line in a message
+	// carries its `attachment_id`, which is the id attachment_describe
+	// takes; the attachments talent names it so the model can describe
+	// an attachment without listing first. The matcher flags it because
+	// `attachment_` is a real tool prefix.
+	"attachment_id": {},
+
 	// Archive candidate field value. A session candidate's `age` is a
 	// delta, and `time_basis` names the instant it is measured from:
 	// `session_started`, the value, not a tool. The matcher flags it for

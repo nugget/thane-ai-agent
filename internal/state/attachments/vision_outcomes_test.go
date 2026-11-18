@@ -56,8 +56,39 @@ func visionFailureCases() []visionCase {
 			wantCalls:  1,
 		},
 		{
+			name:       "unclassified call failure",
+			client:     &mockLLMClient{err: errors.New("something odd")},
+			wantClass:  ErrVisionCall,
+			wantReason: "the vision model call failed (the request failed)",
+			wantCalls:  1,
+		},
+		{
+			name:       "ambiguous model name",
+			client:     &mockLLMClient{err: &llm.AmbiguousModelError{Model: "qwen-vl", Targets: []string{"spark/qwen-vl", "centro/qwen-vl"}}},
+			wantClass:  ErrVisionCall,
+			wantReason: "the vision model call failed (the model name matched more than one deployment)",
+			wantNext:   ` Call again with the model argument set to one of ["spark/qwen-vl","centro/qwen-vl"].`,
+			wantCalls:  1,
+		},
+		{
 			name:       "empty description",
 			client:     &mockLLMClient{response: "   "},
+			wantClass:  ErrNoDescription,
+			wantReason: "the vision model returned an empty description",
+			wantNext:   " Calling again may produce a description.",
+			wantCalls:  1,
+		},
+		{
+			name:       "provider reports an empty completion",
+			client:     &mockLLMClient{err: llm.WithErrorClass(llm.ErrEmptyCompletion, errors.New("openai_compat: empty completion"))},
+			wantClass:  ErrNoDescription,
+			wantReason: "the vision model returned an empty description",
+			wantNext:   " Calling again may produce a description.",
+			wantCalls:  1,
+		},
+		{
+			name:       "provider reports a reasoning-only completion",
+			client:     &mockLLMClient{err: llm.WithErrorClass(llm.ErrReasoningOnly, errors.New("openai_compat: reasoning only"))},
 			wantClass:  ErrNoDescription,
 			wantReason: "the vision model returned an empty description",
 			wantNext:   " Calling again may produce a description.",
@@ -79,7 +110,7 @@ func visionFailureCases() []visionCase {
 					t.Fatal(err)
 				}
 			},
-			wantClass:  os.ErrNotExist,
+			wantClass:  ErrImageUnreadable,
 			wantReason: "the stored image could not be read for analysis",
 			wantCalls:  0,
 		},
@@ -206,11 +237,59 @@ func TestVisionFailureReasonClasses(t *testing.T) {
 		{fmt.Errorf("x: %w", ErrNoDescription), "the vision model returned an empty description"},
 		{llm.WithErrorClass(ErrVisionCall, sentinelProviderError(429)), "the vision model call failed (the provider was rejecting requests as over its rate limit)"},
 		{llm.WithErrorClass(ErrVisionCall, errors.New("weird")), "the vision model call failed (the request failed)"},
-		{errors.New("read /SENTINEL/path: permission denied"), "the stored image could not be read for analysis"},
+		{llm.WithErrorClass(ErrImageUnreadable, errors.New("read /SENTINEL/path: permission denied")), "the stored image could not be read for analysis"},
+		{errors.New("cache /SENTINEL/path: database is locked"), "the analysis failed"},
 	}
 	for _, tt := range tests {
 		if got := VisionFailureReason(tt.err); got != tt.want {
 			t.Errorf("VisionFailureReason(%v) = %q, want %q", tt.err, got, tt.want)
 		}
+	}
+}
+
+// TestToolsDescribeFailedReanalysisKeepsTheEarlierDescription checks
+// that a reanalysis failing on an image that already has a description
+// says the earlier description still stands, rather than telling the
+// model it has never seen the image.
+func TestToolsDescribeFailedReanalysisKeepsTheEarlierDescription(t *testing.T) {
+	client := &mockLLMClient{response: "A red barn at dusk."}
+	analyzer, store := newTestAnalyzer(t, client)
+	rec := ingestTestImage(t, store, []byte("barn image"))
+	tools := NewTools(store, analyzer)
+	if _, err := tools.Describe(context.Background(), map[string]any{"id": rec.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	client.err = sentinelProviderError(503)
+	_, err := tools.Describe(context.Background(), map[string]any{"id": rec.ID, "reanalyze": true})
+	text, ok := promptfmt.ModelFacingText(err)
+	if !ok {
+		t.Fatalf("Describe error %v carries no model-facing text", err)
+	}
+	want := fmt.Sprintf("Reanalysis of attachment %s failed: the vision model call failed (the provider failed while handling the request). Its earlier description still stands; attachment_describe without reanalyze, model or prompt returns it. Calling again may succeed.", rec.ID)
+	if text != want {
+		t.Errorf("model-facing text:\n got %q\nwant %q", text, want)
+	}
+
+	result, err := tools.Describe(context.Background(), map[string]any{"id": rec.ID})
+	if err != nil || result != "A red barn at dusk." {
+		t.Errorf("plain describe after a failed reanalysis = (%q, %v), want the earlier description", result, err)
+	}
+}
+
+// TestReanalyzeReturnsTheDescriptionWhenCachingItFails checks that a
+// reanalysis whose description could not be saved still returns it,
+// as Analyze does, instead of reporting the analysis as failed.
+func TestReanalyzeReturnsTheDescriptionWhenCachingItFails(t *testing.T) {
+	client := &mockLLMClient{response: "A heron on a fence post."}
+	analyzer, store := newTestAnalyzer(t, client)
+	rec := ingestTestImage(t, store, []byte("heron image"))
+	if err := store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, err := analyzer.Reanalyze(context.Background(), rec, "")
+	if err != nil || desc != "A heron on a fence post." {
+		t.Errorf("Reanalyze = (%q, %v), want the description and no error", desc, err)
 	}
 }

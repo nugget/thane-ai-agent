@@ -35,8 +35,13 @@ var (
 	// accepts. The vision model was not called.
 	ErrImageTooLarge = errors.New("image too large for vision analysis")
 
+	// ErrImageUnreadable marks a stored image file that could not be
+	// read. The vision model was not called.
+	ErrImageUnreadable = errors.New("stored image could not be read")
+
 	// ErrNoDescription marks a vision model that answered with no
-	// description.
+	// description, including a provider's empty or reasoning-only
+	// completion.
 	ErrNoDescription = errors.New("vision model returned no description")
 
 	// ErrVisionCall marks a failed call to the vision model. The
@@ -53,12 +58,25 @@ func VisionFailureReason(err error) string {
 	switch {
 	case errors.Is(err, ErrImageTooLarge):
 		return "the image is over the 20 MiB limit for vision analysis"
+	case errors.Is(err, ErrImageUnreadable):
+		return "the stored image could not be read for analysis"
 	case errors.Is(err, ErrNoDescription):
 		return "the vision model returned an empty description"
 	case errors.Is(err, ErrVisionCall):
 		return "the vision model call failed (" + llm.ClassifyCallFailure(err).Phrase() + ")"
 	}
-	return "the stored image could not be read for analysis"
+	return "the analysis failed"
+}
+
+// visionCallError classes a failed vision model call. A provider that
+// reports a completion with no content as an error has answered with no
+// description, which is [ErrNoDescription], not a failed call.
+func visionCallError(op, id string, err error) error {
+	wrapped := fmt.Errorf("vision: %s %s: %w", op, id, err)
+	if errors.Is(err, llm.ErrEmptyCompletion) || errors.Is(err, llm.ErrReasoningOnly) {
+		return llm.WithErrorClass(ErrNoDescription, wrapped)
+	}
+	return llm.WithErrorClass(ErrVisionCall, wrapped)
 }
 
 // Analyzer performs vision analysis on image attachments using an LLM.
@@ -147,7 +165,7 @@ func (a *Analyzer) Analyze(ctx context.Context, rec *Record) (string, error) {
 	absPath := a.store.AbsPath(rec)
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return "", fmt.Errorf("vision: read image %s: %w", absPath, err)
+		return "", llm.WithErrorClass(ErrImageUnreadable, fmt.Errorf("vision: read image %s: %w", absPath, err))
 	}
 	b64 := base64.StdEncoding.EncodeToString(data)
 
@@ -166,7 +184,7 @@ func (a *Analyzer) Analyze(ctx context.Context, rec *Record) (string, error) {
 
 	resp, err := a.client.Chat(analyzeCtx, a.model, msgs, nil)
 	if err != nil {
-		return "", llm.WithErrorClass(ErrVisionCall, fmt.Errorf("vision: analyze %s: %w", rec.ID, err))
+		return "", visionCallError("analyze", rec.ID, err)
 	}
 
 	description := strings.TrimSpace(resp.Message.Content)
@@ -211,7 +229,7 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 	absPath := a.store.AbsPath(rec)
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return "", fmt.Errorf("vision: read image %s: %w", absPath, err)
+		return "", llm.WithErrorClass(ErrImageUnreadable, fmt.Errorf("vision: read image %s: %w", absPath, err))
 	}
 	b64 := base64.StdEncoding.EncodeToString(data)
 
@@ -229,7 +247,7 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 
 	resp, err := a.client.Chat(analyzeCtx, model, msgs, nil)
 	if err != nil {
-		return "", llm.WithErrorClass(ErrVisionCall, fmt.Errorf("vision: reanalyze %s: %w", rec.ID, err))
+		return "", visionCallError("reanalyze", rec.ID, err)
 	}
 
 	description := strings.TrimSpace(resp.Message.Content)
@@ -238,7 +256,12 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 	}
 
 	if err := a.store.UpdateVision(ctx, rec.ID, description, model); err != nil {
-		return "", fmt.Errorf("vision: cache reanalysis %s: %w", rec.ID, err)
+		// The description is good; only caching it failed, so return
+		// it, as Analyze does.
+		a.logger.Warn("vision: failed to cache reanalysis",
+			"id", rec.ID,
+			"error", err,
+		)
 	}
 
 	a.logger.Info("vision reanalysis complete",

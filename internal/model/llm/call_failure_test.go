@@ -76,6 +76,7 @@ func TestClassifyCallFailure(t *testing.T) {
 		{"500", errors.New("API error 500: boom"), CallFailureProvider},
 		{"503 typed", &APIError{StatusCode: 503}, CallFailureProvider},
 		{"unlisted status", errors.New("API error 418: teapot"), CallFailureUnknown},
+		{"ambiguous model name", fmt.Errorf("vision: reanalyze rec-1: %w", &AmbiguousModelError{Model: "qwen", Targets: []string{"a/qwen", "b/qwen"}}), CallFailureAmbiguousModel},
 		{"plain", errors.New("something odd"), CallFailureUnknown},
 	}
 	for _, tt := range tests {
@@ -89,20 +90,22 @@ func TestClassifyCallFailure(t *testing.T) {
 
 // TestCallFailureWording checks every class has its own log name and
 // model-facing phrase, that phrases carry no status codes or provider
-// text, and which classes count as persistent.
+// text, and which classes count as persistent or retryable.
 func TestCallFailureWording(t *testing.T) {
 	classes := []struct {
 		f          CallFailure
 		persistent bool
+		retryable  bool
 	}{
-		{CallFailureUnknown, false},
-		{CallFailureModelNotFound, true},
-		{CallFailureRefused, true},
-		{CallFailureRejected, true},
-		{CallFailureRateLimited, false},
-		{CallFailureTimeout, false},
-		{CallFailureUnreachable, false},
-		{CallFailureProvider, false},
+		{CallFailureUnknown, false, false},
+		{CallFailureModelNotFound, true, false},
+		{CallFailureRefused, true, false},
+		{CallFailureRejected, true, false},
+		{CallFailureRateLimited, false, true},
+		{CallFailureTimeout, false, true},
+		{CallFailureUnreachable, false, true},
+		{CallFailureProvider, false, true},
+		{CallFailureAmbiguousModel, true, false},
 	}
 	names := map[string]bool{}
 	phrases := map[string]bool{}
@@ -120,6 +123,9 @@ func TestCallFailureWording(t *testing.T) {
 		}
 		if got := c.f.Persistent(); got != c.persistent {
 			t.Errorf("class %v Persistent = %v, want %v", c.f, got, c.persistent)
+		}
+		if got := c.f.Retryable(); got != c.retryable {
+			t.Errorf("class %v Retryable = %v, want %v", c.f, got, c.retryable)
 		}
 	}
 }

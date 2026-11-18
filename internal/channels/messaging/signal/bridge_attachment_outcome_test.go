@@ -99,9 +99,16 @@ func TestAttachmentLinesAlwaysSayWhatCameWithTheMessage(t *testing.T) {
 		},
 		{
 			name: "stored image unreadable", contentType: "image/jpeg",
-			analyzer:    &countingVisionAnalyzer{err: errors.New("vision: read image /SENTINEL/path: permission denied")},
+			analyzer:    &countingVisionAnalyzer{err: llm.WithErrorClass(attachments.ErrImageUnreadable, errors.New("vision: read image /SENTINEL/path: permission denied"))},
 			wantStored:  true,
 			wantOutcome: notSeen + "the stored image could not be read for analysis.]",
+			wantCalls:   1,
+		},
+		{
+			name: "unclassified analysis failure", contentType: "image/jpeg",
+			analyzer:    &countingVisionAnalyzer{err: errors.New("vision: cache /SENTINEL/path: database is locked")},
+			wantStored:  true,
+			wantOutcome: notSeen + "the analysis failed.]",
 			wantCalls:   1,
 		},
 		{

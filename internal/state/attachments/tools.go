@@ -168,7 +168,7 @@ func (t *Tools) Describe(ctx context.Context, args map[string]any) (string, erro
 
 		desc, err := analyzer.Reanalyze(ctx, rec, modelOverride)
 		if err != nil {
-			return "", describeFailure(id, fmt.Errorf("attachment_describe: reanalyze: %w", err))
+			return "", describeFailure(rec, fmt.Errorf("attachment_describe: reanalyze: %w", err))
 		}
 		return desc, nil
 	}
@@ -176,28 +176,47 @@ func (t *Tools) Describe(ctx context.Context, args map[string]any) (string, erro
 	// Standard analyze — uses cache when available.
 	desc, err := t.analyzer.Analyze(ctx, rec)
 	if err != nil {
-		return "", describeFailure(id, fmt.Errorf("attachment_describe: %w", err))
+		return "", describeFailure(rec, fmt.Errorf("attachment_describe: %w", err))
 	}
 	return desc, nil
 }
 
 // describeFailure attaches to a failed analysis the text the model
 // reads in place of the error's own, which carries the stored file's
-// path and the provider's raw response: why the image has no
-// description, and whether calling again can help.
-func describeFailure(id string, err error) error {
-	text := fmt.Sprintf("Attachment %s was not analyzed: %s. You do not know what this image shows.", id, VisionFailureReason(err))
+// path and the provider's raw response: why there is no new
+// description, whether an earlier one still stands, and whether calling
+// again can help.
+func describeFailure(rec *Record, err error) error {
+	var text string
+	if rec.Description != "" {
+		// Only a reanalysis fails on a record that has a description.
+		text = fmt.Sprintf("Reanalysis of attachment %s failed: %s. Its earlier description still stands; attachment_describe without reanalyze, model or prompt returns it.", rec.ID, VisionFailureReason(err))
+	} else {
+		text = fmt.Sprintf("Attachment %s was not analyzed: %s. You do not know what this image shows.", rec.ID, VisionFailureReason(err))
+	}
+	return &promptfmt.ModelFacingError{Text: text + describeNextMove(err), Err: err}
+}
+
+// describeNextMove says how calling again can help, or nothing when the
+// failure gives no reason to think it would.
+func describeNextMove(err error) string {
+	var ambiguous *llm.AmbiguousModelError
 	switch {
+	case errors.As(err, &ambiguous):
+		targets, _ := json.Marshal(ambiguous.Targets)
+		return fmt.Sprintf(" Call again with the model argument set to one of %s.", targets)
 	case errors.Is(err, ErrNoDescription):
-		text += " Calling again may produce a description."
+		return " Calling again may produce a description."
 	case errors.Is(err, ErrVisionCall):
-		if llm.ClassifyCallFailure(err).Persistent() {
-			text += " Calling again with the same model will fail the same way; the model argument can name a different image-capable model."
-		} else {
-			text += " Calling again may succeed."
+		failure := llm.ClassifyCallFailure(err)
+		if failure.Persistent() {
+			return " Calling again with the same model will fail the same way; the model argument can name a different image-capable model."
+		}
+		if failure.Retryable() {
+			return " Calling again may succeed."
 		}
 	}
-	return &promptfmt.ModelFacingError{Text: text, Err: err}
+	return ""
 }
 
 // Search performs a text search across attachment metadata and returns

@@ -33,13 +33,20 @@ one line saying what came with it:
 
 - `[Vision: …]` is a description of the image, written by a vision
   model when the message arrived.
-- `[Image not seen: …]`, `[Audio not heard: …]`, `[Video not seen: …]`
-  and `[File not read: …]` mean nothing about the contents came with
-  the message, and say why. You do not know what it shows, so say
-  that rather than describing it: the file name and the conversation
-  around it are not evidence of what is in it. For an image whose
-  reason is a timeout or a provider failure, `attachment_describe`
-  with that `attachment_id` can try again.
+- `[Image not seen: …]` means no description of the image came with
+  the message, and says why.
+- `[Audio not heard: …]`, `[Video not seen: …]` and `[File not read: …]`
+  mean nothing about the contents came with the message: audio is
+  not transcribed, and video and other files are not read, when a
+  message arrives.
+
+Without a description you do not know what the attachment contains,
+so say that rather than describing it: the file name and the
+conversation around it are not evidence of what is in it. For an
+image with an `attachment_id`, `attachment_describe` with that id
+returns a description if one has been made since, or fails saying
+why and whether calling again, or naming another image-capable
+model, can help.
 
 ## Browse — `attachment_list`
 
