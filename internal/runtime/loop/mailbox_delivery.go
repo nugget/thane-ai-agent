@@ -26,6 +26,9 @@ type mailboxDelivery struct {
 	// isolated is true when items is a single previously delivered
 	// item, delivered without mid-turn input so its outcome is its own.
 	isolated bool
+	// counted is true when this delivery was recorded against the
+	// items, so settling it may keep or refund the count.
+	counted bool
 }
 
 // mailboxFailure is the last counted delivery failure this process saw,
@@ -87,7 +90,9 @@ func (l *Loop) deliverMailbox(ctx context.Context, log *slog.Logger) (mailboxDel
 		if len(batch) == 0 {
 			return mailboxDelivery{}, nil
 		}
+		counted := true
 		if err := mb.recordDelivery(ctx, name, batch); err != nil {
+			counted = false
 			log.Warn("loop mailbox delivery not recorded; delivering uncounted",
 				"error", err,
 				"items", len(batch),
@@ -100,7 +105,7 @@ func (l *Loop) deliverMailbox(ctx context.Context, log *slog.Logger) (mailboxDel
 				"max_deliveries", maxMailboxDeliveries,
 			)
 		}
-		return mailboxDelivery{items: batch, isolated: isolated}, nil
+		return mailboxDelivery{items: batch, isolated: isolated, counted: counted}, nil
 	}
 }
 
@@ -129,7 +134,37 @@ func (l *Loop) setAsideMailboxItems(ctx context.Context, log *slog.Logger, mb *M
 		}
 		log.Warn("loop mailbox item set aside after repeated failed deliveries", attrs...)
 	}
+	if changed > 0 {
+		l.clearErrorStreakOf(log, items)
+	}
 	return changed > 0
+}
+
+// clearErrorStreakOf ends the loop's error streak when the item that
+// caused it was just set aside. Those failures were the item's, and the
+// wake that sets it aside has nothing to run, so without this the loop
+// would report errors until its next clean turn, which may be days away.
+func (l *Loop) clearErrorStreakOf(log *slog.Logger, items []MailboxItem) {
+	cause := l.lastMailboxFailure.itemID
+	if cause == "" {
+		return
+	}
+	for _, it := range items {
+		if it.ID != cause {
+			continue
+		}
+		l.mu.Lock()
+		streak := l.consecutiveErrors
+		l.consecutiveErrors = 0
+		l.lastError = ""
+		l.mu.Unlock()
+		l.lastMailboxFailure = mailboxFailure{}
+		log.Info("loop error streak cleared: the mailbox item behind it was set aside",
+			"item_id", it.ID,
+			"cleared_errors", streak,
+		)
+		return
+	}
 }
 
 // settleFailedMailboxDelivery decides whether a failed turn's wake batch
@@ -141,7 +176,8 @@ func (l *Loop) setAsideMailboxItems(ctx context.Context, log *slog.Logger, mb *M
 // Handler, gives the delivery back: those failures say nothing about the
 // items, and counting them would set aside healthy items during a
 // provider outage. A process that dies keeps every count.
-func (l *Loop) settleFailedMailboxDelivery(ctx context.Context, log *slog.Logger, items []MailboxItem, turnErr error, builderFailed bool) bool {
+func (l *Loop) settleFailedMailboxDelivery(ctx context.Context, log *slog.Logger, delivery mailboxDelivery, turnErr error, builderFailed bool) bool {
+	items := delivery.items
 	reason := mailboxSettleReason(ctx.Err(), l.config.Handler != nil, builderFailed)
 	attrs := []any{
 		"reason", reason,
@@ -151,6 +187,14 @@ func (l *Loop) settleFailedMailboxDelivery(ctx context.Context, log *slog.Logger
 	}
 	if reason == "builder_failed" {
 		l.lastMailboxFailure = mailboxFailure{itemID: items[0].ID, err: turnErr.Error()}
+	}
+	if !delivery.counted {
+		// Nothing was recorded, so there is nothing to keep and refunding
+		// would take back an earlier delivery's count.
+		log.Info("loop mailbox delivery failed; the delivery was not counted", attrs...)
+		return false
+	}
+	if reason == "builder_failed" {
 		log.Info("loop mailbox delivery failed; delivery counted", attrs...)
 		return true
 	}
@@ -166,6 +210,31 @@ func (l *Loop) settleFailedMailboxDelivery(ctx context.Context, log *slog.Logger
 	}
 	log.Info("loop mailbox delivery failed; delivery refunded", attrs...)
 	return false
+}
+
+// refundAfterFailedAck gives back a counted delivery whose turn finished
+// cleanly but whose ack did not land. The turn did not fail, so the
+// items must not be charged for it; acked rows are already gone and the
+// refund's receipt guard skips them.
+func (l *Loop) refundAfterFailedAck(ctx context.Context, log *slog.Logger, delivery mailboxDelivery) {
+	if !delivery.counted || len(delivery.items) == 0 {
+		return
+	}
+	l.mu.Lock()
+	mb, name := l.deps.Mailbox, l.config.Name
+	l.mu.Unlock()
+	wctx, cancel := mailboxSettleContext(ctx)
+	defer cancel()
+	if err := mb.refundDelivery(wctx, name, delivery.items); err != nil {
+		log.Warn("loop mailbox delivery refund after a failed ack failed; the delivery stays counted",
+			"item_ids", mailboxItemIDs(delivery.items),
+			"error", err,
+		)
+		return
+	}
+	log.Info("loop mailbox delivery refunded after a failed ack",
+		"item_ids", mailboxItemIDs(delivery.items),
+	)
 }
 
 // mailboxSettleReason names why a failed turn's delivery is kept or

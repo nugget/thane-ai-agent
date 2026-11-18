@@ -3,6 +3,8 @@ package loop
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"runtime"
 	"slices"
 	"strings"
@@ -436,5 +438,127 @@ func TestMailboxSettleReason(t *testing.T) {
 		if got := mailboxSettleReason(tt.ctxErr, tt.handler, tt.builderFailed); got != tt.want {
 			t.Errorf("%s: mailboxSettleReason = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+// TestMailboxAckContinuesPastAFailure acks a batch whose first item
+// cannot be acked: the rest of the batch must still be acked.
+func TestMailboxAckContinuesPastAFailure(t *testing.T) {
+	t.Parallel()
+	mailbox := newTestMailbox(t)
+	ctx := context.Background()
+	first, err := mailbox.enqueue(ctx, "c", "test", []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := mailbox.enqueue(ctx, "c", "test", []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Receipt = "not-this-delivery"
+	if err := mailbox.ack(ctx, "c", []MailboxItem{first, second}); err == nil {
+		t.Fatal("ack of a superseded item reported no error")
+	}
+	if depth, _ := mailbox.depth(ctx, "c"); depth != 1 {
+		t.Fatalf("depth = %d after the batch ack, want 1 (only the superseded item left)", depth)
+	}
+}
+
+// TestSettlingAnUncountedDeliveryChangesNothing checks that a delivery
+// whose count was never recorded is not refunded, which would take back
+// an earlier delivery's count, and that a counted one is.
+func TestSettlingAnUncountedDeliveryChangesNothing(t *testing.T) {
+	t.Parallel()
+	for _, counted := range []bool{false, true} {
+		mailbox := newTestMailbox(t)
+		ctx := context.Background()
+		l := mustNew(t, Config{Name: "settle", Task: "t"}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+		item, err := mailbox.enqueue(ctx, l.Name(), "test", []byte("a"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mailbox.recordDelivery(ctx, l.Name(), []MailboxItem{item}); err != nil {
+			t.Fatal(err)
+		}
+		pending, _ := mailbox.Peek(ctx, l.Name(), 0)
+		delivery := mailboxDelivery{items: pending, counted: counted}
+		l.settleFailedMailboxDelivery(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), delivery, errors.New("provider down"), false)
+		after, _ := mailbox.Peek(ctx, l.Name(), 0)
+		want := 1
+		if counted {
+			want = 0
+		}
+		if len(after) != 1 || after[0].PriorDeliveries != want {
+			t.Fatalf("counted=%v: prior deliveries after settling = %+v, want %d", counted, after, want)
+		}
+	}
+}
+
+// TestRefundAfterFailedAck checks that a clean turn whose ack failed
+// gives back its counted delivery, so its items return as one batch.
+func TestRefundAfterFailedAck(t *testing.T) {
+	t.Parallel()
+	mailbox := newTestMailbox(t)
+	ctx := context.Background()
+	l := mustNew(t, Config{Name: "ackfail", Task: "t"}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	for _, p := range []string{"a", "b"} {
+		if _, err := mailbox.enqueue(ctx, l.Name(), "test", []byte(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, _ := mailbox.Peek(ctx, l.Name(), 0)
+	if err := mailbox.recordDelivery(ctx, l.Name(), pending); err != nil {
+		t.Fatal(err)
+	}
+	l.refundAfterFailedAck(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), mailboxDelivery{items: pending, counted: true})
+	after, _ := mailbox.Peek(ctx, l.Name(), 0)
+	if len(after) != 2 || after[0].PriorDeliveries != 0 || after[1].PriorDeliveries != 0 {
+		t.Fatalf("after refund: %+v, want both items with 0 prior deliveries", after)
+	}
+	batch, isolated, _ := planMailboxDelivery(after, maxMailboxDeliveries)
+	if len(batch) != 2 || isolated {
+		t.Fatalf("next batch = %v isolated=%v, want both items together", payloads(batch), isolated)
+	}
+}
+
+// TestSetAsideClearsTheErrorStreak checks that setting aside the item
+// behind a loop's errors ends the streak, so the loop does not keep
+// reporting errors with nothing left to run.
+func TestSetAsideClearsTheErrorStreak(t *testing.T) {
+	t.Parallel()
+	mailbox := newTestMailbox(t)
+	l, err := New(Config{
+		Name:         "streak",
+		Operation:    OperationEventDriven,
+		SleepDefault: 10 * time.Millisecond,
+		SleepMax:     50 * time.Millisecond,
+		TurnBuilder: func(_ context.Context, input TurnInput) (*AgentTurn, error) {
+			if len(input.MailboxItems) == 0 {
+				return nil, nil // nothing to render, as the Signal builder does
+			}
+			return nil, errors.New("signal turn preparation panicked: boom")
+		},
+	}, Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := mailbox.enqueue(context.Background(), l.Name(), "test", []byte("P")); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer l.Stop()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		aside, _ := storeOf(mailbox).CountSetAside(context.Background(), time.Now().Add(-time.Hour))
+		st := l.Status()
+		if len(aside) == 1 && st.ConsecutiveErrors == 0 && st.LastError == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("set aside %+v, consecutive errors %d, last error %q; want the item set aside and the streak cleared", aside, st.ConsecutiveErrors, st.LastError)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

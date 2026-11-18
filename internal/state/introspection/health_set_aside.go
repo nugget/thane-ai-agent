@@ -16,9 +16,9 @@ import (
 const queueSetAsideWindow = 24 * time.Hour
 
 // queueSetAsideRow reports items a consumer set aside after every
-// delivery of them failed. Setting an item aside clears the signals a
-// wedged consumer raised before (consecutive errors, queue backlog), so
-// without this row nothing would show that an item was never handled.
+// delivery of them failed. Setting an item aside clears the queue
+// backlog it held and the loop error streak it caused, so without this
+// row nothing would show that an item was never handled.
 func (i *Inspector) queueSetAsideRow(ctx context.Context, now time.Time) (HealthRow, bool) {
 	if i.src.QueueSetAside == nil {
 		return HealthRow{}, false
@@ -45,8 +45,9 @@ func (i *Inspector) queueSetAsideRow(ctx context.Context, now time.Time) (Health
 	row.Status = HealthDegraded
 	row.Detail = fmt.Sprintf("%d queued item(s) were set aside in the last %s after every delivery failed to complete a turn, "+
 		"so nothing answered them and nothing will retry them: %s. "+
-		"logs_query with loop_name set to the partition and pattern \"set aside\" returns each item_id and its last error; "+
-		"only the operator can replay or discard them.",
+		"logs_query with loop_name set to the partition and pattern \"set aside\" returns each item_id and, when the process survived "+
+		"its failures, the last error; a failure that killed the process left its error in the logs just before a recent boot. "+
+		"Only the operator can replay or discard them.",
 		total, promptfmt.FormatDuration(queueSetAsideWindow), strings.Join(parts, "; "))
 	return row, true
 }

@@ -702,9 +702,13 @@ WHERE consumer_loop = ? AND dedup_key = ? AND status = 'set_aside';
 DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = 'set_aside';
 ```
 
-After a crash loop with an unrelated cause, replay everything set aside
-since it began by matching `updated_at >= '<UTC start>'` instead of one
-key.
+A delivery in flight when the process dies counts against its item, so
+a crash loop with an unrelated cause also sets aside other senders'
+messages that were being handled at the time. Replay everything set
+aside since it began by matching `updated_at >= '2026-11-18 04:00:00'`
+instead of one key: UTC, with a space between date and time, as the
+column stores it. A `T` separator compares as later than every time on
+that date and silently skips those rows.
 
 ## Contacts & CardDAV
 

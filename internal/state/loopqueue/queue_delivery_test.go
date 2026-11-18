@@ -115,3 +115,56 @@ func TestPutAsideHidesFromPendingReaders(t *testing.T) {
 		t.Fatalf("CountSetAside(future) = %+v, want none", aside)
 	}
 }
+
+// TestAckWaitsForAConcurrentWriter holds the database's write lock from
+// another connection while an Ack runs. A read-first transaction fails
+// at once in that case; Ack must wait for the lock and succeed.
+func TestAckWaitsForAConcurrentWriter(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "q.db")
+	ctx := context.Background()
+	db, err := database.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s, err := NewStore(db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, "c", "m", 0, []byte("p")); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.Peek(ctx, "c", 16)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("peek = %+v, %v", items, err)
+	}
+
+	other, err := database.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	conn, err := other.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		_, err := conn.ExecContext(ctx, "COMMIT")
+		released <- err
+	}()
+
+	outcome, err := s.Ack(ctx, "c", items[0].DedupKey, items[0].Receipt)
+	if err != nil || outcome != Acked {
+		t.Fatalf("Ack during a concurrent write = %q, %v; want acked after waiting", outcome, err)
+	}
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -358,40 +358,37 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey, expectedReceipt
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
-	var (
-		enqueuedRaw   any
-		actualReceipt string
-	)
+	// Write first. A deferred transaction that reads before it writes
+	// cannot wait for the write lock: under WAL, SQLite refuses the
+	// upgrade at once when another connection has written, and
+	// busy_timeout never applies. The guarded DELETE takes the lock first
+	// and waits like any other writer. Only a removed row is journaled,
+	// so a concurrent Ack of the same key that loses the race journals
+	// nothing.
+	var enqueuedRaw any
 	err = tx.QueryRowContext(ctx,
-		`SELECT enqueued_at, receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = ?`,
-		consumerLoop, dedupKey, StatusPending,
-	).Scan(&enqueuedRaw, &actualReceipt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return AckMissing, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	if actualReceipt != expectedReceipt {
-		return AckSuperseded, nil
-	}
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ? AND status = ?`,
+		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ? AND status = ?
+		RETURNING enqueued_at`,
 		consumerLoop, dedupKey, expectedReceipt, StatusPending,
-	)
-	if err != nil {
-		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	// Journal only when this transaction actually removed the row. Two
-	// concurrent Acks of the same key can both pass the SELECT before
-	// serializing on the write; the loser's DELETE affects zero rows,
-	// and journaling it anyway would double-count throughput.
-	deleted, err := res.RowsAffected()
-	if err != nil {
-		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	if deleted == 0 {
+	).Scan(&enqueuedRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Nothing removed: a pending row under another receipt has moved
+		// on since it was handed out; otherwise the item is gone.
+		var actualReceipt string
+		err = tx.QueryRowContext(ctx,
+			`SELECT receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = ?`,
+			consumerLoop, dedupKey, StatusPending,
+		).Scan(&actualReceipt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return AckMissing, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		}
 		return AckSuperseded, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, enqueued_at, acked_at)

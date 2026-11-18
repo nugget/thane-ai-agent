@@ -1874,11 +1874,12 @@ func (l *Loop) run(ctx context.Context) {
 					"error", ackErr,
 					"items", len(ackItems),
 				)
+				l.refundAfterFailedAck(ctx, iterLog, delivery)
 			}
 			ackCancel()
 			l.wakeIfMailboxNonEmpty(ctx)
 		} else if mailboxErr == nil && len(mailboxItems) > 0 && err != nil {
-			l.settleFailedMailboxDelivery(ctx, iterLog, mailboxItems, err, builderFailed)
+			l.settleFailedMailboxDelivery(ctx, iterLog, delivery, err, builderFailed)
 		}
 
 		// Clear in-flight state after iteration completes.

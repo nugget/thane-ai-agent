@@ -64,8 +64,12 @@ it, so tell them. The row names the partition (a `signal/sender-…`
 partition is that person's sender loop; while it runs, its
 `loop_status` metadata names them) and how long ago. `logs_query` with
 that `loop_name` and pattern `set aside` returns each `item_id` and,
-when this process saw it, the last error. Several items set aside from
-one partition in a short time usually means something already in that
+when this process saw it, the last error. A delivery in flight when the
+process dies counts against its item, so items set aside while the
+process was restarting repeatedly (`system_health`'s recent boots) may
+have been caught by a crash they did not cause: say so, and tell the
+operator they can likely be replayed. Several items set aside from one
+partition in a short time usually means something already in that
 conversation's history is failing, not each message.
 
 `doc_activity` watches the managed document corpus for churn: per

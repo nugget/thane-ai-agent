@@ -65,8 +65,11 @@ An item whose delivery was counted three times is set aside instead of
 delivered again: its row moves to the `set_aside` status, out of every
 pending view, and the loop goes on to later items. Each one logs
 `loop mailbox item set aside after repeated failed deliveries` at Warn
-under the iteration, and `system_health`'s `queue_set_aside` row
+under the iteration, the loop's error streak clears when the item that
+caused it is set aside, and `system_health`'s `queue_set_aside` row
 degrades for a day after the newest. Rows are kept; nothing prunes them.
+A turn that finished cleanly but whose ack failed gives its delivery
+back, so the items come back as one batch rather than one at a time.
 Inspecting, replaying and discarding them is described under Signal
 Messaging in the configuration guide.
 
