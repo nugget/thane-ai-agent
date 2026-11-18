@@ -37,6 +37,7 @@ type Record struct {
 	Sender         string    // channel-specific sender identifier
 	ConversationID string    // conversation the attachment belongs to
 	ReceivedAt     time.Time // when the attachment was received
+	SourceID       string    // channel's own identifier for the attachment ("" if none)
 
 	// Vision analysis fields (populated by Analyzer).
 	Description   string    // vision analysis text (empty = not analyzed)
@@ -56,6 +57,13 @@ type IngestParams struct {
 	Sender         string    // channel-specific sender identifier
 	ConversationID string    // conversation context
 	ReceivedAt     time.Time // when the attachment was received
+
+	// SourceID is the channel's own identifier for this attachment,
+	// such as signal-cli's attachment id: unique to one received
+	// attachment and the same each time its message is retried. Empty
+	// when the channel has none, in which case every ingest makes a new
+	// record.
+	SourceID string
 }
 
 // Store manages content-addressed file storage with a SQLite metadata index.
@@ -89,7 +97,7 @@ func NewStore(db *sql.DB, rootDir string, logger *slog.Logger) (*Store, error) {
 // hash, stores it content-addressed on disk, and records metadata in the
 // index. If a file with the same hash already exists on disk, the file is
 // not rewritten (dedup). Each receipt gets its own metadata record so
-// that provenance is tracked per receipt. Ingesting the same receipt
+// that provenance is tracked per receipt. Ingesting the same attachment
 // again, as a retried message does, returns the record already stored
 // instead of adding another; see [Store.priorIngest]. Returns the
 // [Record].
@@ -155,6 +163,10 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 	// than adding a duplicate row each time.
 	existing, err := s.priorIngest(ctx, hash, params)
 	if err != nil {
+		// Roll back a blob this call created, as a failed insert does.
+		if createdBlob {
+			os.Remove(absPath)
+		}
 		return nil, err
 	}
 	if existing != nil {
@@ -174,6 +186,7 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 		Sender:         params.Sender,
 		ConversationID: params.ConversationID,
 		ReceivedAt:     params.ReceivedAt,
+		SourceID:       params.SourceID,
 	}
 
 	if err := s.insertRecord(ctx, rec); err != nil {
@@ -208,12 +221,12 @@ func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
 			id, hash, store_path, original_name, content_type,
 			size, width, height, channel, sender,
 			conversation_id, received_at,
-			description, analyzed_at, analysis_model
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			description, analyzed_at, analysis_model, source_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID, rec.Hash, rec.StorePath, rec.OriginalName, rec.ContentType,
 		rec.Size, rec.Width, rec.Height, rec.Channel, rec.Sender,
 		rec.ConversationID, rec.ReceivedAt.UTC().Format(time.RFC3339Nano),
-		rec.Description, analyzedAt, rec.AnalysisModel,
+		rec.Description, analyzedAt, rec.AnalysisModel, rec.SourceID,
 	)
 	if err != nil {
 		return fmt.Errorf("attachments: insert record: %w", err)
@@ -222,28 +235,27 @@ func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
 }
 
 // priorIngest returns the record an earlier ingest made of the same
-// receipt: the same content, channel, sender, conversation, receipt time
-// and original name. A message carries its receipt time with it, so a
-// retry matches its first attempt while a later message sending the same
-// file does not. When earlier failures left several such records, the
-// one already analyzed is preferred. An ingest without a channel or a
-// receipt time has nothing to match on and never reuses a record.
+// attachment: the same channel, the channel's own identifier for it, and
+// the same content. A retried message carries the same identifiers, so it
+// matches its first attempt, while two attachments in one message, or the
+// same file sent again, are different attachments and get their own
+// records. When earlier failures left several records of one attachment,
+// the analyzed one is preferred. An attachment without a source
+// identifier never reuses a record.
 func (s *Store) priorIngest(ctx context.Context, hash string, params IngestParams) (*Record, error) {
-	if params.Channel == "" || params.ReceivedAt.IsZero() {
+	if params.Channel == "" || params.SourceID == "" {
 		return nil, nil
 	}
 	return s.queryOne(ctx, `SELECT
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments
-		WHERE hash = ? AND channel = ? AND sender = ? AND conversation_id = ?
-			AND received_at = ? AND original_name = ?
+		WHERE channel = ? AND source_id = ? AND hash = ?
 		ORDER BY analyzed_at DESC, id
 		LIMIT 1`,
-		hash, params.Channel, params.Sender, params.ConversationID,
-		params.ReceivedAt.UTC().Format(time.RFC3339Nano), params.OriginalName)
+		params.Channel, params.SourceID, hash)
 }
 
 // ByHash returns the first metadata record matching the given SHA-256 hash,
@@ -253,7 +265,7 @@ func (s *Store) ByHash(ctx context.Context, hash string) (*Record, error) {
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments WHERE hash = ? LIMIT 1`, hash)
 }
 
@@ -263,7 +275,7 @@ func (s *Store) ByID(ctx context.Context, id string) (*Record, error) {
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments WHERE id = ?`, id)
 }
 
@@ -369,7 +381,7 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, err
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
 		conversation_id, received_at,
-		description, analyzed_at, analysis_model
+		description, analyzed_at, analysis_model, source_id
 		FROM attachments`
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -391,7 +403,7 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, err
 			&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
 			&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
 			&rec.ConversationID, &receivedAt,
-			&rec.Description, &analyzedAt, &rec.AnalysisModel,
+			&rec.Description, &analyzedAt, &rec.AnalysisModel, &rec.SourceID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("attachments: scan search result: %w", err)
@@ -435,7 +447,7 @@ func (s *Store) queryOne(ctx context.Context, query string, args ...any) (*Recor
 		&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
 		&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
 		&rec.ConversationID, &receivedAt,
-		&rec.Description, &analyzedAt, &rec.AnalysisModel,
+		&rec.Description, &analyzedAt, &rec.AnalysisModel, &rec.SourceID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

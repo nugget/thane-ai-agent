@@ -322,3 +322,46 @@ func TestRetriedSignalTurnReusesItsAttachmentRecords(t *testing.T) {
 		t.Errorf("attachment rows after three attempts = %d, want 1", total)
 	}
 }
+
+// TestIdenticalAttachmentsInOneMessageKeepTheirOwnRecords checks that two
+// attachments in one message with the same bytes and file name are
+// still two attachments: each gets its own record and attachment_id.
+func TestIdenticalAttachmentsInOneMessageKeepTheirOwnRecords(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"att-a", "att-b"} {
+		if err := os.WriteFile(filepath.Join(source, id), []byte("same bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := newTestAttachmentStore(t, filepath.Join(dir, "attachments.db"), filepath.Join(dir, "store"))
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{}, Runner: &testRunner{},
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments:     AttachmentConfig{SourceDir: source},
+		AttachmentStore: store,
+	})
+
+	descs := bridge.processAttachments(context.Background(), []Attachment{
+		{ID: "att-a", ContentType: "image/jpeg", Filename: "photo.jpg"},
+		{ID: "att-b", ContentType: "image/jpeg", Filename: "photo.jpg"},
+	}, "+15551234567", "signal-15551234567", time.UnixMilli(1794960952450))
+
+	if len(descs) != 2 {
+		t.Fatalf("descriptions = %d, want 2", len(descs))
+	}
+	first, second := attachmentIDField.FindString(descs[0]), attachmentIDField.FindString(descs[1])
+	if first == "" || first == second {
+		t.Errorf("attachment ids %q and %q; want two distinct ids", first, second)
+	}
+	total, _, _, err := store.TelemetryStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Errorf("attachment rows = %d, want 2", total)
+	}
+}

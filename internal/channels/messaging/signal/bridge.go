@@ -1554,6 +1554,7 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 		Sender:         sender,
 		ConversationID: convID,
 		ReceivedAt:     receivedAt,
+		SourceID:       a.ID,
 	})
 	if err != nil {
 		b.logger.Warn("signal attachment ingest failed",

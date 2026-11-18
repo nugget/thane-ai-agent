@@ -3,8 +3,9 @@ package attachments
 import "github.com/nugget/thane-ai-agent/internal/platform/database"
 
 // schema declares the attachments metadata table plus its additive
-// history (the received_at index added in phase 4 and the vision
-// analysis columns added in phase 3).
+// history (the received_at index added in phase 4, the vision analysis
+// columns added in phase 3, and the source id a retried message's
+// attachment is matched on).
 var schema = database.Schema{
 	Name: "attachments",
 	Steps: []database.MigrationStep{
@@ -33,5 +34,9 @@ var schema = database.Schema{
 		database.ColumnAdd{Table: "attachments", Column: "description", Typedef: "TEXT NOT NULL DEFAULT ''"},
 		database.ColumnAdd{Table: "attachments", Column: "analyzed_at", Typedef: "TEXT NOT NULL DEFAULT ''"},
 		database.ColumnAdd{Table: "attachments", Column: "analysis_model", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		// The channel's own identifier for each attachment, so a retried
+		// message reuses its record instead of adding another.
+		database.ColumnAdd{Table: "attachments", Column: "source_id", Typedef: "TEXT NOT NULL DEFAULT ''"},
+		database.IndexCreate{Name: "idx_attachments_source", SQL: `CREATE INDEX IF NOT EXISTS idx_attachments_source ON attachments(channel, source_id)`},
 	},
 }
