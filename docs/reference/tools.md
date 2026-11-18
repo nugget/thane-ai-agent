@@ -573,7 +573,8 @@ household trust zone. These tools read every stored attachment, not
 only that conversation's, so other senders do not get them this way.
 Once active, the tag carries into the sender's later turns like any
 tag the model activates itself. A message merged into a turn that is
-already running does not change that turn's tags.
+already running gets the same rule: when it brings the turn's first
+attachment, the tag turns on from that turn's next model call.
 
 ## `forge` — GitHub/code collaboration
 

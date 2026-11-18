@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 	"github.com/nugget/thane-ai-agent/internal/platform/events"
+	"github.com/nugget/thane-ai-agent/internal/runtime/agentctx"
 )
 
 // TestBuildMailboxPullInputDeltaGatesAndBudgets exercises the #1221 loop-side
@@ -398,5 +399,38 @@ func TestBuildMailboxPullInputDefaultBudget(t *testing.T) {
 		Deps{Runner: &noopRunner{}, Mailbox: newTestMailbox(t)})
 	if got := l.midTurnInputBudget(); got != defaultMidTurnInputBudget {
 		t.Fatalf("midTurnInputBudget() = %d, want default %d", got, defaultMidTurnInputBudget)
+	}
+}
+
+// TestBuildMailboxPullInputPassesTheRunContextToRender pins that the
+// pull hands its renderer the context it was called with, so a renderer
+// can reach the live run's tag requester through it.
+func TestBuildMailboxPullInputPassesTheRunContextToRender(t *testing.T) {
+	t.Parallel()
+
+	mailbox := newTestMailbox(t)
+	l := mustNew(t, Config{Name: "pull-ctx", Task: "t", MidTurnInputBudget: 2},
+		Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	if _, err := mailbox.Enqueue(context.Background(), l.Name(), "test", []byte("photo")); err != nil {
+		t.Fatal(err)
+	}
+
+	var requested []string
+	ctx := agentctx.WithTagRequester(context.Background(), func(tag string) error {
+		requested = append(requested, tag)
+		return nil
+	})
+	render := func(rctx context.Context, items []MailboxItem) []llm.Message {
+		if err := agentctx.RequestTag(rctx, "attachments"); err != nil {
+			t.Errorf("RequestTag from render = %v", err)
+		}
+		return []llm.Message{{Role: "user", Content: string(items[0].Payload)}}
+	}
+	var pulled []MailboxItem
+	if got := l.buildMailboxPullInput("conv-test", nil, &pulled, render)(ctx); len(got) != 1 {
+		t.Fatalf("pull returned %d messages, want 1", len(got))
+	}
+	if len(requested) != 1 || requested[0] != "attachments" {
+		t.Errorf("tag requester saw %v, want [attachments]", requested)
 	}
 }

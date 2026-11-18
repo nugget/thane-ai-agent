@@ -80,7 +80,9 @@ type Request struct {
 	// newly-arrived conversation input into this live turn (#1221). The
 	// loop builds it over its mailbox with delta-gating and a drain
 	// budget; the engine appends whatever it returns as user-role
-	// messages. Nil disables mid-turn input. Runtime-only.
+	// messages. Nil disables mid-turn input. Runtime-only. The runner
+	// calls it with a ctx carrying an [agentctx.TagRequester] for the
+	// live run.
 	PullInput func(ctx context.Context) []llm.Message `yaml:"-" json:"-"`
 
 	// TargetKey names the document a tool call writes, so the runner's

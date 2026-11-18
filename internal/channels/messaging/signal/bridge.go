@@ -772,7 +772,7 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 	if messageCount > 0 {
 		origin = memory.OriginChannel
 	}
-	grantAttachmentTools := b.grantsAttachmentTools(scaffold, intSummary(summary, "attachments"), summary)
+	grantAttachmentTools := b.grantsAttachmentTools(scaffold.log, scaffold.channelBinding, intSummary(summary, "attachments"), summary)
 	turn := b.agentTurnMessages(scaffold.convID, scaffold.channelBinding, msgs, scaffold.opts, summary, origin)
 	if grantAttachmentTools {
 		turn.Request.InitialTags = mergeInitialTags(turn.Request.InitialTags, []string{attachmentsTag})
@@ -783,7 +783,11 @@ func (b *Bridge) prepareSignalMailboxTurn(ctx context.Context, sender string, it
 	// over the scaffold already built for this turn so repeated pulls don't
 	// rebuild it (and re-persist the conversation binding) each time.
 	turn.PullRender = func(rctx context.Context, items []loop.MailboxItem) []llm.Message {
-		return b.renderPulledMailbox(rctx, scaffold, items)
+		pulled, attachments := b.renderPulledMailbox(rctx, scaffold, items)
+		if len(pulled) > 0 { // a pull that returns messages is delivered (AgentTurn.PullRender)
+			b.grantAttachmentToolsMidTurn(rctx, scaffold, attachments, summary)
+		}
+		return pulled
 	}
 	return turn, nil
 }
@@ -883,11 +887,13 @@ func (b *Bridge) prepareSignalTurnScaffold(sender string) signalTurnScaffold {
 // rendered text in explicit provenance framing: this is sender-controlled
 // content that landed while the model was mid-work, so it is presented as
 // channel input, never in a system voice. The loop supplies only fresh,
-// delta-gated items; this method does not touch the mailbox or ack.
-func (b *Bridge) renderPulledMailbox(ctx context.Context, scaffold signalTurnScaffold, items []loop.MailboxItem) []llm.Message {
+// delta-gated items; this method does not touch the mailbox or ack. The
+// int is the number of attachments on the messages it returns.
+func (b *Bridge) renderPulledMailbox(ctx context.Context, scaffold signalTurnScaffold, items []loop.MailboxItem) ([]llm.Message, int) {
 	if len(items) == 0 {
-		return nil
+		return nil, 0
 	}
+	attachments := 0
 	sender := scaffold.sender
 	out := make([]llm.Message, 0, len(items))
 	for _, item := range items {
@@ -897,7 +903,7 @@ func (b *Bridge) renderPulledMailbox(ctx context.Context, scaffold signalTurnSca
 				"sender", sender, "item_id", item.ID, "error", err)
 			continue
 		}
-		msg, _, ok, err := b.renderEnvelope(ctx, scaffold, &env)
+		msg, envSummary, ok, err := b.renderEnvelope(ctx, scaffold, &env)
 		if err != nil {
 			b.logger.Warn("signal mid-turn mailbox item render failed, skipping",
 				"sender", sender, "item_id", item.ID, "error", err)
@@ -910,8 +916,9 @@ func (b *Bridge) renderPulledMailbox(ctx context.Context, scaffold signalTurnSca
 			Role:    "user",
 			Content: "A new message arrived while you were working — read it before you finish, in case it changes your reply:\n\n" + msg.Content,
 		})
+		attachments += intSummary(envSummary, "attachments")
 	}
-	return out
+	return out, attachments
 }
 
 func (b *Bridge) renderEnvelope(ctx context.Context, scaffold signalTurnScaffold, env *Envelope) (loop.Message, map[string]any, bool, error) {
