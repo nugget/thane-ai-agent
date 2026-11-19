@@ -284,6 +284,8 @@ var (
 	errProbeAuth         = errors.New("mcp: not connected: credentials refused")
 	errProbeIncompatible = errors.New("mcp: not connected: protocol incompatible")
 	errProbeTimeout      = errors.New("mcp: health check timed out")
+	errProbeServerError  = errors.New("mcp: health check failed: server error")
+	errProbeBadReply     = errors.New("mcp: health check failed: unusable reply")
 	errProbeNotConnected = errors.New("mcp: not connected")
 )
 
@@ -304,19 +306,32 @@ func (m *Manager) Probe(ctx context.Context, server string) error {
 	return probeError(err)
 }
 
-// probeError maps a probe failure to its fixed health-view error.
+// probeError maps a probe failure to its fixed health-view error. A
+// failure that wraps errNotReady is the last connect error: no
+// connection is up. Any other failed on a live connection, where an
+// HTTP error status other than 401/403 is the server failing the check,
+// not a lost connection, and an unusable reply is not a version
+// mismatch.
 func probeError(err error) error {
+	ready := !errors.Is(err, errNotReady)
 	var statusErr *httpStatusError
+	hasStatus := errors.As(err, &statusErr)
 	switch {
-	case errors.As(err, &statusErr) && classifyStatus(statusErr.Status) == statusAuth:
+	case hasStatus && classifyStatus(statusErr.Status) == statusAuth:
 		return errProbeAuth
-	case errors.Is(err, errIncompatible), errors.Is(err, errProtocol):
+	case errors.Is(err, errIncompatible):
 		return errProbeIncompatible
-	case errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, errNotReady):
+	case errors.Is(err, errProtocol) && ready:
+		return errProbeBadReply
+	case errors.Is(err, errProtocol):
+		return errProbeIncompatible
+	case errors.Is(err, context.DeadlineExceeded) && ready:
 		return errProbeTimeout
 	case errors.Is(err, errUnreachable), errors.Is(err, errConnectionLost),
 		errors.Is(err, context.DeadlineExceeded):
 		return errProbeUnreachable
+	case hasStatus && ready && !errors.Is(err, errSessionExpired):
+		return errProbeServerError
 	default:
 		return errProbeNotConnected
 	}

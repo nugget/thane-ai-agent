@@ -318,6 +318,10 @@ func TestManager_ProbeErrorsAreFixedText(t *testing.T) {
 		{"incompatible", notReadyErr(fmt.Errorf("%w: %w", errIncompatible, serverText)), errProbeIncompatible},
 		{"protocol violation", notReadyErr(fmt.Errorf("%w: malformed tools/list result", errProtocol)), errProbeIncompatible},
 		{"ping timed out", fmt.Errorf("health check (ping): %w", context.DeadlineExceeded), errProbeTimeout},
+		{"429 on a live connection", fmt.Errorf("health check (ping): %w", &httpStatusError{Status: 429, Body: "SERVER-AUTHORED"}), errProbeServerError},
+		{"503 on a live connection", fmt.Errorf("health check (server/discover): %w", &httpStatusError{Status: 503, RPC: serverText}), errProbeServerError},
+		{"500 while down", notReadyErr(fmt.Errorf("server/discover: %w", &httpStatusError{Status: 500})), errProbeNotConnected},
+		{"unusable reply on a live connection", fmt.Errorf("health check (ping): %w: no response to ping", errProtocol), errProbeBadReply},
 		{"session expired", fmt.Errorf("health check (ping): %w: %w", errSessionExpired, &httpStatusError{Status: 404}), errProbeNotConnected},
 		{"client closed", errClientClosed, errProbeNotConnected},
 		{"server error", notReadyErr(fmt.Errorf("initialize: %w", serverText)), errProbeNotConnected},
@@ -346,6 +350,25 @@ func TestManager_ProbeErrorsAreFixedText(t *testing.T) {
 		if strings.Contains(err.Error(), leak) {
 			t.Errorf("probe error %q leaks %q", err, leak)
 		}
+	}
+
+	// A live connection whose ping gets a 503 carrying server text.
+	live := wireTNewServer(clientTTool("echo"))
+	base := live.fake.handle
+	live.fake.handle = func(ctx context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
+		if req.Method == methodPing {
+			return nil, &httpStatusError{Status: 503, RPC: serverText, Body: "SERVER-AUTHORED body"}
+		}
+		return base(ctx, tr, req, info)
+	}
+	lm := wireTManager(t, []ServerConfig{wireTLegacy("live", "t")}, map[string]*wireTServer{"live": live})
+	lm.Start(t.Context(), tools.NewEmptyRegistry())
+	err = lm.Probe(t.Context(), "live")
+	if !errors.Is(err, errProbeServerError) {
+		t.Fatalf("Probe of a live server answering 503 = %v, want %v", err, errProbeServerError)
+	}
+	if strings.Contains(err.Error(), "SERVER-AUTHORED") || strings.Contains(err.Error(), "503") {
+		t.Errorf("probe error %q leaks server text or the status", err)
 	}
 }
 
