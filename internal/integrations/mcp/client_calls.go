@@ -236,6 +236,29 @@ func (c *serverClient) noteAccess() {
 	}
 }
 
+// probe is the connwatch health check. Not ready: returns the
+// last connect error (wrapping errNotReady) with no I/O. Ready: legacy →
+// ping, modern → server/discover; any JSON-RPC response (result or
+// error) counts as healthy. Failures are reported, never acted on,
+// except errSessionExpired, which triggers an immediate re-initialize.
+func (c *serverClient) probe(ctx context.Context) error {
+	conn, err := c.readyConn()
+	if err != nil {
+		return err
+	}
+	method := methodPing
+	if conn.currentEra() == eraModern {
+		method = methodDiscover
+	}
+	if _, err := conn.call(ctx, method, nil, conn.frame(false)); err != nil {
+		if errors.Is(err, errSessionExpired) {
+			c.requestReconnect(conn)
+		}
+		return fmt.Errorf("health check (%s): %w", method, err)
+	}
+	return nil
+}
+
 // offers reports whether name is in the known tool list (true while no
 // list is known yet).
 func (c *serverClient) offers(name string) bool {

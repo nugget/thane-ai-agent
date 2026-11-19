@@ -34,6 +34,19 @@ func notReadyErr(cause error) error {
 	}
 }
 
+// tools returns the last good list in server order (deduped by name,
+// first wins; on HTTP, tools with invalid x-mcp-header annotations are
+// already dropped). nil until the first successful listing; kept while
+// disconnected. No I/O. The slice is shared and must not be mutated.
+func (c *serverClient) tools() []toolDefinition {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tl == nil {
+		return nil
+	}
+	return c.tl.defs
+}
+
 // setStateLocked records s and wakes everyone waiting on a state change.
 // c.mu must be held.
 func (c *serverClient) setStateLocked(s connState) {

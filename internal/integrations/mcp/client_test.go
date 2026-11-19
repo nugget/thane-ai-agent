@@ -590,6 +590,82 @@ func TestClient_StableConnectionResetsBackoff(t *testing.T) {
 	}
 }
 
+// TestClient_StableThroughABlockedRefresh: how long a connection lived
+// decides whether its loss ends the run of failures, not which ready
+// case the supervisor's select happens to pick. A refresh that hangs
+// past stableAfter keeps the supervisor from servicing the stable timer,
+// so when the connection is then lost the timer and the loss are ready
+// together. The loss must still count as stable: the stdio exit WARN is
+// re-armed before the reconnect, the reconnect logs at INFO, and the
+// backoff is back at backoffMin. The select picks at random, so the case
+// runs many times.
+func TestClient_StableThroughABlockedRefresh(t *testing.T) {
+	const stableAfter = 30 * time.Millisecond
+	for i := range 30 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
+			routes := clientTLegacyRoutes("", clientTTool("echo"))
+			list := routes[methodToolsList]
+			routes[methodToolsList] = func(ctx context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
+				if tr.spawn == 1 && clientTSentCount(tr, methodToolsList) > 1 {
+					return clientTHang(ctx, tr, req, info) // the refresh never answers
+				}
+				return list(ctx, tr, req, info)
+			}
+			srv := &clientTFakeServer{handle: routes.handler()}
+			cfg := clientTConfig(transportStdio, protocolLegacy)
+			cfg.backoffMin, cfg.backoffMax = 2*time.Millisecond, time.Second
+			cfg.stableAfter = stableAfter
+			logs := &coreTLogBuffer{}
+			cfg.logger = logs.logger()
+			c := clientTNew(t, srv, cfg)
+			waits := &clientTWaits{}
+			c.jitter = waits.jitter
+			var rearmed atomic.Bool // the exit WARN was re-armed when the reconnect began
+			srv.dialErr = func(dial int) error {
+				if dial == 2 {
+					rearmed.Store(!c.exitWarned.Load())
+				}
+				return nil
+			}
+			clientTStart(t, c)
+			clientTReadyOn(t, c, srv, 1)
+			clientTEventually(t, "the connect logged", func() bool {
+				return strings.Contains(logs.String(), `msg="mcp: server connected"`)
+			})
+			c.exitWarned.Store(true) // an exit earlier in this run warned
+			srv.last().serverNotify(methodToolsListChanged, "")
+			clientTEventually(t, "the refresh hanging", func() bool { return srv.count(methodToolsList) == 2 })
+			time.Sleep(4 * stableAfter)
+			srv.transportAt(0).lose()
+			clientTLoseWhenReady(t, c, srv, 2)
+			clientTReadyOn(t, c, srv, 3)
+
+			out := logs.String()
+			if !rearmed.Load() {
+				t.Errorf("the stdio exit WARN was not re-armed after a connection that lived %v\n%s", 4*stableAfter, out)
+			}
+			if n := strings.Count(out, `level=INFO msg="mcp: server connected"`); n < 2 {
+				t.Errorf("INFO connected lines = %d, want the reconnect after the stable connection at INFO too\n%s", n, out)
+			}
+			if got, want := waits.get(), []time.Duration{2 * time.Millisecond, 2 * time.Millisecond}; !slices.Equal(got, want) {
+				t.Errorf("reconnect waits = %v, want %v (the stable connection reset the backoff)", got, want)
+			}
+		})
+	}
+}
+
+// clientTSentCount counts the requests for method sent on tr.
+func clientTSentCount(tr *clientTFakeTransport, method string) int {
+	n := 0
+	for _, m := range tr.sent() {
+		if m.call && m.method == method {
+			n++
+		}
+	}
+	return n
+}
+
 // TestClient_JitterSpreadsWaits: the default jitter keeps every wait
 // within ±20% and actually varies it.
 func TestClient_JitterSpreadsWaits(t *testing.T) {

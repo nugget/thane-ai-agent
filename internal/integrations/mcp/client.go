@@ -351,46 +351,75 @@ func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
 }
 
 // serve waits on a ready connection until it is lost, expires, or the
-// client stops, handling list refreshes in between. It also reports
-// whether the connection lived stableAfter, which ends the run of
-// failures. At that moment it re-arms the stdio exit WARN, before the
-// process can exit, and, while flapping, logs that the connection is
-// stable, because the reconnect itself was logged only at Debug.
-func (c *serverClient) serve(conn *clientConn, flapping bool) (end serveEnd, stable bool) {
+// client stops, handling list refreshes in between, and reports whether
+// the connection lived stableAfter, which ends the run of failures. A
+// stable connection re-arms the stdio exit WARN and, while flapping,
+// logs that it is stable again, because its connect was logged only at
+// Debug. The timer does that at stableAfter, before the process can
+// exit. A refresh runs inline and can outlast stableAfter, though, and
+// when the connection then ends, the fired timer and the end are both
+// ready and the select picks one at random. So how long the connection
+// lived decides, and serve applies a fired timer's effects before it
+// returns.
+func (c *serverClient) serve(conn *clientConn, flapping bool) (serveEnd, bool) {
+	readyAt := time.Now()
 	timer := time.NewTimer(c.cfg.stableAfter)
 	defer timer.Stop()
+	stable := false
+	markStable := func() {
+		if stable {
+			return
+		}
+		stable = true
+		c.exitWarned.Store(false)
+		if flapping {
+			c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
+		}
+	}
+	end := c.await(conn, timer.C, markStable)
+	select {
+	case <-timer.C:
+		markStable()
+	default:
+	}
+	if time.Since(readyAt) >= c.cfg.stableAfter {
+		markStable()
+	}
+	switch end {
+	case serveLost:
+		c.setDisconnected(fmt.Errorf("%w: the server connection closed", errConnectionLost))
+		c.closeConn(conn)
+	case serveReconnect:
+		c.logger.Info("mcp: server session expired; reconnecting")
+		c.retireConn(conn)
+	}
+	return end, stable
+}
+
+// await is serve's loop: it returns how the connection ended, and calls
+// markStable when the stable timer fires.
+func (c *serverClient) await(conn *clientConn, stableTimer <-chan time.Time, markStable func()) serveEnd {
 	for {
 		select {
 		case <-c.lifeCtx.Done():
-			return serveStop, stable
+			return serveStop
 		case <-conn.tr.Done():
 			if c.lifeCtx.Err() != nil {
-				return serveStop, stable
+				return serveStop
 			}
-			c.setDisconnected(fmt.Errorf("%w: the server connection closed", errConnectionLost))
-			c.closeConn(conn)
-			return serveLost, stable
+			return serveLost
 		case <-c.reconnectCh:
-			if !c.takeReconnect(conn) {
-				continue
+			if c.takeReconnect(conn) {
+				return serveReconnect
 			}
-			c.logger.Info("mcp: server session expired; reconnecting")
-			c.retireConn(conn)
-			return serveReconnect, stable
 		case <-c.refreshCh:
 			if c.refresh(conn) {
-				c.logger.Info("mcp: server session expired; reconnecting")
-				c.retireConn(conn)
-				return serveReconnect, stable
+				return serveReconnect
 			}
 		case <-c.notifyCh:
 			c.fireToolsChanged()
-		case <-timer.C:
-			stable = true
-			c.exitWarned.Store(false)
-			if flapping {
-				c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
-			}
+		case <-stableTimer:
+			markStable()
 		}
 	}
 }
@@ -431,40 +460,4 @@ func (c *serverClient) refresh(conn *clientConn) bool {
 		}
 	}
 	return false
-}
-
-// probe is the connwatch health check. Not ready: returns the
-// last connect error (wrapping errNotReady) with no I/O. Ready: legacy →
-// ping, modern → server/discover; any JSON-RPC response (result or
-// error) counts as healthy. Failures are reported, never acted on,
-// except errSessionExpired, which triggers an immediate re-initialize.
-func (c *serverClient) probe(ctx context.Context) error {
-	conn, err := c.readyConn()
-	if err != nil {
-		return err
-	}
-	method := methodPing
-	if conn.currentEra() == eraModern {
-		method = methodDiscover
-	}
-	if _, err := conn.call(ctx, method, nil, conn.frame(false)); err != nil {
-		if errors.Is(err, errSessionExpired) {
-			c.requestReconnect(conn)
-		}
-		return fmt.Errorf("health check (%s): %w", method, err)
-	}
-	return nil
-}
-
-// tools returns the last good list in server order (deduped by name,
-// first wins; on HTTP, tools with invalid x-mcp-header annotations are
-// already dropped). nil until the first successful listing; kept while
-// disconnected. No I/O. The slice is shared and must not be mutated.
-func (c *serverClient) tools() []toolDefinition {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.tl == nil {
-		return nil
-	}
-	return c.tl.defs
 }
