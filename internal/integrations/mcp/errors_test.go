@@ -147,7 +147,7 @@ func TestErrors_ModelFacingCallError(t *testing.T) {
 				&RPCError{Code: codeInvalidParams, Message: declineElicitation}),
 			text: textInputRequired,
 		},
-		{name: "missing client capability", err: fmt.Errorf("mcp: tools/call x: %w", rpcCapability), text: textInputRequired},
+		{name: "missing client capability", err: fmt.Errorf("tools/call x: %w", rpcCapability), text: textInputRequired},
 		{name: "400 carrying missing client capability", err: &httpStatusError{Status: 400, RPC: rpcCapability}, text: textInputRequired},
 		{name: "401", err: &httpStatusError{Status: 401, WWWAuthenticate: `Bearer error="invalid_token"`}, text: textAuth},
 		{name: "403 with rpc invalid params", err: &httpStatusError{Status: 403, RPC: rpcInvalid}, text: textAuth},

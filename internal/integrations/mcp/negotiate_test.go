@@ -276,7 +276,7 @@ func TestNegotiate_InitializeOutcomes(t *testing.T) {
 		{name: "the re-offer is bounded to once", routes: initWith(rpc(codeInvalidParams, `{"supported":["2024-11-05"]}`)),
 			wantErrIs: errIncompatible, wantCalls: []string{methodDiscover, methodInitialize, methodInitialize}},
 		{name: "initialize error without versions fails", routes: initWith(rpc(-32603, "")),
-			wantErrHas: "initialize rejected", wantCalls: []string{methodDiscover, methodInitialize}},
+			wantErrHas: "initialize: rejected: jsonrpc error", wantCalls: []string{methodDiscover, methodInitialize}},
 		{name: "initialize timeout fails the attempt", routes: initWith(clientTHang), attempt: 300 * time.Millisecond,
 			wantErrIs: context.DeadlineExceeded, wantCalls: []string{methodDiscover, methodInitialize}},
 	}

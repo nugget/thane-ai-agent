@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -232,7 +233,7 @@ func (r *refInliner) expandRef(node map[string]any, ref string, stack []string) 
 	}
 	var replacement map[string]any
 	switch {
-	case containsString(stack, ref):
+	case slices.Contains(stack, ref):
 		r.cyclic = true
 	case len(stack) > maxRefDepth:
 		r.tooDeep = true
@@ -348,15 +349,6 @@ func containsRef(v any, depth int) bool {
 			if containsRef(el, depth+1) {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
 		}
 	}
 	return false

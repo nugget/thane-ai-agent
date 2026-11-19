@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -690,5 +693,74 @@ func TestClient_RefreshFailureLogsHTTPDetails(t *testing.T) {
 		if strings.Contains(line, warn) && (!strings.Contains(line, "http_status=401") || !strings.Contains(line, "BODY-MARKER")) {
 			t.Errorf("refresh WARN lacks the HTTP details: %q", line)
 		}
+	}
+}
+
+// TestClient_ConnectErrorTextIsNotRepetitive checks the text of a failed
+// connect as the operator reads it in the logs: the class layers say
+// "mcp:" at most twice (not connected, plus the cause's own class) and
+// the failing method is named once, while errors.Is still finds every
+// class in the chain.
+func TestClient_ConnectErrorTextIsNotRepetitive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedURL := "http://" + ln.Addr().String() + "/mcp"
+	_ = ln.Close()
+	notAcceptable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotAcceptable)
+	}))
+	t.Cleanup(notAcceptable.Close)
+
+	tests := []struct {
+		name   string
+		srv    ServerConfig
+		wantIs []error
+	}{
+		{
+			name:   "http connection refused",
+			srv:    ServerConfig{Name: "refused", Transport: transportHTTP, URL: closedURL},
+			wantIs: []error{errNotReady, errUnreachable},
+		},
+		{
+			name:   "http status 406",
+			srv:    ServerConfig{Name: "406", Transport: transportHTTP, URL: notAcceptable.URL + "/mcp"},
+			wantIs: []error{errNotReady},
+		},
+		{
+			name:   "stdio server exits at once",
+			srv:    ServerConfig{Name: "exits", Transport: transportStdio, Command: "/bin/sh", Args: []string{"-c", "exit 1"}},
+			wantIs: []error{errNotReady},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := coreTLogger(t)
+			m := NewManager(nil, logger)
+			cfg := e2eTConfig(tt.srv.Transport, protocolAuto)
+			cfg.backoffMin, cfg.backoffMax = time.Minute, time.Minute
+			c := e2eTNew(t, cfg, m.factoryFor(tt.srv, logger))
+			e2eTStart(t, c)
+			_, err := c.readyConn()
+			if err == nil {
+				t.Fatal("readyConn succeeded against a broken server")
+			}
+			for _, target := range tt.wantIs {
+				if !errors.Is(err, target) {
+					t.Errorf("errors.Is(err, %v) = false; err = %v", target, err)
+				}
+			}
+			text := err.Error()
+			if n := strings.Count(text, "mcp:"); n > 2 {
+				t.Errorf("%q says mcp: %d times, want at most 2", text, n)
+			}
+			if n := strings.Count(text, methodDiscover) + strings.Count(text, methodInitialize); n != 1 {
+				t.Errorf("%q names the negotiation method %d times, want once", text, n)
+			}
+			if perr := c.probe(t.Context()); perr == nil || perr.Error() != text {
+				t.Errorf("probe error = %v, want the connect error %q", perr, text)
+			}
+		})
 	}
 }

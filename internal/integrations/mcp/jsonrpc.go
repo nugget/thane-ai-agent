@@ -132,7 +132,7 @@ func (m *wireMessage) response() *Response {
 
 // errNotJSONRPC reports a payload that is neither a JSON object nor a
 // non-empty JSON array.
-var errNotJSONRPC = errors.New("mcp: payload is not a JSON-RPC object or batch")
+var errNotJSONRPC = errors.New("payload is not a JSON-RPC object or batch")
 
 // decodeMessages parses one JSON-RPC object or a non-empty batch array,
 // which 2025-03-26 servers may send on stdio and SSE. Leading/trailing
@@ -152,13 +152,13 @@ func decodeMessages(b []byte) ([]wireMessage, error) {
 	case '{':
 		var m wireMessage
 		if err := json.Unmarshal(b, &m); err != nil {
-			return nil, fmt.Errorf("mcp: decode message: %w", err)
+			return nil, fmt.Errorf("decode message: %w", err)
 		}
 		return []wireMessage{m}, nil
 	case '[':
 		var raws []json.RawMessage
 		if err := json.Unmarshal(b, &raws); err != nil {
-			return nil, fmt.Errorf("mcp: decode batch: %w", err)
+			return nil, fmt.Errorf("decode batch: %w", err)
 		}
 		if len(raws) == 0 {
 			return nil, fmt.Errorf("%w: empty batch", errNotJSONRPC)

@@ -69,80 +69,6 @@ func (b *coreTLogBuffer) logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(b, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// coreTTransport is a minimal in-memory Transport proving the interface
-// and factory shapes compile together.
-type coreTTransport struct {
-	once sync.Once
-	done chan struct{}
-	last callInfo
-}
-
-var _ Transport = (*coreTTransport)(nil)
-
-func (c *coreTTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
-	c.last = info
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return &Response{JSONRPC: jsonrpcVersion, ID: intID(1), Result: json.RawMessage(`{}`)}, nil
-}
-
-func (c *coreTTransport) Notify(ctx context.Context, n *Notification, info callInfo) error {
-	c.last = info
-	return ctx.Err()
-}
-
-func (c *coreTTransport) Close(context.Context) error {
-	c.once.Do(func() { close(c.done) })
-	return nil
-}
-
-func (c *coreTTransport) Done() <-chan struct{} { return c.done }
-
-func TestTransport_FactoryShape(t *testing.T) {
-	var factory transportFactory = func(ctx context.Context, hooks transportHooks) (Transport, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return &coreTTransport{done: make(chan struct{})}, nil
-	}
-	tr, err := factory(t.Context(), transportHooks{})
-	if err != nil {
-		t.Fatalf("factory: %v", err)
-	}
-	info := callInfo{
-		protocolVersion: modernProtocolVersion,
-		modern:          true,
-		name:            "get_weather",
-		paramHeaders:    map[string]string{"Region": "us-west1"},
-		cancellable:     true,
-	}
-	if _, err := tr.Call(t.Context(), &Request{Method: methodToolsCall}, info); err != nil {
-		t.Fatalf("Call: %v", err)
-	}
-	ct, ok := tr.(*coreTTransport)
-	if !ok {
-		t.Fatalf("factory returned %T", tr)
-	}
-	if ct.last.name != "get_weather" || !ct.last.modern || !ct.last.cancellable ||
-		ct.last.protocolVersion != modernProtocolVersion || ct.last.paramHeaders["Region"] != "us-west1" {
-		t.Errorf("callInfo not passed through: %+v", ct.last)
-	}
-	if err := tr.Notify(t.Context(), &Notification{Method: methodInitialized}, callInfo{}); err != nil {
-		t.Fatalf("Notify: %v", err)
-	}
-	for range 2 {
-		if err := tr.Close(t.Context()); err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-	}
-	select {
-	case <-tr.Done():
-	default:
-		t.Error("Done not closed after Close")
-	}
-}
-
 func TestTransport_CancelledNotification(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -389,7 +315,14 @@ func TestTransport_DispatchInboundIsBounded(t *testing.T) {
 // coreTEventually polls cond for up to 10s.
 func coreTEventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	coreTWaitFor(t, 10*time.Second, what, cond)
+}
+
+// coreTWaitFor polls cond until it holds, failing the test once timeout
+// passes. Every package-level eventually helper delegates here.
+func coreTWaitFor(t testing.TB, timeout time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)

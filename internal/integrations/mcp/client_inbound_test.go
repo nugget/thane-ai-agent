@@ -253,7 +253,7 @@ func TestClient_WarnOnceIsBounded(t *testing.T) {
 			warns++
 		}
 	}
-	if warns != maxWarnKeys || len(c.warned) != maxWarnKeys {
-		t.Errorf("WARN lines = %d, keys = %d; want %d", warns, len(c.warned), maxWarnKeys)
+	if warns != maxWarnKeys || len(c.warnings.seen) != maxWarnKeys {
+		t.Errorf("WARN lines = %d, keys = %d; want %d", warns, len(c.warnings.seen), maxWarnKeys)
 	}
 }

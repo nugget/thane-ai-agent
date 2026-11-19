@@ -489,13 +489,7 @@ func clientTStart(t *testing.T, c *serverClient) {
 // clientTEventually polls cond until it holds or 5s pass.
 func clientTEventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	coreTWaitFor(t, 5*time.Second, what, cond)
 }
 
 // clientTReadyConn waits until c is ready and returns the connection.

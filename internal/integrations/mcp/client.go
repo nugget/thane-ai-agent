@@ -63,18 +63,13 @@ type clientConfig struct {
 
 // withDefaults returns cfg with every zero value replaced by its default.
 func (cfg clientConfig) withDefaults() clientConfig {
-	fill := func(d *time.Duration, def time.Duration) {
-		if *d <= 0 {
-			*d = def
-		}
-	}
-	fill(&cfg.connectTimeout, defaultConnectTimeout)
-	fill(&cfg.callTimeout, defaultCallTimeout)
-	fill(&cfg.probeTimeout, defaultProbeTimeout)
-	fill(&cfg.backoffMin, defaultBackoffMin)
-	fill(&cfg.backoffMax, defaultBackoffMax)
-	fill(&cfg.listRefreshFloor, defaultListRefreshFloor)
-	fill(&cfg.stableAfter, defaultStableAfter)
+	cfg.connectTimeout = durationOr(cfg.connectTimeout, defaultConnectTimeout)
+	cfg.callTimeout = durationOr(cfg.callTimeout, defaultCallTimeout)
+	cfg.probeTimeout = durationOr(cfg.probeTimeout, defaultProbeTimeout)
+	cfg.backoffMin = durationOr(cfg.backoffMin, defaultBackoffMin)
+	cfg.backoffMax = durationOr(cfg.backoffMax, defaultBackoffMax)
+	cfg.listRefreshFloor = durationOr(cfg.listRefreshFloor, defaultListRefreshFloor)
+	cfg.stableAfter = durationOr(cfg.stableAfter, defaultStableAfter)
 	if cfg.backoffMax < cfg.backoffMin {
 		cfg.backoffMax = cfg.backoffMin
 	}
@@ -82,6 +77,15 @@ func (cfg clientConfig) withDefaults() clientConfig {
 		cfg.logger = slog.Default()
 	}
 	return cfg
+}
+
+// durationOr returns d, or def when d is not positive: an unset or
+// negative duration setting means "use the default".
+func durationOr(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
 // toolResult is a rendered complete tools/call result. IsError=true is a
@@ -143,8 +147,7 @@ type serverClient struct {
 
 	notifiedGen uint64 // supervisor goroutine only
 
-	warnMu sync.Mutex
-	warned map[string]struct{}
+	warnings logDeduper // warnOnce
 }
 
 // clientConn is one negotiated connection: a transport plus what the
@@ -192,7 +195,7 @@ func newServerClient(ctx context.Context, cfg clientConfig, f transportFactory) 
 		debounce:    refreshDebounce,
 		jitter:      jitterDuration,
 		stateCh:     make(chan struct{}),
-		warned:      make(map[string]struct{}),
+		warnings:    logDeduper{max: maxWarnKeys},
 	}
 }
 
@@ -332,7 +335,7 @@ func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
 	set, err := c.fetchTools(ctx, conn)
 	if err != nil {
 		c.closeConn(conn)
-		return nil, nil, fmt.Errorf("mcp: %s: %w", methodToolsList, err)
+		return nil, nil, fmt.Errorf("%s: %w", methodToolsList, err)
 	}
 	return conn, set, nil
 }
@@ -437,7 +440,7 @@ func (c *serverClient) probe(ctx context.Context) error {
 		if errors.Is(err, errSessionExpired) {
 			c.requestReconnect(conn)
 		}
-		return fmt.Errorf("mcp: health check (%s): %w", method, err)
+		return fmt.Errorf("health check (%s): %w", method, err)
 	}
 	return nil
 }

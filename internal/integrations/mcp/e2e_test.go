@@ -63,13 +63,7 @@ func e2eTStart(t *testing.T, c *serverClient) {
 // e2eTEventually polls cond until it holds or e2eTWait passes.
 func e2eTEventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(e2eTWait)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	coreTWaitFor(t, e2eTWait, what, cond)
 }
 
 // e2eTReady waits until c is ready and returns its connection.

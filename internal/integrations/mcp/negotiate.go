@@ -53,7 +53,7 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 			resp, err := c.sendDiscover(ctx, conn, step.version)
 			if ctx.Err() != nil {
 				// The whole attempt ran out, not just the probe.
-				return conn, fmt.Errorf("mcp: %s: %w", methodDiscover, ctx.Err())
+				return conn, fmt.Errorf("%s: %w", methodDiscover, ctx.Err())
 			}
 			v, cause = classifyDiscover(c.cfg.transport, resp, err), err
 		} else {
@@ -78,7 +78,7 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 			conn.adoptLegacy(v)
 			n := &Notification{JSONRPC: jsonrpcVersion, Method: methodInitialized}
 			if err := conn.tr.Notify(ctx, n, conn.frame(false)); err != nil {
-				return conn, fmt.Errorf("mcp: send %s: %w", methodInitialized, err)
+				return conn, fmt.Errorf("send %s: %w", methodInitialized, err)
 			}
 			c.rememberEra(eraLegacy)
 			return conn, nil
@@ -109,7 +109,7 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 
 		case verdictRespawn:
 			if mode == protocolModern || respawned {
-				return conn, fmt.Errorf("mcp: %s: %w", methodDiscover, cause)
+				return conn, fmt.Errorf("%s: %w", methodDiscover, cause)
 			}
 			respawned = true
 			c.logger.Debug("mcp: server exited during the era probe; restarting it for the legacy handshake",
@@ -128,7 +128,7 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 			if v.thaneBug {
 				c.logThaneBug(step.method, ferr)
 			}
-			return conn, fmt.Errorf("mcp: %s: %w", step.method, ferr)
+			return conn, fmt.Errorf("%s: %w", step.method, ferr)
 		}
 	}
 	return conn, fmt.Errorf("%w: negotiation did not settle", errProtocol)
@@ -152,7 +152,7 @@ func (c *serverClient) dial(ctx context.Context) (*clientConn, error) {
 	conn := &clientConn{}
 	tr, err := c.factory(ctx, c.hooksFor(conn))
 	if err != nil {
-		return nil, fmt.Errorf("mcp: connect: %w", err)
+		return nil, fmt.Errorf("connect: %w", err)
 	}
 	if tr == nil {
 		return nil, fmt.Errorf("%w: the transport factory returned no transport", errUnreachable)

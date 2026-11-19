@@ -26,7 +26,7 @@ func TestErrors_HTTPStatusLogArgs(t *testing.T) {
 	if args := httpStatusLogArgs(errors.New("no status")); args != nil {
 		t.Errorf("args without a status error = %v, want nil", args)
 	}
-	args := httpStatusLogArgs(fmt.Errorf("mcp: server/discover: %w", clientTAuthRefusal()))
+	args := httpStatusLogArgs(fmt.Errorf("server/discover: %w", clientTAuthRefusal()))
 	want := []any{
 		"http_status", 401,
 		"www_authenticate", `Bearer error="invalid_token", error_description="token expired"`,

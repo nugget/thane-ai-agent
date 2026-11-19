@@ -140,7 +140,7 @@ func TestHTTP_RetireLetsInflightFinish(t *testing.T) {
 		tr.retire(t.Context())
 		close(retired)
 	}()
-	httpTEventually(t, func() bool { return tr.closedErr(methodPing) != nil })
+	httpTEventually(t, func() bool { return tr.closedErr() != nil })
 	if _, err := tr.Call(t.Context(), &Request{Method: methodPing}, callInfo{}); !errors.Is(err, errUnreachable) {
 		t.Errorf("Call while retiring = %v, want errUnreachable", err)
 	}

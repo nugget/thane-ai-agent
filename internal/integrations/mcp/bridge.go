@@ -87,8 +87,8 @@ type bridgedTool struct {
 
 // serverBridge turns one server's tool list into Thane tools. Its
 // methods run under the Manager lock (or on Start's goroutine before
-// any rebuild can run), so the log-dedupe state needs only its own
-// small lock for safety.
+// any rebuild can run), so the log state needs only its own small
+// locks for safety.
 type serverBridge struct {
 	server    string
 	include   map[string]bool
@@ -98,8 +98,9 @@ type serverBridge struct {
 	client    *serverClient
 	logger    *slog.Logger
 
+	logged logDeduper // logOnce
+
 	mu          sync.Mutex
-	logged      map[string]struct{}
 	lastUnknown string // the unknown-key set last warned about
 }
 
@@ -112,7 +113,7 @@ func newServerBridge(cfg ServerConfig, client *serverClient, logger *slog.Logger
 		tags:      cleanTags(cfg.Tags),
 		client:    client,
 		logger:    logger,
-		logged:    make(map[string]struct{}),
+		logged:    logDeduper{max: maxLoggedKeys},
 	}
 }
 
@@ -122,22 +123,7 @@ const maxLoggedKeys = 1024
 
 // logOnce logs at level the first time key is seen, at Debug after.
 func (b *serverBridge) logOnce(level slog.Level, key, msg string, args ...any) {
-	b.mu.Lock()
-	_, seen := b.logged[key]
-	if !seen && len(b.logged) < maxLoggedKeys {
-		b.logged[key] = struct{}{}
-	} else {
-		seen = true
-	}
-	b.mu.Unlock()
-	switch {
-	case seen:
-		b.logger.Debug(msg, args...)
-	case level >= slog.LevelWarn:
-		b.logger.Warn(msg, args...)
-	default:
-		b.logger.Info(msg, args...)
-	}
+	b.logged.log(b.logger, level, key, msg, args...)
 }
 
 // included applies the operator filters: an override's enabled flag

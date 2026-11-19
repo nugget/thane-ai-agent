@@ -208,11 +208,11 @@ func httpVisibleASCII(v string) bool {
 // first, notifications/cancelled is POSTed before returning; modern
 // calls cancel only by aborting the POST.
 func (t *httpTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
-	if err := t.closedErr(req.Method); err != nil {
+	if err := t.closedErr(); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("mcp: http %s: %w", req.Method, err)
+		return nil, fmt.Errorf("http: %w", err)
 	}
 	out := *req
 	out.JSONRPC = jsonrpcVersion
@@ -220,7 +220,7 @@ func (t *httpTransport) Call(ctx context.Context, req *Request, info callInfo) (
 	out.ID = intID(id)
 	body, err := json.Marshal(&out)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal %s: %w", errProtocol, req.Method, err)
+		return nil, fmt.Errorf("%w: http: marshal request: %w", errProtocol, err)
 	}
 	isInit := req.Method == methodInitialize
 	t.latch(info.protocolVersion, isInit)
@@ -234,16 +234,16 @@ func (t *httpTransport) Call(ctx context.Context, req *Request, info callInfo) (
 // Notify POSTs n; any 2xx (202 expected) is success.
 func (t *httpTransport) Notify(ctx context.Context, n *Notification, info callInfo) error {
 	if t.isClosing() {
-		return fmt.Errorf("%w: http %s: transport closed", errUnreachable, n.Method)
+		return fmt.Errorf("%w: http: transport closed", errUnreachable)
 	}
 	out := *n
 	out.JSONRPC = jsonrpcVersion
 	body, err := json.Marshal(&out)
 	if err != nil {
-		return fmt.Errorf("%w: marshal %s: %w", errProtocol, n.Method, err)
+		return fmt.Errorf("%w: http: marshal notification: %w", errProtocol, err)
 	}
 	t.latch(info.protocolVersion, false)
-	return t.send(ctx, n.Method, body, t.frame(n.Method, info, false))
+	return t.send(ctx, body, t.frame(n.Method, info, false))
 }
 
 // Close ends the transport: in-flight POSTs are aborted (retire first
@@ -295,11 +295,11 @@ func (t *httpTransport) retire(ctx context.Context) {
 
 // begin admits one exchange, or refuses it once the transport is
 // retiring or closed. An admitted exchange must call t.inflight.Done.
-func (t *httpTransport) begin(what string) error {
+func (t *httpTransport) begin() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.retiring || t.closing {
-		return t.closedErrLocked(what)
+		return t.closedErrLocked()
 	}
 	t.inflight.Add(1)
 	return nil
@@ -313,23 +313,23 @@ func (t *httpTransport) isClosing() bool {
 
 // closedErr is the error for a request on a retiring or closed
 // transport, or nil while it is open.
-func (t *httpTransport) closedErr(what string) error {
+func (t *httpTransport) closedErr() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.retiring && !t.closing {
 		return nil
 	}
-	return t.closedErrLocked(what)
+	return t.closedErrLocked()
 }
 
 // closedErrLocked: a request refused because its session expired was
 // never processed, so it reports errSessionExpired and the client
 // retries it on the replacement connection. t.mu must be held.
-func (t *httpTransport) closedErrLocked(what string) error {
+func (t *httpTransport) closedErrLocked() error {
 	if t.expired {
-		return fmt.Errorf("%w: http %s: session expired", errSessionExpired, what)
+		return fmt.Errorf("%w: http: session expired", errSessionExpired)
 	}
-	return fmt.Errorf("%w: http %s: transport closed", errUnreachable, what)
+	return fmt.Errorf("%w: http: transport closed", errUnreachable)
 }
 
 // latch records the protocol version for transport-originated POSTs
@@ -436,7 +436,7 @@ func (t *httpTransport) sendCancel(callCtx context.Context, id json.RawMessage, 
 	n := cancelledNotification(id, reason)
 	body, err := json.Marshal(n)
 	if err == nil {
-		err = t.send(ctx, n.Method, body, httpFrame{version: info.protocolVersion, session: true})
+		err = t.send(ctx, body, httpFrame{version: info.protocolVersion, session: true})
 	}
 	if err != nil {
 		t.logger.Debug("mcp: sending notifications/cancelled failed", "error", err)
@@ -453,7 +453,7 @@ func (t *httpTransport) replier(rf httpFrame) func(ctx context.Context, resp *Re
 		if err != nil {
 			return fmt.Errorf("%w: marshal reply: %w", errProtocol, err)
 		}
-		return t.send(ctx, "reply", body, rf)
+		return t.send(ctx, body, rf)
 	}
 }
 

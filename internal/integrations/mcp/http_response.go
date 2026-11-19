@@ -19,7 +19,7 @@ import (
 // the transport closes, or once the matching response has arrived. It
 // counts as in flight for retire until it returns.
 func (t *httpTransport) exchange(ctx context.Context, method string, body []byte, f httpFrame, id int64, isInit bool) (*Response, error) {
-	if err := t.begin(method); err != nil {
+	if err := t.begin(); err != nil {
 		return nil, err
 	}
 	defer t.inflight.Done()
@@ -35,9 +35,9 @@ func (t *httpTransport) exchange(ctx context.Context, method string, body []byte
 	hresp, err := t.client.Do(hreq)
 	if err != nil {
 		t.logRefusedRedirect(hresp, err)
-		return nil, httpRoundTripError(ctx, t.lifeDone(), method, err)
+		return nil, httpRoundTripError(ctx, t.lifeDone(), err)
 	}
-	if !httpSuccess(hresp.StatusCode) {
+	if classifyStatus(hresp.StatusCode) != statusSuccess {
 		return nil, t.statusError(hresp, sentSession)
 	}
 	if isInit {
@@ -45,7 +45,7 @@ func (t *httpTransport) exchange(ctx context.Context, method string, body []byte
 	}
 	if hresp.StatusCode == http.StatusAccepted || hresp.StatusCode == http.StatusNoContent {
 		httpDrain(hresp)
-		return nil, fmt.Errorf("%w: http %s: the server answered a request with status %d and no response", errProtocol, method, hresp.StatusCode)
+		return nil, fmt.Errorf("%w: http: the server answered a request with status %d and no response", errProtocol, hresp.StatusCode)
 	}
 	// Replies to server requests on this response are framed like the
 	// POST itself; on a legacy session they carry the session id (for
@@ -58,16 +58,16 @@ func (t *httpTransport) exchange(ctx context.Context, method string, body []byte
 		return t.readSSE(ctx, hresp, cancel, method, id, rf)
 	default:
 		httpDrain(hresp)
-		return nil, fmt.Errorf("%w: http %s: unexpected response content type %q", errProtocol, method, truncateUTF8(ct, 64))
+		return nil, fmt.Errorf("%w: http: unexpected response content type %q", errProtocol, truncateUTF8(ct, 64))
 	}
 }
 
 // send POSTs a notification, cancellation or reply. Any 2xx is
 // success; the body is drained (JSON or empty) or the stream aborted
 // (SSE). Errors follow the same classes as Call.
-func (t *httpTransport) send(ctx context.Context, what string, body []byte, f httpFrame) error {
+func (t *httpTransport) send(ctx context.Context, body []byte, f httpFrame) error {
 	if t.isClosing() {
-		return fmt.Errorf("%w: http %s: transport closed", errUnreachable, what)
+		return fmt.Errorf("%w: http: transport closed", errUnreachable)
 	}
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -81,9 +81,9 @@ func (t *httpTransport) send(ctx context.Context, what string, body []byte, f ht
 	hresp, err := t.client.Do(hreq)
 	if err != nil {
 		t.logRefusedRedirect(hresp, err)
-		return httpRoundTripError(ctx, t.lifeDone(), what, err)
+		return httpRoundTripError(ctx, t.lifeDone(), err)
 	}
-	if !httpSuccess(hresp.StatusCode) {
+	if classifyStatus(hresp.StatusCode) != statusSuccess {
 		return t.statusError(hresp, sentSession)
 	}
 	if httpMediaType(hresp.Header.Get(httpHeaderContentType)) == httpContentSSE {
@@ -102,17 +102,17 @@ func (t *httpTransport) readJSON(ctx context.Context, hresp *http.Response, meth
 	defer httpDrain(hresp)
 	b, err := io.ReadAll(io.LimitReader(hresp.Body, int64(t.maxMessage)+1))
 	if err != nil {
-		return nil, httpRoundTripError(ctx, t.lifeDone(), method, err)
+		return nil, httpRoundTripError(ctx, t.lifeDone(), err)
 	}
 	if len(b) > t.maxMessage {
-		return nil, fmt.Errorf("%w: http %s: response body exceeds %d bytes", errProtocol, method, t.maxMessage)
+		return nil, fmt.Errorf("%w: http: response body exceeds %d bytes", errProtocol, t.maxMessage)
 	}
 	msgs, err := decodeMessages(b)
 	if err != nil {
-		return nil, fmt.Errorf("%w: http %s: malformed JSON response: %w", errProtocol, method, err)
+		return nil, fmt.Errorf("%w: http: malformed JSON response: %w", errProtocol, err)
 	}
 	if t.hooks.inbound.batchTooLong(len(msgs), t.logger, "method", method) {
-		return nil, httpBatchError(method, len(msgs))
+		return nil, httpBatchError(len(msgs))
 	}
 	responses := 0
 	for i := range msgs {
@@ -134,7 +134,7 @@ func (t *httpTransport) readJSON(ctx context.Context, hresp *http.Response, meth
 		t.logger.Debug("mcp: dropping unmatched response", "method", method)
 	}
 	if match == nil {
-		return nil, fmt.Errorf("%w: http %s: the response body carried no response to the request", errProtocol, method)
+		return nil, fmt.Errorf("%w: http: the response body carried no response to the request", errProtocol)
 	}
 	return match, nil
 }
@@ -158,12 +158,12 @@ func (t *httpTransport) readSSE(ctx context.Context, hresp *http.Response, cance
 		ev, err := r.next()
 		if err != nil {
 			if errors.Is(err, errProtocol) {
-				return nil, fmt.Errorf("mcp: http %s: %w", method, err)
+				return nil, fmt.Errorf("http: %w", err)
 			}
 			if errors.Is(err, io.EOF) && ctx.Err() == nil && !t.lifeDone() {
-				return nil, fmt.Errorf("%w: http %s: the response stream ended before the response", errConnectionLost, method)
+				return nil, fmt.Errorf("%w: http: the response stream ended before the response", errConnectionLost)
 			}
-			return nil, httpRoundTripError(ctx, t.lifeDone(), method, err)
+			return nil, httpRoundTripError(ctx, t.lifeDone(), err)
 		}
 		if ev.event != sseDefaultEvent {
 			t.logger.Debug("mcp: ignoring SSE event", "event", truncateUTF8(ev.event, 64))
@@ -174,10 +174,10 @@ func (t *httpTransport) readSSE(ctx context.Context, hresp *http.Response, cance
 		}
 		msgs, err := decodeMessages(ev.data)
 		if err != nil {
-			return nil, fmt.Errorf("%w: http %s: malformed SSE message: %w", errProtocol, method, err)
+			return nil, fmt.Errorf("%w: http: malformed SSE message: %w", errProtocol, err)
 		}
 		if t.hooks.inbound.batchTooLong(len(msgs), t.logger, "method", method) {
-			return nil, httpBatchError(method, len(msgs))
+			return nil, httpBatchError(len(msgs))
 		}
 		if match := t.matchSSE(msgs, method, id, rf); match != nil {
 			httpSSETail(hresp.Body, cancel)
@@ -236,8 +236,8 @@ func (t *httpTransport) dispatch(m *wireMessage, rf httpFrame) {
 // httpBatchError fails a request whose JSON body or SSE event was a
 // batch over maxInboundBatch. Like a malformed body, it fails only that
 // request.
-func httpBatchError(method string, n int) error {
-	return fmt.Errorf("%w: http %s: the server sent a batch of %d messages (limit %d)", errProtocol, method, n, maxInboundBatch)
+func httpBatchError(n int) error {
+	return fmt.Errorf("%w: http: the server sent a batch of %d messages (limit %d)", errProtocol, n, maxInboundBatch)
 }
 
 // httpAnswers reports whether m answers request id: its id is that
@@ -341,8 +341,6 @@ func (t *httpTransport) lifeDone() bool { return t.lifeCtx.Err() != nil }
 func httpDrain(hresp *http.Response) {
 	httpkit.DrainAndClose(hresp.Body, httpDrainLimit)
 }
-
-func httpSuccess(code int) bool { return code >= 200 && code <= 299 }
 
 // httpMediaType returns the lower-cased media type of a Content-Type
 // value without parameters.

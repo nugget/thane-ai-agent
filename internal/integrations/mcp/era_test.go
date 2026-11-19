@@ -253,13 +253,13 @@ func TestProtocol_ClassifyInitialize(t *testing.T) {
 		{name: "spec example -32602", resp: coreTErrResp(codeInvalidParams, `{"supported":["2024-11-05"],"requested":"1.0.0"}`), step: verdictInitialize, version: "2024-11-05"},
 		{name: "other code naming several", resp: coreTErrResp(-32000, `{"supported":["2025-03-26","2025-06-18"]}`), step: verdictInitialize, version: "2025-06-18"},
 		{name: "non -32022 naming only modern", resp: coreTErrResp(codeInvalidParams, `{"supported":["2026-07-28"]}`), step: verdictFail, errIs: errIncompatible},
-		{name: "plain invalid params", resp: coreTErrResp(codeInvalidParams, ""), step: verdictFail, errHas: "initialize rejected"},
-		{name: "internal error", resp: coreTErrResp(-32603, `{"detail":"x"}`), step: verdictFail, errHas: "initialize rejected"},
+		{name: "plain invalid params", resp: coreTErrResp(codeInvalidParams, ""), step: verdictFail, errHas: "rejected: jsonrpc error"},
+		{name: "internal error", resp: coreTErrResp(-32603, `{"detail":"x"}`), step: verdictFail, errHas: "rejected: jsonrpc error"},
 
 		// HTTP.
 		{name: "400 unsupported names modern", err: coreTStatus(400, coreTRPC(codeUnsupportedProtocolVersion, `{"supported":["2026-07-28"]}`)), step: verdictDiscover, version: modernProtocolVersion},
 		{name: "400 naming handshake", err: coreTStatus(400, coreTRPC(codeInvalidParams, `{"supported":["2025-03-26"]}`)), step: verdictInitialize, version: "2025-03-26"},
-		{name: "400 json-rpc error", err: coreTStatus(400, coreTRPC(-32000, "")), step: verdictFail, errHas: "initialize rejected"},
+		{name: "400 json-rpc error", err: coreTStatus(400, coreTRPC(-32000, "")), step: verdictFail, errHas: "rejected: jsonrpc error"},
 		{name: "400 non-JSON hints at HTTP+SSE", err: coreTStatus(400, nil), step: verdictFail, errHas: "HTTP+SSE"},
 		{name: "404 non-JSON hints at HTTP+SSE", err: coreTStatus(404, nil), step: verdictFail, errHas: "HTTP+SSE"},
 		{name: "405 non-JSON hints at HTTP+SSE", err: coreTStatus(405, nil), step: verdictFail, errHas: "HTTP+SSE"},

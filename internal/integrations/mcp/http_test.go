@@ -518,13 +518,7 @@ func TestHTTP_CloseAbortsInflightAndRefusesNewWork(t *testing.T) {
 // httpTEventually polls cond until it holds or the test bound passes.
 func httpTEventually(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(httpTWait)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition not met in time")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	coreTWaitFor(t, httpTWait, "the condition", cond)
 }
 
 func TestHTTP_NewTransportRejectsBadURL(t *testing.T) {

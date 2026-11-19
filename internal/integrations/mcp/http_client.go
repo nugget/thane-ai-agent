@@ -117,22 +117,22 @@ func httpEffectivePort(u *url.URL) string {
 //     request was not delivered);
 //   - anything else (reset, EOF, broken stream): errConnectionLost
 //     (outcome unknown).
-func httpRoundTripError(ctx context.Context, lifeDone bool, method string, err error) error {
+func httpRoundTripError(ctx context.Context, lifeDone bool, err error) error {
 	err = httpRedact(err)
 	switch {
 	case ctx.Err() != nil:
-		return fmt.Errorf("mcp: http %s: %w", method, ctx.Err())
+		return fmt.Errorf("http: %w", ctx.Err())
 	case errors.Is(err, errProtocol):
-		return fmt.Errorf("mcp: http %s: %w", method, err)
+		return fmt.Errorf("http: %w", err)
 	case lifeDone:
 		// The cause is the transport's own abort (context.Canceled);
 		// keep it for logs without letting errors.Is mistake it for
 		// the caller's cancellation.
-		return fmt.Errorf("%w: http %s: transport closed: %v", errConnectionLost, method, err)
+		return fmt.Errorf("%w: http: transport closed: %v", errConnectionLost, err)
 	case httpNotDelivered(err):
-		return fmt.Errorf("%w: http %s: %w", errUnreachable, method, err)
+		return fmt.Errorf("%w: http: %w", errUnreachable, err)
 	default:
-		return fmt.Errorf("%w: http %s: %w", errConnectionLost, method, err)
+		return fmt.Errorf("%w: http: %w", errConnectionLost, err)
 	}
 }
 

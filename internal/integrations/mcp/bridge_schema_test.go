@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,7 +173,7 @@ func wireTMarshalLen(t *testing.T, v any) int {
 func wireTFanOutSchema(def map[string]any, nprops int) map[string]any {
 	props := map[string]any{}
 	for i := range nprops {
-		props["p"+wireTItoa(i)] = map[string]any{"$ref": "#/$defs/def"}
+		props["p"+strconv.Itoa(i)] = map[string]any{"$ref": "#/$defs/def"}
 	}
 	return map[string]any{"type": "object", "properties": props, "$defs": map[string]any{"def": def}}
 }
@@ -203,11 +204,11 @@ func TestBridge_NormalizeInputSchemaBoundsExpansion(t *testing.T) {
 		if i+1 < levels {
 			props := map[string]any{}
 			for j := range fanOut {
-				props["f"+wireTItoa(j)] = map[string]any{"$ref": "#/$defs/L" + wireTItoa(i+1)}
+				props["f"+strconv.Itoa(j)] = map[string]any{"$ref": "#/$defs/L" + strconv.Itoa(i+1)}
 			}
 			next = map[string]any{"type": "object", "description": strings.Repeat("d", 100), "properties": props}
 		}
-		defs["L"+wireTItoa(i)] = next
+		defs["L"+strconv.Itoa(i)] = next
 	}
 	in := map[string]any{"type": "object", "properties": map[string]any{"root": map[string]any{"$ref": "#/$defs/L0"}}, "$defs": defs}
 	start := time.Now()
@@ -271,7 +272,7 @@ func TestBridge_NormalizeInputSchemaInlinesManySmallRefs(t *testing.T) {
 	props, _ := got["properties"].(map[string]any)
 	want := map[string]any{"type": "string", "format": "uuid"}
 	for i := range nprops {
-		name := "p" + wireTItoa(i)
+		name := "p" + strconv.Itoa(i)
 		if !reflect.DeepEqual(props[name], want) {
 			t.Fatalf("properties.%s = %v, want %v", name, props[name], want)
 		}
@@ -279,9 +280,4 @@ func TestBridge_NormalizeInputSchemaInlinesManySmallRefs(t *testing.T) {
 	if !slices.Equal(changes, []string{"inlined local $ref pointers", "removed $defs after inlining"}) {
 		t.Errorf("changes = %q", changes)
 	}
-}
-
-func wireTItoa(i int) string {
-	b, _ := json.Marshal(i)
-	return string(b)
 }

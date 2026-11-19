@@ -161,10 +161,10 @@ func newStdioTransport(ctx context.Context, cfg stdioConfig, hooks transportHook
 		stdout:          parent[1],
 		stderr:          parent[2],
 		exitWarned:      cfg.exitWarned,
-		closeStdinWait:  stdioDuration(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
-		termWait:        stdioDuration(cfg.termWait, stdioDefaultTermWait),
-		exitDrainWait:   stdioDuration(cfg.exitDrainWait, stdioDefaultExitDrainWait),
-		frameFinishWait: stdioDuration(cfg.frameFinishWait, stdioDefaultFrameFinishWait),
+		closeStdinWait:  durationOr(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
+		termWait:        durationOr(cfg.termWait, stdioDefaultTermWait),
+		exitDrainWait:   durationOr(cfg.exitDrainWait, stdioDefaultExitDrainWait),
+		frameFinishWait: durationOr(cfg.frameFinishWait, stdioDefaultFrameFinishWait),
 		writeSem:        make(chan struct{}, 1),
 		pending:         make(map[int64]chan *Response),
 		done:            make(chan struct{}),
@@ -192,14 +192,6 @@ func stdioCloseFiles(sets ...[]*os.File) {
 	}
 }
 
-// stdioDuration returns d, or def when d is not positive.
-func stdioDuration(d, def time.Duration) time.Duration {
-	if d <= 0 {
-		return def
-	}
-	return d
-}
-
 // Call sends req with a fresh integer id and waits for its response. A
 // JSON-RPC error response is returned as (resp, nil). When ctx ends
 // first the call is abandoned (a late response is dropped) and, if
@@ -207,7 +199,7 @@ func stdioDuration(d, def time.Duration) time.Duration {
 // process keeps running.
 func (t *stdioTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("mcp: %s: %w", req.Method, err)
+		return nil, fmt.Errorf("stdio: %w", err)
 	}
 	n := t.nextID.Add(1)
 	out := *req
@@ -216,7 +208,7 @@ func (t *stdioTransport) Call(ctx context.Context, req *Request, info callInfo) 
 
 	ch := make(chan *Response, 1)
 	if !t.register(n, ch) {
-		return nil, fmt.Errorf("%w: %s: %w", errUnreachable, out.Method, t.cause())
+		return nil, fmt.Errorf("%w: stdio: %w", errUnreachable, t.cause())
 	}
 	var cancelID json.RawMessage // cancelled after a cut-short write
 	if info.cancellable {
@@ -224,12 +216,12 @@ func (t *stdioTransport) Call(ctx context.Context, req *Request, info callInfo) 
 	}
 	if err := t.writeFrame(ctx, &out, cancelID); err != nil {
 		t.unregister(n)
-		return nil, fmt.Errorf("mcp: %s: %w", out.Method, err)
+		return nil, fmt.Errorf("stdio: %w", err)
 	}
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return nil, fmt.Errorf("%w: %s: %w", errConnectionLost, out.Method, t.cause())
+			return nil, fmt.Errorf("%w: stdio: %w", errConnectionLost, t.cause())
 		}
 		return resp, nil
 	case <-ctx.Done():
@@ -246,7 +238,7 @@ func (t *stdioTransport) abandon(ctx context.Context, n int64, ch chan *Response
 		if resp, ok := <-ch; ok {
 			return resp, nil
 		}
-		return nil, fmt.Errorf("%w: %s: %w", errConnectionLost, method, t.cause())
+		return nil, fmt.Errorf("%w: stdio: %w", errConnectionLost, t.cause())
 	}
 	if info.cancellable {
 		nctx, cancel := cancelNotifyContext(ctx)
@@ -256,7 +248,7 @@ func (t *stdioTransport) abandon(ctx context.Context, n int64, ch chan *Response
 			t.logger.Debug("mcp: sending notifications/cancelled failed", "method", method, "id", n, "error", err)
 		}
 	}
-	return nil, fmt.Errorf("mcp: %s: %w", method, ctx.Err())
+	return nil, fmt.Errorf("stdio: %w", ctx.Err())
 }
 
 // Notify writes n and returns once the line is on stdin.
@@ -264,7 +256,7 @@ func (t *stdioTransport) Notify(ctx context.Context, n *Notification, _ callInfo
 	out := *n
 	out.JSONRPC = jsonrpcVersion
 	if err := t.write(ctx, &out); err != nil {
-		return fmt.Errorf("mcp: %s: %w", out.Method, err)
+		return fmt.Errorf("stdio: %w", err)
 	}
 	return nil
 }

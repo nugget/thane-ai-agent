@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"sync"
 	"time"
 )
 
@@ -243,19 +244,41 @@ const maxWarnKeys = 512
 // warnOnce logs msg at WARN the first time key is seen for this server,
 // and at Debug afterwards.
 func (c *serverClient) warnOnce(key, msg string, args ...any) {
-	c.warnMu.Lock()
-	_, seen := c.warned[key]
-	if !seen && len(c.warned) < maxWarnKeys {
-		c.warned[key] = struct{}{}
-	} else {
-		seen = true
+	c.warnings.log(c.logger, slog.LevelWarn, key, msg, args...)
+}
+
+// logDeduper logs a message at its level the first time its key is seen
+// and at Debug afterwards, so a server that repeats one problem on every
+// listing or call is reported once. It remembers at most max keys: a
+// server that invents endless distinct names cannot grow it without
+// bound, and every key past the cap logs at Debug. A logDeduper with
+// max set is ready to use; it must not be copied after first use.
+type logDeduper struct {
+	max  int
+	mu   sync.Mutex
+	seen map[string]struct{}
+}
+
+// log logs msg at level if key is new, else at Debug.
+func (d *logDeduper) log(logger *slog.Logger, level slog.Level, key, msg string, args ...any) {
+	if !d.first(key) {
+		level = slog.LevelDebug
 	}
-	c.warnMu.Unlock()
-	if seen {
-		c.logger.Debug(msg, args...)
-		return
+	logger.Log(context.Background(), level, msg, args...)
+}
+
+// first reports whether key is new, remembering it while there is room.
+func (d *logDeduper) first(key string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.seen[key]; ok || len(d.seen) >= d.max {
+		return false
 	}
-	c.logger.Warn(msg, args...)
+	if d.seen == nil {
+		d.seen = make(map[string]struct{})
+	}
+	d.seen[key] = struct{}{}
+	return true
 }
 
 // logTextCapBytes bounds server-supplied names echoed in logs.

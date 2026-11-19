@@ -310,17 +310,17 @@ func TestManager_ProbeErrorsAreFixedText(t *testing.T) {
 		err  error
 		want error
 	}{
-		{"unreachable while down", notReadyErr(fmt.Errorf("mcp: server/discover: %w", urlErr)), errProbeUnreachable},
-		{"connection lost", fmt.Errorf("mcp: health check (ping): %w", errConnectionLost), errProbeUnreachable},
-		{"connect attempt timed out", notReadyErr(fmt.Errorf("mcp: server/discover: %w", context.DeadlineExceeded)), errProbeUnreachable},
-		{"401 while down", notReadyErr(fmt.Errorf("mcp: server/discover: %w", &httpStatusError{Status: 401, Body: "SERVER-AUTHORED"})), errProbeAuth},
-		{"403 on a ping", fmt.Errorf("mcp: health check (ping): %w", &httpStatusError{Status: 403}), errProbeAuth},
+		{"unreachable while down", notReadyErr(fmt.Errorf("server/discover: %w", urlErr)), errProbeUnreachable},
+		{"connection lost", fmt.Errorf("health check (ping): %w", errConnectionLost), errProbeUnreachable},
+		{"connect attempt timed out", notReadyErr(fmt.Errorf("server/discover: %w", context.DeadlineExceeded)), errProbeUnreachable},
+		{"401 while down", notReadyErr(fmt.Errorf("server/discover: %w", &httpStatusError{Status: 401, Body: "SERVER-AUTHORED"})), errProbeAuth},
+		{"403 on a ping", fmt.Errorf("health check (ping): %w", &httpStatusError{Status: 403}), errProbeAuth},
 		{"incompatible", notReadyErr(fmt.Errorf("%w: %w", errIncompatible, serverText)), errProbeIncompatible},
 		{"protocol violation", notReadyErr(fmt.Errorf("%w: malformed tools/list result", errProtocol)), errProbeIncompatible},
-		{"ping timed out", fmt.Errorf("mcp: health check (ping): %w", context.DeadlineExceeded), errProbeTimeout},
-		{"session expired", fmt.Errorf("mcp: health check (ping): %w: %w", errSessionExpired, &httpStatusError{Status: 404}), errProbeNotConnected},
+		{"ping timed out", fmt.Errorf("health check (ping): %w", context.DeadlineExceeded), errProbeTimeout},
+		{"session expired", fmt.Errorf("health check (ping): %w: %w", errSessionExpired, &httpStatusError{Status: 404}), errProbeNotConnected},
 		{"client closed", errClientClosed, errProbeNotConnected},
-		{"server error", notReadyErr(fmt.Errorf("mcp: initialize: %w", serverText)), errProbeNotConnected},
+		{"server error", notReadyErr(fmt.Errorf("initialize: %w", serverText)), errProbeNotConnected},
 	}
 	for _, tt := range tests {
 		got := probeError(tt.err)
@@ -456,5 +456,31 @@ func TestManager_SnapshotRefreshesStaleModernLists(t *testing.T) {
 	})
 	if n := fake.count(methodToolsList); n < 2 {
 		t.Errorf("tools/list sent %d times, want a refresh", n)
+	}
+}
+
+// TestManager_FactoryForNoTypedNil checks that the production factories
+// return a nil Transport interface, not a typed nil pointer inside a
+// non-nil interface, when the transport cannot be built: callers test
+// tr == nil, and a typed nil would pass that test and panic on use.
+func TestManager_FactoryForNoTypedNil(t *testing.T) {
+	m := NewManager(nil, coreTLogger(t))
+	for _, srv := range []ServerConfig{
+		{Name: "no-such-command", Transport: transportStdio, Command: "/nonexistent/thane-mcp-test-server"},
+		{Name: "bad-url", Transport: transportHTTP, URL: "ftp://example.invalid/mcp"},
+	} {
+		t.Run(srv.Name, func(t *testing.T) {
+			tr, err := m.factoryFor(srv, coreTLogger(t))(t.Context(), transportHooks{})
+			if err == nil {
+				_ = tr.Close(t.Context())
+				t.Fatal("the factory built a transport from a broken config")
+			}
+			if tr != nil {
+				t.Fatalf("the factory returned a non-nil Transport %#v with error %v", tr, err)
+			}
+			if !errors.Is(err, errUnreachable) {
+				t.Errorf("err = %v, want errUnreachable", err)
+			}
+		})
 	}
 }

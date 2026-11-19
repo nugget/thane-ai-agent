@@ -105,7 +105,7 @@ func classifyDiscover(transport string, resp *Response, err error) eraVerdict {
 		return classifyDiscoverErr(transport, err)
 	}
 	if resp == nil {
-		return failVerdict(fmt.Errorf("%w: no response to %s", errProtocol, methodDiscover))
+		return failVerdict(fmt.Errorf("%w: no response", errProtocol))
 	}
 	if resp.Error != nil {
 		return classifyDiscoverRPC(resp.Error)
@@ -210,14 +210,14 @@ func classifyInitialize(resp *Response, err error) eraVerdict {
 		return classifyInitializeErr(err)
 	}
 	if resp == nil {
-		return failVerdict(fmt.Errorf("%w: no response to %s", errProtocol, methodInitialize))
+		return failVerdict(fmt.Errorf("%w: no response", errProtocol))
 	}
 	if resp.Error != nil {
 		return classifyInitializeRPC(resp.Error)
 	}
 	var res initializeResult
 	if uerr := json.Unmarshal(resp.Result, &res); uerr != nil {
-		return failVerdict(fmt.Errorf("%w: malformed initialize result: %w", errProtocol, uerr))
+		return failVerdict(fmt.Errorf("%w: malformed result: %w", errProtocol, uerr))
 	}
 	if !isHandshakeVersion(res.ProtocolVersion) {
 		return failVerdict(fmt.Errorf("%w: the server chose protocol version %q",
@@ -264,7 +264,7 @@ func classifyInitializeRPC(rpcErr *RPCError) eraVerdict {
 	case unsupported:
 		return failVerdict(fmt.Errorf("%w: %w", errIncompatible, rpcErr))
 	default:
-		return failVerdict(fmt.Errorf("mcp: initialize rejected: %w", rpcErr))
+		return failVerdict(fmt.Errorf("rejected: %w", rpcErr))
 	}
 }
 

@@ -312,7 +312,7 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 			if rpcErr := statusCarriedRPC(err); rpcErr != nil {
 				return toolResult{}, c.callRPCError(ctx, conn, name, rpcErr, err)
 			}
-			return toolResult{}, fmt.Errorf("mcp: %s %s: %w", methodToolsCall, logText(name), err)
+			return toolResult{}, fmt.Errorf("%s %s: %w", methodToolsCall, logText(name), err)
 		}
 		if resp.Error != nil {
 			return toolResult{}, c.callRPCError(ctx, conn, name, resp.Error, resp.Error)
@@ -380,7 +380,7 @@ func (c *serverClient) callRPCError(ctx context.Context, conn *clientConn, name 
 			return fmt.Errorf("%w: %s", errToolGone, logText(name))
 		}
 	}
-	return fmt.Errorf("mcp: %s %s: %w", methodToolsCall, logText(name), cause)
+	return fmt.Errorf("%s %s: %w", methodToolsCall, logText(name), cause)
 }
 
 // isHeaderMismatch reports a -32020 HeaderMismatch answer (normally an

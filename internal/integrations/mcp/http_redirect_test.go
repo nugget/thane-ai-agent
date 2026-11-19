@@ -158,7 +158,7 @@ func TestHTTP_ErrorsRedactURL(t *testing.T) {
 	t.Run("round trip error", func(t *testing.T) {
 		raw := &url.Error{Op: "Post", URL: httpTSecretURL("mcp.example"),
 			Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
-		err := httpRoundTripError(t.Context(), false, methodToolsCall, raw)
+		err := httpRoundTripError(t.Context(), false, raw)
 		if !errors.Is(err, errUnreachable) {
 			t.Fatalf("err = %v, want errUnreachable", err)
 		}
@@ -169,7 +169,7 @@ func TestHTTP_ErrorsRedactURL(t *testing.T) {
 	})
 	t.Run("unparseable URL", func(t *testing.T) {
 		raw := &url.Error{Op: "Post", URL: "http://h/%zz?api_key=SECRET123", Err: errors.New("broken")}
-		httpTAssertRedacted(t, "error", httpRoundTripError(t.Context(), false, methodToolsCall, raw).Error())
+		httpTAssertRedacted(t, "error", httpRoundTripError(t.Context(), false, raw).Error())
 	})
 	t.Run("unreachable server", func(t *testing.T) {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
