@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"encoding/json"
+	"maps"
 	"net/url"
 	"strconv"
 	"strings"
@@ -8,13 +10,21 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
 )
 
-// Bounds for inlining local $ref pointers. A schema that needs more is
-// cut short (the remaining references become permissive {} schemas),
-// which keeps a hostile or recursive schema from blowing up the prompt.
+// Bounds for inlining local $ref pointers. Inlining copies a target
+// into every place that references it, so a small schema whose
+// definitions are referenced many times can grow far beyond its own
+// size. When the copies would add more than maxInlinedBytes, inlining
+// is abandoned and the schema keeps its pointers and definitions
+// unchanged, so inlining never grows a schema by more than that.
+// A reference nested deeper than maxRefDepth becomes a permissive {}
+// schema, as a recursive one does.
 const (
-	maxRefDepth      = 8   // nested reference expansions on one path
-	maxRefExpansions = 256 // reference expansions in one schema
+	maxRefDepth     = 8        // nested reference expansions on one path
+	maxInlinedBytes = 32 << 10 // bytes the inlined copies may add to one schema
 )
+
+// refOverBudgetChange is the change reported when inlining is abandoned.
+var refOverBudgetChange = "left $ref pointers in place: inlining would exceed " + strconv.Itoa(maxInlinedBytes) + " bytes"
 
 // normalizeInputSchema returns a deep copy of an MCP tool's inputSchema
 // made safe for every model provider, plus a short description of each
@@ -23,7 +33,9 @@ const (
 // In order: local $ref pointers ("#", "#/$defs/…", "#/definitions/…",
 // any "#/…" JSON pointer) are inlined with bounded depth (a cyclic or
 // too-deep reference becomes {}), and $defs/definitions are dropped
-// once inlined; top-level oneOf/allOf/anyOf are merged away by
+// once inlined, unless the copies would add more than maxInlinedBytes,
+// in which case the pointers and definitions all stay as they were;
+// top-level oneOf/allOf/anyOf are merged away by
 // llm.StripTopLevelCompositionKeywords; the root is forced to
 // type "object" with a properties map, as MCP requires.
 func normalizeInputSchema(in map[string]any) (map[string]any, []string) {
@@ -84,7 +96,9 @@ func deepCopyJSON(v any) any {
 // refInliner expands local references against the original root.
 type refInliner struct {
 	root       map[string]any // pristine copy the pointers resolve against
-	expansions int
+	sizes      map[string]int // marshalled size of each resolved target, by ref
+	added      int            // bytes the copies made so far add
+	overBudget bool           // a copy would pass maxInlinedBytes; stop
 	inlined    bool
 	cyclic     bool
 	tooDeep    bool
@@ -93,23 +107,31 @@ type refInliner struct {
 }
 
 // inlineLocalRefs rewrites schema in place (it is already a private
-// copy) and reports what changed.
+// copy) and reports what changed. When inlining runs over budget,
+// schema is restored to its original content.
 func inlineLocalRefs(schema map[string]any) []string {
 	if !containsRef(schema, 0) {
 		return nil
 	}
 	root, _ := deepCopyJSON(schema).(map[string]any)
-	r := &refInliner{root: root}
+	r := &refInliner{root: root, sizes: map[string]int{}}
 	// The root counts as being expanded: "#" inside it is recursion.
 	stack := []string{"#"}
 	if ref, ok := schema["$ref"].(string); ok {
 		expanded, _ := r.expandRef(schema, ref, stack).(map[string]any)
-		clear(schema)
-		for k, v := range expanded {
-			schema[k] = v
+		if !r.overBudget {
+			clear(schema)
+			maps.Copy(schema, expanded)
 		}
 	} else {
 		r.walkSchema(schema, stack)
+	}
+	if r.overBudget {
+		// Discard the partial work. root is never written to (targets
+		// are copied out of it), so it still holds the original.
+		clear(schema)
+		maps.Copy(schema, root)
+		return []string{refOverBudgetChange}
 	}
 
 	var changes []string
@@ -126,7 +148,7 @@ func inlineLocalRefs(schema map[string]any) []string {
 		changes = append(changes, "replaced recursive $ref pointers with {}")
 	}
 	if r.tooDeep {
-		changes = append(changes, "replaced $ref pointers beyond the expansion limit with {}")
+		changes = append(changes, "replaced $ref pointers beyond the nesting limit with {}")
 	}
 	if r.unresolved {
 		changes = append(changes, "replaced unresolvable local $ref pointers with {}")
@@ -148,6 +170,9 @@ var schemaMapKeys = map[string]bool{"properties": true, "patternProperties": tru
 // stack holds the references being expanded on this path.
 func (r *refInliner) walkSchema(node map[string]any, stack []string) {
 	for key, child := range node {
+		if r.overBudget {
+			return
+		}
 		switch {
 		case schemaDataKeys[key], key == "$defs", key == "definitions":
 			// Data, or definitions that are dropped after inlining.
@@ -167,6 +192,9 @@ func (r *refInliner) walkSchema(node map[string]any, stack []string) {
 // walked (or replaced when it is a reference), an array's elements are
 // handled one by one, scalars pass through.
 func (r *refInliner) expandValue(v any, stack []string) any {
+	if r.overBudget {
+		return v
+	}
 	switch x := v.(type) {
 	case map[string]any:
 		if ref, ok := x["$ref"].(string); ok {
@@ -188,6 +216,9 @@ func (r *refInliner) expandValue(v any, stack []string) any {
 // under the node's sibling keywords (siblings win, as in JSON Schema
 // 2020-12 where $ref applies alongside them).
 func (r *refInliner) expandRef(node map[string]any, ref string, stack []string) any {
+	if r.overBudget {
+		return node
+	}
 	if !strings.HasPrefix(ref, "#") {
 		r.remote = true
 		r.walkSchema(node, stack)
@@ -203,7 +234,7 @@ func (r *refInliner) expandRef(node map[string]any, ref string, stack []string) 
 	switch {
 	case containsString(stack, ref):
 		r.cyclic = true
-	case len(stack) > maxRefDepth || r.expansions >= maxRefExpansions:
+	case len(stack) > maxRefDepth:
 		r.tooDeep = true
 	default:
 		target, ok := resolvePointer(r.root, ref)
@@ -211,7 +242,9 @@ func (r *refInliner) expandRef(node map[string]any, ref string, stack []string) 
 			r.unresolved = true
 			break
 		}
-		r.expansions++
+		if !r.charge(ref, target) {
+			return node
+		}
 		r.inlined = true
 		replacement, _ = deepCopyJSON(target).(map[string]any)
 		if replacement == nil {
@@ -234,6 +267,28 @@ func (r *refInliner) expandRef(node map[string]any, ref string, stack []string) 
 		replacement[k] = v
 	}
 	return replacement
+}
+
+// charge counts one copy of target (resolved from ref) against
+// maxInlinedBytes and reports whether it fits. A copy that does not fit
+// sets overBudget, which ends the inlining. Sizes are cached per ref,
+// so each distinct target is marshalled once; every marshal either
+// fits the budget or ends the walk, which bounds the total work.
+func (r *refInliner) charge(ref string, target any) bool {
+	size, ok := r.sizes[ref]
+	if !ok {
+		size = maxInlinedBytes + 1
+		if b, err := json.Marshal(target); err == nil {
+			size = len(b)
+		}
+		r.sizes[ref] = size
+	}
+	if r.added+size > maxInlinedBytes {
+		r.overBudget = true
+		return false
+	}
+	r.added += size
+	return true
 }
 
 // resolvePointer follows a "#/a/b" JSON pointer (RFC 6901, inside a URI

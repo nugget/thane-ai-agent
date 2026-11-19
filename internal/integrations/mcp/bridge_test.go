@@ -250,6 +250,26 @@ func TestBridge_SchemaNormalizedAndLoggedOnce(t *testing.T) {
 	}
 }
 
+func TestBridge_SkipsToolWithOversizedSchema(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{})
+	defs := wireTDefs("huge", "small")
+	defs[0].InputSchema = map[string]any{"type": "object", "properties": map[string]any{
+		"q": map[string]any{"type": "string", "description": strings.Repeat("x", maxToolSchemaBytes)},
+	}}
+	for range 2 {
+		if got := wireTRawNames(b.bridge(defs)); !slices.Equal(got, []string{"small"}) {
+			t.Fatalf("bridged = %v, want [small]", got)
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN msg=\"mcp: tool input schema too large"); n != 1 {
+		t.Errorf("oversized schema warned %d times, want once:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "tool=huge") {
+		t.Errorf("warning does not name the tool:\n%s", logs.String())
+	}
+}
+
 func TestBridge_HandlerRoutesThroughClient(t *testing.T) {
 	t.Parallel()
 	srv := &clientTFakeServer{}

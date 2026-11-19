@@ -3,8 +3,10 @@ package mcp
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // wireTSchema decodes a JSON schema literal.
@@ -155,31 +157,127 @@ func TestBridge_NormalizeInputSchema(t *testing.T) {
 	}
 }
 
+// wireTMarshalLen returns the size of v as JSON.
+func wireTMarshalLen(t *testing.T, v any) int {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
+}
+
+// wireTFanOutSchema returns a schema whose $defs.def is referenced by
+// nprops properties.
+func wireTFanOutSchema(def map[string]any, nprops int) map[string]any {
+	props := map[string]any{}
+	for i := range nprops {
+		props["p"+wireTItoa(i)] = map[string]any{"$ref": "#/$defs/def"}
+	}
+	return map[string]any{"type": "object", "properties": props, "$defs": map[string]any{"def": def}}
+}
+
+// wireTCheckLeftInPlace asserts that normalizeInputSchema abandoned
+// inlining: the output equals the input and reports only that.
+func wireTCheckLeftInPlace(t *testing.T, in, got map[string]any, changes []string) {
+	t.Helper()
+	if n, limit := wireTMarshalLen(t, got), wireTMarshalLen(t, in)+maxInlinedBytes; n > limit {
+		t.Fatalf("normalized schema is %d bytes, more than input + maxInlinedBytes = %d", n, limit)
+	}
+	if !reflect.DeepEqual(got, in) {
+		t.Error("an over-budget schema should keep its $ref pointers and $defs unchanged")
+	}
+	if !slices.Equal(changes, []string{refOverBudgetChange}) {
+		t.Errorf("changes = %q, want only %q", changes, refOverBudgetChange)
+	}
+}
+
 func TestBridge_NormalizeInputSchemaBoundsExpansion(t *testing.T) {
 	t.Parallel()
-	// Each level references the next one twice: unbounded inlining would
-	// grow as 2^depth.
+	// Each level references the next one eight times: unbounded inlining
+	// would grow as 8^depth.
 	defs := map[string]any{}
-	const levels = 40
+	const levels, fanOut = 20, 8
 	for i := range levels {
 		next := map[string]any{"type": "string"}
 		if i+1 < levels {
-			ref := map[string]any{"$ref": "#/$defs/L" + wireTItoa(i+1)}
-			next = map[string]any{"type": "object", "properties": map[string]any{"a": ref, "b": ref}}
+			props := map[string]any{}
+			for j := range fanOut {
+				props["f"+wireTItoa(j)] = map[string]any{"$ref": "#/$defs/L" + wireTItoa(i+1)}
+			}
+			next = map[string]any{"type": "object", "description": strings.Repeat("d", 100), "properties": props}
 		}
 		defs["L"+wireTItoa(i)] = next
 	}
 	in := map[string]any{"type": "object", "properties": map[string]any{"root": map[string]any{"$ref": "#/$defs/L0"}}, "$defs": defs}
+	start := time.Now()
 	got, changes := normalizeInputSchema(in)
-	b, err := json.Marshal(got)
-	if err != nil {
-		t.Fatal(err)
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("normalizing took %v; expansion work is not bounded", elapsed)
 	}
-	if len(b) > 1<<20 {
-		t.Fatalf("expanded schema is %d bytes; expansion is not bounded", len(b))
+	wireTCheckLeftInPlace(t, in, got, changes)
+}
+
+// TestBridge_NormalizeInputSchemaFanOutStaysWithinBudget covers a
+// benign schema whose one large definition is referenced by many
+// properties: inlining it everywhere would grow it about 300 times.
+func TestBridge_NormalizeInputSchemaFanOutStaysWithinBudget(t *testing.T) {
+	t.Parallel()
+	in := wireTFanOutSchema(map[string]any{"type": "string", "description": strings.Repeat("x", 20_000)}, 300)
+	got, changes := normalizeInputSchema(in)
+	wireTCheckLeftInPlace(t, in, got, changes)
+	if _, ok := got["$defs"]; !ok {
+		t.Error("$defs removed although the $ref pointers were kept")
 	}
-	if !strings.Contains(strings.Join(changes, " "), "expansion limit") {
-		t.Errorf("changes %q do not report the expansion limit", changes)
+	if p, _ := got["properties"].(map[string]any)["p7"].(map[string]any); p["$ref"] != "#/$defs/def" {
+		t.Errorf("properties.p7 = %v, want its $ref kept", p)
+	}
+}
+
+// TestBridge_NormalizeInputSchemaRootRefOverBudget restores a schema
+// whose root is itself a reference to an oversized definition.
+func TestBridge_NormalizeInputSchemaRootRefOverBudget(t *testing.T) {
+	t.Parallel()
+	in := map[string]any{
+		"$ref": "#/$defs/Args",
+		"$defs": map[string]any{"Args": map[string]any{
+			"type": "object", "description": strings.Repeat("x", maxInlinedBytes),
+			"properties": map[string]any{"q": map[string]any{"type": "string"}},
+		}},
+	}
+	got, changes := normalizeInputSchema(in)
+	if got["$ref"] != "#/$defs/Args" || got["$defs"] == nil {
+		t.Fatalf("root reference not kept: %v", got)
+	}
+	if got["type"] != "object" {
+		t.Errorf("root type = %v, want object", got["type"])
+	}
+	if !slices.Contains(changes, refOverBudgetChange) {
+		t.Errorf("changes = %q, want %q", changes, refOverBudgetChange)
+	}
+}
+
+// TestBridge_NormalizeInputSchemaInlinesManySmallRefs inlines a small
+// definition referenced by hundreds of properties, which fits the byte
+// budget however many references there are.
+func TestBridge_NormalizeInputSchemaInlinesManySmallRefs(t *testing.T) {
+	t.Parallel()
+	const nprops = 400
+	in := wireTFanOutSchema(map[string]any{"type": "string", "format": "uuid"}, nprops)
+	got, changes := normalizeInputSchema(in)
+	if _, ok := got["$defs"]; ok {
+		t.Error("$defs kept after inlining")
+	}
+	props, _ := got["properties"].(map[string]any)
+	want := map[string]any{"type": "string", "format": "uuid"}
+	for i := range nprops {
+		name := "p" + wireTItoa(i)
+		if !reflect.DeepEqual(props[name], want) {
+			t.Fatalf("properties.%s = %v, want %v", name, props[name], want)
+		}
+	}
+	if !slices.Equal(changes, []string{"inlined local $ref pointers", "removed $defs after inlining"}) {
+		t.Errorf("changes = %q", changes)
 	}
 }
 

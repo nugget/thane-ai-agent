@@ -26,6 +26,11 @@ const (
 	// maxToolDescriptionBytes caps a server-authored description, like
 	// the companion registrar does for Mac-authored ones.
 	maxToolDescriptionBytes = 4096
+	// maxToolSchemaBytes caps a tool's input schema as offered to the
+	// model (normalized, then marshalled). A larger schema would crowd
+	// the prompt of every request that offers the tool, so the tool is
+	// not bridged.
+	maxToolSchemaBytes = 64 << 10
 	// toolSource is tools.Tool.Source for every bridged tool; tag
 	// attribution relies on it.
 	toolSource = "mcp"
@@ -149,7 +154,8 @@ func (b *serverBridge) included(raw string) bool {
 }
 
 // bridge converts defs (one server's current list) into Thane tools,
-// sorted by raw name. Two raw names that map to one Thane name keep the
+// sorted by raw name. A tool whose schema exceeds maxToolSchemaBytes is
+// skipped with a WARN. Two raw names that map to one Thane name keep the
 // first in that order; the other is skipped with a WARN. Deterministic
 // for a given list.
 func (b *serverBridge) bridge(defs []toolDefinition) []bridgedTool {
@@ -164,7 +170,13 @@ func (b *serverBridge) bridge(defs []toolDefinition) []bridgedTool {
 		if !b.included(def.Name) {
 			continue
 		}
-		bt := b.bridgeOne(def)
+		bt, schemaBytes := b.bridgeOne(def)
+		if schemaBytes > maxToolSchemaBytes {
+			b.logOnce(slog.LevelWarn, "schema-cap:"+def.Name,
+				"mcp: tool input schema too large to offer to the model; tool skipped",
+				"tool", logText(def.Name), "bytes", schemaBytes, "cap", maxToolSchemaBytes)
+			continue
+		}
 		if first, dup := taken[bt.tool.Name]; dup {
 			b.logOnce(slog.LevelWarn, "collide-local:"+def.Name,
 				"mcp: two tools from this server map to the same Thane tool name; keeping the first",
@@ -180,7 +192,8 @@ func (b *serverBridge) bridge(defs []toolDefinition) []bridgedTool {
 // bridgeOne builds the Thane tool for one included definition. Its
 // handler routes through the live client, so reconnects are invisible
 // to callers and a server that is down answers tools.ErrUnavailable.
-func (b *serverBridge) bridgeOne(def toolDefinition) bridgedTool {
+// schemaBytes is the size of the marshalled input schema.
+func (b *serverBridge) bridgeOne(def toolDefinition) (bt bridgedTool, schemaBytes int) {
 	raw := def.Name
 	name := thaneToolName(b.server, raw)
 	override := b.overrides[raw]
@@ -217,7 +230,7 @@ func (b *serverBridge) bridgeOne(def toolDefinition) bridgedTool {
 	if err != nil {
 		params = nil
 	}
-	return bridgedTool{raw: raw, tool: tool, fp: desc + "\x00" + string(params)}
+	return bridgedTool{raw: raw, tool: tool, fp: desc + "\x00" + string(params)}, len(params)
 }
 
 // logCallStatus logs the HTTP status details of a failed call (the
