@@ -132,3 +132,30 @@ func mcpCapabilityTagOverrides(cfg *config.Config) map[string]config.CapabilityT
 	}
 	return out
 }
+
+// capabilityTagExcludes returns, per capability tag, the tool names the
+// operator removed with capability_tags.<tag>.exclude. Startup tag
+// resolution drops these names from the static tag index; the dynamic
+// tool overlay drops them from its tag additions with the same sets, so
+// an excluded tool stays out of the tag when it first appears after
+// startup or when its definition changes. Tags with no excludes are
+// omitted; nil means nothing is excluded.
+func capabilityTagExcludes(cfg *config.Config) map[string]map[string]struct{} {
+	var out map[string]map[string]struct{}
+	for tag, tagCfg := range cfg.CapabilityTags {
+		for _, name := range tagCfg.Exclude {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if out == nil {
+				out = make(map[string]map[string]struct{})
+			}
+			if out[tag] == nil {
+				out[tag] = make(map[string]struct{})
+			}
+			out[tag][name] = struct{}{}
+		}
+	}
+	return out
+}
