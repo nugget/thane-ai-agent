@@ -134,8 +134,9 @@ func (m *wireMessage) response() *Response {
 // non-empty JSON array.
 var errNotJSONRPC = errors.New("mcp: payload is not a JSON-RPC object or batch")
 
-// decodeMessages parses one JSON-RPC object or a non-empty batch array
-// (A10). Leading/trailing whitespace is ignored. Any other shape, an
+// decodeMessages parses one JSON-RPC object or a non-empty batch array,
+// which 2025-03-26 servers may send on stdio and SSE. Leading/trailing
+// whitespace is ignored. Any other shape, an
 // empty array, or invalid JSON returns an error (callers decide whether
 // that is skip-and-log (stdio) or errProtocol (HTTP)).
 //

@@ -419,7 +419,7 @@ func (c *serverClient) refresh(conn *clientConn) bool {
 	return false
 }
 
-// probe is the connwatch health check (AM-7). Not ready: returns the
+// probe is the connwatch health check. Not ready: returns the
 // last connect error (wrapping errNotReady) with no I/O. Ready: legacy →
 // ping, modern → server/discover; any JSON-RPC response (result or
 // error) counts as healthy. Failures are reported, never acted on,

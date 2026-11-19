@@ -241,8 +241,9 @@ func httpBatchError(method string, n int) error {
 }
 
 // httpAnswers reports whether m answers request id: its id is that
-// integer, or it is an error with an absent or null id (A14: the POST,
-// not the id, correlates an error the server could not attribute).
+// integer, or it is an error with an absent or null id: the spec lets
+// an error the server could not attribute omit the id (basic/index.mdx
+// "Error Responses"), so the POST, not the id, correlates it.
 func httpAnswers(m *wireMessage, id int64) bool {
 	if got, ok := idInt(m.ID); ok {
 		return got == id
@@ -303,7 +304,8 @@ func httpRPCError(body string) (rpcErr *RPCError, attributed bool) {
 }
 
 // captureSession records Mcp-Session-Id from a 2xx initialize response
-// (AM-25). A value outside visible ASCII is ignored with a WARN. The
+// (2025-11-25 transports.mdx "Session Management"). A value outside
+// visible ASCII is ignored with a WARN. The
 // value is never logged.
 func (t *httpTransport) captureSession(hresp *http.Response) {
 	sid := hresp.Header.Get(httpHeaderSessionID)

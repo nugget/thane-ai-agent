@@ -9,7 +9,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
 )
 
-// Protocol constants shared by every stage.
+// Protocol constants shared by both transports and the client.
 const (
 	modernProtocolVersion = "2026-07-28"
 	handshakeOfferVersion = "2025-11-25" // offered in initialize
@@ -140,8 +140,11 @@ type serverCapabilities struct {
 	Tools *toolsCapability `json:"tools,omitempty"`
 }
 
-// discoverResult: valid (A1) iff it unmarshals, Capabilities != nil and
-// SupportedVersions shares a version with modernVersions.
+// discoverResult: proof of a modern server iff it unmarshals,
+// Capabilities != nil and SupportedVersions shares a version with
+// modernVersions. TTLMs and CacheScope are decoded for schema fidelity
+// only: Thane re-probes on every connect rather than caching the
+// result.
 type discoverResult struct {
 	ResultType        string                     `json:"resultType,omitempty"`
 	SupportedVersions []string                   `json:"supportedVersions"`
@@ -173,8 +176,9 @@ type initializeResult struct {
 	Instructions    string             `json:"instructions,omitempty"`
 }
 
-// unsupportedVersionData is error.data for -32022 (and the A11 shape of
-// an initialize error carrying data.supported).
+// unsupportedVersionData is error.data for -32022, and also the shape
+// some legacy servers use to name their versions in an initialize error
+// (2025-11-25 lifecycle.mdx "Error Handling" example).
 type unsupportedVersionData struct {
 	Supported []string `json:"supported"`
 	Requested string   `json:"requested,omitempty"`
@@ -182,7 +186,7 @@ type unsupportedVersionData struct {
 
 // toolsListResult keeps each tool raw so one malformed definition is
 // skipped (WARN) instead of failing the page. NextCursor nil = end;
-// "" is a valid cursor.
+// "" is a valid cursor. CacheScope is decoded for schema fidelity only.
 type toolsListResult struct {
 	ResultType string            `json:"resultType,omitempty"`
 	Tools      []json.RawMessage `json:"tools"`

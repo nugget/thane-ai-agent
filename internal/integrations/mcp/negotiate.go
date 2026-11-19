@@ -18,16 +18,20 @@ type negotiateStep struct {
 	version string // version to offer
 }
 
-// negotiate builds a transport and settles the era (DESIGN-AMENDMENTS
-// AM-29, critic S2-S4 and H1-H4), driving the Core classifiers
-// classifyDiscover and classifyInitialize. It returns the connection in
-// use even on failure (it may differ from the first one after an A17
-// respawn) so the caller can close it.
+// negotiate builds a transport and settles the era (2026-07-28
+// versioning.mdx "Backward Compatibility with Initialization-Based
+// Versions"), driving the classifiers classifyDiscover and
+// classifyInitialize. It returns the connection in use even on failure
+// (it may differ from the first one after a stdio respawn) so the
+// caller can close it.
 //
-// Retry bounds per attempt: one discover re-probe (A2 or A3), one
-// initialize re-offer (A11) and one respawn (A17). Neither discover nor
-// initialize is ever cancellable (A8). After a successful initialize,
-// notifications/initialized is sent before anything else (A9).
+// Retry bounds per attempt: one discover re-probe after a -32022, one
+// initialize re-offer of a version an error named, and one respawn of a
+// stdio server that died during the probe. Neither discover nor
+// initialize is ever cancellable: the spec forbids cancelling
+// initialize, and a late discover reply finds no pending id and is
+// dropped. After a successful initialize, notifications/initialized is
+// sent before anything else (2025-11-25 lifecycle.mdx "Initialization").
 func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 	conn, err := c.dial(ctx)
 	if err != nil {
@@ -183,9 +187,12 @@ func (c *serverClient) sendDiscover(ctx context.Context, conn *clientConn, versi
 	return conn.tr.Call(ctx, req, callInfo{protocolVersion: version, modern: true})
 }
 
-// sendInitialize sends the legacy initialize offering version: no
-// io.modelcontextprotocol/* _meta keys and no MCP-Protocol-Version
-// header (A4). Never cancellable (A8).
+// sendInitialize sends the legacy initialize offering version. It
+// carries no io.modelcontextprotocol/* _meta key, because a dual-era
+// server serves any request with modern _meta statelessly, and no
+// MCP-Protocol-Version header, which 2025-11-25 defines only for
+// requests after initialize. Never cancellable (2025-11-25
+// cancellation.mdx: "The initialize request MUST NOT be cancelled").
 func (c *serverClient) sendInitialize(ctx context.Context, conn *clientConn, version string) (*Response, error) {
 	params, err := marshalParams(map[string]any{
 		"protocolVersion": version,
@@ -219,9 +226,10 @@ func (cc *clientConn) adoptLegacy(v eraVerdict) {
 	cc.eraState.Store(int32(eraLegacy))
 }
 
-// frame returns the callInfo for a request on a negotiated connection
-// (AM-30): modern carries the modern version and modern framing; legacy
-// carries the negotiated version only from headerVersionFloor on.
+// frame returns the callInfo for a request on a negotiated connection:
+// modern carries the modern version and modern framing; legacy carries
+// the negotiated version only from headerVersionFloor on, the first
+// revision that defines the MCP-Protocol-Version header.
 func (cc *clientConn) frame(cancellable bool) callInfo {
 	if cc.currentEra() == eraModern {
 		return callInfo{protocolVersion: cc.version, modern: true, cancellable: cancellable}

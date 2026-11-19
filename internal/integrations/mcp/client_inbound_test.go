@@ -60,8 +60,8 @@ func TestClient_InboundRequests(t *testing.T) {
 	}
 }
 
-// TestClient_InboundReplyThroughDispatch checks the hook against Core's
-// dispatcher: the reply echoes the server's id verbatim, including a
+// TestClient_InboundReplyThroughDispatch checks the hook against the
+// transports' shared dispatcher: the reply echoes the server's id verbatim, including a
 // string id and an id that collides with one of Thane's own.
 func TestClient_InboundReplyThroughDispatch(t *testing.T) {
 	c := clientTNew(t, &clientTFakeServer{}, clientTConfig(transportStdio, ""))
@@ -107,7 +107,7 @@ func TestClient_ModernRequestViolationsWarnOncePerMethod(t *testing.T) {
 	}
 }
 
-// TestClient_PingDuringTheProbeIsAnswered checks A13: while the era is
+// TestClient_PingDuringTheProbeIsAnswered checks that while the era is
 // unknown, a server ping (evidence of legacy) gets {}.
 func TestClient_PingDuringTheProbeIsAnswered(t *testing.T) {
 	routes := clientTLegacyRoutes("")

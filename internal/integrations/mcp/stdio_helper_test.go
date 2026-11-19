@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 }
 
 // stdioTHelper returns a stdioConfig that runs this test binary as the
-// fake server named by mode. Modes other stages may rely on:
+// fake server named by mode. Modes that client tests rely on:
 //
 //   - "mcp-legacy": a 2025-11-25 server. initialize (any handshake
 //     version is echoed back, else 2025-11-25), notifications/initialized

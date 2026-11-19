@@ -24,7 +24,7 @@ const (
 	e2eTModeLegacy = "e2e-legacy" // legacy-only, like mcp-legacy
 	e2eTModeModern = "e2e-modern" // modern-only, like mcp-modern
 	// e2eTModeFragile is legacy-only and exits on any request it does
-	// not know before initialize, as some early servers did (A17).
+	// not know before initialize, as some early servers did.
 	e2eTModeFragile = "e2e-fragile"
 	// e2eTModeDual is dual-era with an era lock, like the Python SDK's
 	// serve_dual_era_loop: the first request decides the era of the
@@ -406,7 +406,7 @@ func TestE2E_StdioDualEraLock(t *testing.T) {
 // is still starting. Thane falls back to initialize on the same process
 // (never cancelling the probe). A legacy server answers it; a dual-era
 // or modern-only server has meanwhile locked to modern from the late
-// discover and answers -32022, so Thane re-probes (A3) and goes modern.
+// discover and answers -32022, so Thane re-probes and goes modern.
 // The late discover reply is absorbed without harm.
 func TestE2E_StdioSlowStart(t *testing.T) {
 	t.Parallel()
@@ -595,7 +595,7 @@ func TestE2E_StdioCancellationKeepsProcess(t *testing.T) {
 
 // TestE2E_StdioFragileLegacyRespawn: a legacy server that exits on the
 // unknown server/discover is respawned once and initialized straight
-// away (A17); the era is cached, so a later reconnect never probes.
+// away; the era is cached, so a later reconnect never probes.
 func TestE2E_StdioFragileLegacyRespawn(t *testing.T) {
 	t.Parallel()
 	c, sp := e2eTStdio(t, e2eTModeFragile, protocolAuto, 0, nil)

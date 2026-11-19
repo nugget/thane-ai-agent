@@ -147,7 +147,7 @@ func (t *clientTFakeTransport) sent() []clientTMsg {
 	return append([]clientTMsg(nil), t.msgs...)
 }
 
-// Call follows the AM-11 shapes: a closed transport is unreachable, a
+// Call fails the way real transports do: a closed transport is unreachable, a
 // lost one mid-call is connection lost, ctx done wraps ctx.Err().
 func (t *clientTFakeTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
 	select {

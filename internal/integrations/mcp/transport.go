@@ -57,7 +57,9 @@ type callInfo struct {
 
 	// cancellable: when ctx ends before the response, send
 	// notifications/cancelled (stdio, legacy HTTP). false for
-	// server/discover and initialize (A8).
+	// server/discover and initialize: clients MUST NOT cancel
+	// initialize (2025-11-25 cancellation.mdx), and a late discover
+	// reply is dropped as an unknown id instead.
 	cancellable bool
 }
 

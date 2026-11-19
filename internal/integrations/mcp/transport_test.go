@@ -39,7 +39,7 @@ func (w *coreTLogWriter) stop() {
 
 // coreTLogger returns a Debug-level logger that writes to t.Log (shown
 // on failure or with -v). Safe to use from goroutines that outlive the
-// test: output after cleanup is discarded. Any stage's tests may use it.
+// test: output after cleanup is discarded. Any test in the package may use it.
 func coreTLogger(t testing.TB) *slog.Logger {
 	t.Helper()
 	w := &coreTLogWriter{t: t}

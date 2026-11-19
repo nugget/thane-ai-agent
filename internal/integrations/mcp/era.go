@@ -9,7 +9,7 @@ import (
 )
 
 // Transport kinds as clientConfig.transport and ServerConfig.Transport
-// spell them. They select the stdio (S) or HTTP (H) probe rules.
+// spell them. They select the stdio or HTTP probe rules.
 const (
 	transportStdio = "stdio"
 	transportHTTP  = "http"
@@ -29,13 +29,17 @@ const (
 	// version. initialize is set. Only classifyInitialize returns it.
 	verdictLegacy
 	// verdictInitialize: send initialize offering version, on the same
-	// transport (legacy fallback, A1/A2/A11, stdio probe timeout).
+	// transport. It is the legacy fallback: no mutual modern version, a
+	// non-modern error, a version list naming only handshake versions,
+	// or a stdio probe timeout.
 	verdictInitialize
-	// verdictDiscover: send server/discover again at version (A2, A3).
+	// verdictDiscover: send server/discover again at version, because a
+	// -32022 to discover or initialize named a mutual modern version.
 	verdictDiscover
-	// verdictRespawn: stdio only (A17). The process exited or closed
-	// stdout during the probe: build a new transport once and go
-	// straight to initialize offering version.
+	// verdictRespawn: stdio only. The process exited or closed stdout
+	// during the probe, as an old server may on an unknown method
+	// before initialize: build a new transport once and go straight
+	// to initialize offering version.
 	verdictRespawn
 )
 
@@ -81,14 +85,21 @@ const (
 )
 
 // classifyDiscover classifies the reply to a server/discover probe
-// (critic S3 for stdio, H2 for HTTP, with A1, A2, A5-A7 and A17; the
-// table is DESIGN-AMENDMENTS AM-29). transport is transportStdio or
-// transportHTTP; any other value gets the HTTP rules. Only a reply
-// proves an era: on HTTP, a 2xx body or the body of a 400/404/405;
-// outages, auth failures and Thane's own bugs are never era verdicts.
+// (2026-07-28 versioning.mdx and the stdio and streamable-http
+// "Backward Compatibility" sections). transport is transportStdio or
+// transportHTTP; any other value gets the HTTP rules.
 //
-// The Client stage drives negotiation with this function (and
-// classifyInitialize) instead of re-deriving the tables.
+// A DiscoverResult with a mutual modern version is modern; one naming
+// only handshake versions, or a result that does not parse, is legacy.
+// A recognized modern error (-32020, -32021, -32022) is modern; any
+// other JSON-RPC error is legacy. On stdio a probe timeout is legacy on
+// the same process, and an exit or EOF respawns once for initialize. On
+// HTTP only a 2xx body or the body of a 400/404/405 decides the era:
+// network errors, 401, 403, 408, 429 and 5xx are outages or auth
+// failures, and 406 and 415 are Thane's own bugs, so none is a verdict.
+//
+// negotiate drives the connection with this function and
+// classifyInitialize, so the rules live in one place.
 func classifyDiscover(transport string, resp *Response, err error) eraVerdict {
 	if err != nil {
 		return classifyDiscoverErr(transport, err)
@@ -101,14 +112,15 @@ func classifyDiscover(transport string, resp *Response, err error) eraVerdict {
 	}
 	var res discoverResult
 	if json.Unmarshal(resp.Result, &res) != nil || res.Capabilities == nil {
-		// Not a DiscoverResult: no modern evidence (A1).
+		// Not a DiscoverResult: no modern evidence, so legacy.
 		return initializeVerdict(handshakeOfferVersion)
 	}
 	if v, ok := highestMutualVersion(res.SupportedVersions, modernVersions); ok {
 		return eraVerdict{step: verdictModern, version: v, discover: &res}
 	}
 	// A discover-answering server that lists only handshake versions is
-	// a legacy advertisement (A1): initialize at the best of them.
+	// a legacy advertisement, since those versions are reachable only
+	// through initialize: initialize at the best of them.
 	if v, ok := highestMutualVersion(res.SupportedVersions, handshakeVersions); ok {
 		return initializeVerdict(v)
 	}
@@ -127,7 +139,8 @@ func classifyDiscoverErr(transport string, err error) eraVerdict {
 				return classifyDiscoverRPC(statusErr.RPC)
 			}
 			// An empty or non-JSON 400/404/405 is a legacy server
-			// rejecting an unknown method or missing session (H2).
+			// rejecting an unknown method or missing session
+			// (streamable-http "Backward Compatibility").
 			return initializeVerdict(handshakeOfferVersion)
 		case statusThaneBug:
 			return eraVerdict{step: verdictFail, err: err, thaneBug: true}
@@ -140,8 +153,9 @@ func classifyDiscoverErr(transport string, err error) eraVerdict {
 		case errors.Is(err, errConnectionLost), errors.Is(err, errUnreachable):
 			return eraVerdict{step: verdictRespawn, version: handshakeOfferVersion}
 		case errors.Is(err, context.DeadlineExceeded):
-			// S3: a probe timeout means legacy, on the same process. A
-			// slow modern server that answers late is recovered by A3.
+			// A probe timeout means legacy, on the same process. A slow
+			// modern server that answers discover late then answers
+			// initialize with -32022, which re-probes.
 			return initializeVerdict(handshakeOfferVersion)
 		}
 	}
@@ -150,7 +164,8 @@ func classifyDiscoverErr(transport string, err error) eraVerdict {
 
 // classifyDiscoverRPC classifies a JSON-RPC error answering discover.
 // Only the three modern-only codes are modern evidence; every other code
-// means legacy (S3 "MUST NOT key on a single code").
+// means legacy, because the stdio fallback "MUST NOT be keyed to one
+// specific error code".
 func classifyDiscoverRPC(rpcErr *RPCError) eraVerdict {
 	switch rpcErr.Code {
 	case codeUnsupportedProtocolVersion:
@@ -168,7 +183,10 @@ func classifyDiscoverRPC(rpcErr *RPCError) eraVerdict {
 	}
 }
 
-// classifyUnsupportedDiscover applies A2 to a -32022 answering discover.
+// classifyUnsupportedDiscover handles a -32022 answering discover: retry
+// discover at a mutual modern version in data.supported, else initialize
+// at a mutual handshake version, else fail naming the server's list. An
+// unparseable data falls back to initialize.
 func classifyUnsupportedDiscover(rpcErr *RPCError) eraVerdict {
 	supported, ok := parseSupportedVersions(rpcErr.Data)
 	if !ok {
@@ -183,8 +201,10 @@ func classifyUnsupportedDiscover(rpcErr *RPCError) eraVerdict {
 	return failVerdict(unsupportedVersionsErr(supported, rpcErr))
 }
 
-// classifyInitialize classifies the reply to initialize (critic S4/H3
-// with A3 and A11; DESIGN-AMENDMENTS AM-29).
+// classifyInitialize classifies the reply to the legacy initialize
+// handshake (2025-11-25 lifecycle.mdx "Version Negotiation"). A result
+// must name a handshake version Thane speaks; errors go to
+// classifyInitializeRPC.
 func classifyInitialize(resp *Response, err error) eraVerdict {
 	if err != nil {
 		return classifyInitializeErr(err)
@@ -224,8 +244,11 @@ func classifyInitializeErr(err error) eraVerdict {
 	}
 }
 
-// classifyInitializeRPC applies A3 (-32022 is modern evidence: re-probe)
-// and A11 (an error naming handshake versions: offer one of them).
+// classifyInitializeRPC classifies an error answering initialize. A
+// -32022 naming a modern version is modern evidence from a dual-era
+// server that already locked the connection to modern, so re-probe
+// discover. Any error whose data.supported names a handshake version
+// Thane speaks gets one re-offer of that version.
 func classifyInitializeRPC(rpcErr *RPCError) eraVerdict {
 	unsupported := rpcErr.Code == codeUnsupportedProtocolVersion
 	supported, ok := parseSupportedVersions(rpcErr.Data)

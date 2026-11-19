@@ -13,8 +13,8 @@ import (
 // End-to-end tests drive the real serverClient over the real stdio and
 // Streamable HTTP transports (e2e_stdio_test.go, e2e_http_test.go),
 // against helper-process and httptest fake servers. The unit tests of
-// each stage use scripted fakes for the other side; these prove the
-// pieces agree on the wire.
+// the client and of each transport use scripted fakes for the other
+// side; these prove the pieces agree on the wire.
 
 // e2eTWait bounds every wait in the end-to-end tests. Real processes
 // under -race start slowly, so it is generous.

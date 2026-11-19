@@ -391,7 +391,7 @@ func TestClient_CallToolSendsAnObject(t *testing.T) {
 	srv := clientTRunCall(t, clientTCallCase{wantText: "echo echo {}"})
 	for _, m := range srv.messages() {
 		if m.method == methodToolsCall && !strings.Contains(string(m.params), `"arguments":{}`) {
-			t.Errorf("nil arguments sent as %s, want {} (C7)", m.params)
+			t.Errorf("nil arguments sent as %s, want {}: the schema has arguments?: object, so strict servers reject null", m.params)
 		}
 	}
 }

@@ -161,7 +161,7 @@ func TestClient_ReconnectsAfterConnectionLoss(t *testing.T) {
 	if second == first || srv.spawns() != 2 {
 		t.Fatalf("spawns = %d, want a new connection", srv.spawns())
 	}
-	// The restarted server is re-initialized (C1/C16), skipping the probe
+	// The restarted server is re-initialized, skipping the probe
 	// because the era is known.
 	var methods []string
 	for _, m := range srv.last().sent() {
@@ -239,7 +239,7 @@ func TestClient_Probe(t *testing.T) {
 			}
 			time.Sleep(10 * time.Millisecond)
 			if cur, rerr := c.readyConn(); rerr != nil || cur != conn || srv.spawns() != 1 {
-				t.Error("a failed health check tore the connection down (C1/C17)")
+				t.Error("a failed health check tore the connection down")
 			}
 		})
 	}

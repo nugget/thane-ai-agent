@@ -10,7 +10,7 @@ import (
 )
 
 // These tests pin the behaviour of the "mcp-legacy" and "mcp-modern"
-// helper modes that other stages' tests run real Clients against.
+// helper modes that client and end-to-end tests run real Clients against.
 
 // stdioTRPCCode returns the error code of a call that must reach the
 // server, or 0 for a result.

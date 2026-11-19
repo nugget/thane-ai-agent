@@ -100,7 +100,7 @@ func clientTRunNeg(t *testing.T, tt clientTNegCase) {
 	}
 	for _, m := range srv.messages() {
 		if (m.method == methodDiscover || m.method == methodInitialize) && m.info.cancellable {
-			t.Errorf("%s was sent cancellable (A8)", m.method)
+			t.Errorf("%s was sent cancellable; negotiation requests are never cancelled", m.method)
 		}
 	}
 }
@@ -110,7 +110,8 @@ var (
 	clientTModernOnly     = []string{methodDiscover}
 )
 
-// TestNegotiate_StdioProbeOutcomes covers every critic S3 row.
+// TestNegotiate_StdioProbeOutcomes covers every stdio probe outcome:
+// modern results and errors, non-modern errors, timeout, and exit or EOF.
 func TestNegotiate_StdioProbeOutcomes(t *testing.T) {
 	disc := func(h clientTHandler) func() clientTRoutes {
 		return clientTOverride(clientTLegacyBase, map[string]clientTHandler{methodDiscover: h})
@@ -180,7 +181,8 @@ func TestNegotiate_StdioProbeOutcomes(t *testing.T) {
 	}
 }
 
-// TestNegotiate_HTTPProbeOutcomes covers every critic H2 row.
+// TestNegotiate_HTTPProbeOutcomes covers every HTTP probe outcome:
+// 2xx bodies, 400/404/405 bodies, and the statuses that are no verdict.
 func TestNegotiate_HTTPProbeOutcomes(t *testing.T) {
 	disc := func(h clientTHandler) func() clientTRoutes {
 		return clientTOverride(clientTLegacyBase, map[string]clientTHandler{methodDiscover: h})
@@ -247,7 +249,8 @@ func TestNegotiate_HTTPProbeOutcomes(t *testing.T) {
 	}
 }
 
-// TestNegotiate_InitializeOutcomes covers critic S4/H3 with A3 and A11.
+// TestNegotiate_InitializeOutcomes covers every reply to the legacy
+// initialize, including a -32022 re-probe and a one-time version re-offer.
 func TestNegotiate_InitializeOutcomes(t *testing.T) {
 	initWith := func(h clientTHandler) func() clientTRoutes {
 		return clientTOverride(clientTLegacyBase, map[string]clientTHandler{methodInitialize: h})
@@ -260,17 +263,17 @@ func TestNegotiate_InitializeOutcomes(t *testing.T) {
 			wantErrIs: errIncompatible, wantErrHas: `"1.0"`, wantCalls: []string{methodDiscover, methodInitialize}},
 		{name: "a modern version chosen in initialize fails", routes: initWith(clientTInitialize(modernProtocolVersion)),
 			wantErrIs: errIncompatible, wantCalls: []string{methodDiscover, methodInitialize}},
-		{name: "A3: -32022 to initialize re-probes discover",
+		{name: "-32022 to initialize re-probes discover",
 			routes: clientTOverride(clientTModernBase, map[string]clientTHandler{
 				methodDiscover: clientTSeq(clientTHang, clientTModernGuard(clientTReply(clientTOK(clientTModernResult), nil))),
 			}),
 			wantEra: eraModern, wantVer: modernProtocolVersion,
 			wantCalls: []string{methodDiscover, methodInitialize, methodDiscover}},
-		{name: "A11: an error naming a handshake version re-offers it once",
+		{name: "an error naming a handshake version re-offers it once",
 			routes:  initWith(clientTSeq(rpc(codeInvalidParams, `{"supported":["2024-11-05"]}`), clientTInitialize(""))),
 			wantEra: eraLegacy, wantVer: "2024-11-05",
 			wantCalls: []string{methodDiscover, methodInitialize, methodInitialize, methodInitialized}},
-		{name: "A11 is bounded to one re-offer", routes: initWith(rpc(codeInvalidParams, `{"supported":["2024-11-05"]}`)),
+		{name: "the re-offer is bounded to once", routes: initWith(rpc(codeInvalidParams, `{"supported":["2024-11-05"]}`)),
 			wantErrIs: errIncompatible, wantCalls: []string{methodDiscover, methodInitialize, methodInitialize}},
 		{name: "initialize error without versions fails", routes: initWith(rpc(-32603, "")),
 			wantErrHas: "initialize rejected", wantCalls: []string{methodDiscover, methodInitialize}},
@@ -417,7 +420,7 @@ func TestNegotiate_StdioProbeLeavesRoomForInitialize(t *testing.T) {
 	}
 }
 
-// TestNegotiate_LegacyFraming checks A4/A9/A12 on the wire: no modern
+// TestNegotiate_LegacyFraming checks legacy framing on the wire: no modern
 // _meta anywhere, initialize without the version header,
 // notifications/initialized before any other request, and the version
 // header afterwards only from 2025-06-18 on.
@@ -456,7 +459,7 @@ func TestNegotiate_LegacyFraming(t *testing.T) {
 				}
 				wantHeader := tt.wantHeader
 				if i == 0 {
-					wantHeader = "" // initialize never carries the version header (A4)
+					wantHeader = "" // initialize never carries the version header
 				}
 				if m.info.protocolVersion != wantHeader {
 					t.Errorf("%s protocolVersion = %q, want %q", m.method, m.info.protocolVersion, wantHeader)

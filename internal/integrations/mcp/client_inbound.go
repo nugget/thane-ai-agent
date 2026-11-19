@@ -38,7 +38,8 @@ func isThaneDecline(rpcErr *RPCError) bool {
 const serverLogCapBytes = 2048
 
 // hooksFor binds the inbound hooks of one transport to conn, so the
-// replies follow that connection's era (AM-33).
+// replies follow that connection's era, not whatever era a later
+// connection settles on.
 func (c *serverClient) hooksFor(conn *clientConn) transportHooks {
 	return transportHooks{
 		onRequest: func(ctx context.Context, req *Request) *Response {
@@ -50,7 +51,7 @@ func (c *serverClient) hooksFor(conn *clientConn) transportHooks {
 	}
 }
 
-// handleRequest answers a server-to-client request (critic A13).
+// handleRequest answers a server-to-client request.
 //
 // Legacy, or era not yet known (during the probe): every request gets a
 // reply. ping → {}; elicitation/create → -32602 (Thane declares no

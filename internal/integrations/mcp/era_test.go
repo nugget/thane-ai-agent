@@ -83,10 +83,10 @@ func TestProtocol_ClassifyDiscover(t *testing.T) {
 	stdioAndHTTP := []string{transportStdio, transportHTTP}
 
 	tests := []coreTVerdictCase{
-		// A1: a valid DiscoverResult with a mutual modern version.
+		// A valid DiscoverResult with a mutual modern version is modern.
 		{name: "valid modern result", resp: coreTResult(modernResult), step: verdictModern, version: modernProtocolVersion},
 		{name: "modern among handshake versions", resp: coreTResult(`{"supportedVersions":["2025-11-25","2026-07-28"],"capabilities":{}}`), step: verdictModern, version: modernProtocolVersion},
-		// A1: legacy advertisements and unparseable results.
+		// Legacy advertisements and unparseable results mean legacy.
 		{name: "only handshake versions", resp: coreTResult(`{"supportedVersions":["2025-11-25","2025-06-18"],"capabilities":{}}`), step: verdictInitialize, version: "2025-11-25"},
 		{name: "older handshake version only", resp: coreTResult(`{"supportedVersions":["2025-06-18"],"capabilities":{}}`), step: verdictInitialize, version: "2025-06-18"},
 		{name: "no known version", resp: coreTResult(`{"supportedVersions":["1999-01-01"],"capabilities":{}}`), step: verdictInitialize, version: handshakeOfferVersion},
@@ -101,7 +101,7 @@ func TestProtocol_ClassifyDiscover(t *testing.T) {
 		{name: "response with neither", resp: &Response{JSONRPC: jsonrpcVersion, ID: intID(1)}, step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "no response no error", step: verdictFail, errIs: errProtocol},
 
-		// S3: every non-modern JSON-RPC error code means legacy.
+		// Every non-modern JSON-RPC error code means legacy.
 		{name: "method not found", resp: coreTErrResp(codeMethodNotFound, ""), step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "invalid params", resp: coreTErrResp(codeInvalidParams, ""), step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "invalid request", resp: coreTErrResp(codeInvalidRequest, ""), step: verdictInitialize, version: handshakeOfferVersion},
@@ -111,7 +111,8 @@ func TestProtocol_ClassifyDiscover(t *testing.T) {
 		{name: "code zero", resp: coreTErrResp(0, ""), step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "unrelated data.supported is ignored", resp: coreTErrResp(codeInvalidParams, supportedModern), step: verdictInitialize, version: handshakeOfferVersion},
 
-		// A2: -32022.
+		// -32022 retries discover at a modern version, or initializes at a
+		// handshake version, from data.supported.
 		{name: "unsupported names modern", resp: coreTErrResp(codeUnsupportedProtocolVersion, supportedModern), step: verdictDiscover, version: modernProtocolVersion},
 		{name: "unsupported names modern and handshake", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["2026-07-28","2025-11-25"]}`), step: verdictDiscover, version: modernProtocolVersion},
 		{name: "unsupported names handshake only", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["2025-06-18","2024-11-05"]}`), step: verdictInitialize, version: "2025-06-18"},
@@ -152,7 +153,7 @@ func TestProtocol_ClassifyDiscover(t *testing.T) {
 	}
 
 	httpOnly := []coreTVerdictCase{
-		// H2 / A5-A7: only 400/404/405 bodies are era evidence.
+		// Only 400/404/405 bodies are era evidence.
 		{name: "400 without body", err: coreTStatus(400, nil), step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "404 without body", err: coreTStatus(404, nil), step: verdictInitialize, version: handshakeOfferVersion},
 		{name: "405 without body", err: coreTStatus(405, nil), step: verdictInitialize, version: handshakeOfferVersion},
@@ -191,9 +192,9 @@ func TestProtocol_ClassifyDiscover(t *testing.T) {
 	}
 
 	stdioOnly := []coreTVerdictCase{
-		// S3: a timeout is legacy on the same process.
+		// A timeout is legacy on the same process.
 		{name: "timeout", err: fmt.Errorf("%w", context.DeadlineExceeded), step: verdictInitialize, version: handshakeOfferVersion},
-		// A17: exit or EOF during the probe respawns once.
+		// Exit or EOF during the probe respawns once.
 		{name: "connection lost", err: fmt.Errorf("%w: %s", errConnectionLost, connLost), step: verdictRespawn, version: handshakeOfferVersion},
 		{name: "unreachable", err: fmt.Errorf("%w: process exited", errUnreachable), step: verdictRespawn, version: handshakeOfferVersion},
 		{name: "lost wins over timeout", err: fmt.Errorf("%w: %w", errConnectionLost, context.DeadlineExceeded), step: verdictRespawn, version: handshakeOfferVersion},
@@ -242,13 +243,13 @@ func TestProtocol_ClassifyInitialize(t *testing.T) {
 		{name: "array result", resp: coreTResult(`[]`), step: verdictFail, errIs: errProtocol},
 		{name: "no response", step: verdictFail, errIs: errProtocol},
 
-		// A3: -32022 is modern evidence.
+		// -32022 to initialize is modern evidence.
 		{name: "unsupported names modern", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["2026-07-28"],"requested":"2025-11-25"}`), step: verdictDiscover, version: modernProtocolVersion},
 		{name: "unsupported names both prefers modern", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["2025-06-18","2026-07-28"]}`), step: verdictDiscover, version: modernProtocolVersion},
 		{name: "unsupported names handshake", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["2025-06-18"]}`), step: verdictInitialize, version: "2025-06-18"},
 		{name: "unsupported disjoint", resp: coreTErrResp(codeUnsupportedProtocolVersion, `{"supported":["3000-01-01"]}`), step: verdictFail, errIs: errIncompatible, errHas: "3000-01-01"},
 		{name: "unsupported without data", resp: coreTErrResp(codeUnsupportedProtocolVersion, ""), step: verdictFail, errIs: errIncompatible},
-		// A11: an error naming handshake versions.
+		// Any error naming handshake versions re-offers one of them.
 		{name: "spec example -32602", resp: coreTErrResp(codeInvalidParams, `{"supported":["2024-11-05"],"requested":"1.0.0"}`), step: verdictInitialize, version: "2024-11-05"},
 		{name: "other code naming several", resp: coreTErrResp(-32000, `{"supported":["2025-03-26","2025-06-18"]}`), step: verdictInitialize, version: "2025-06-18"},
 		{name: "non -32022 naming only modern", resp: coreTErrResp(codeInvalidParams, `{"supported":["2026-07-28"]}`), step: verdictFail, errIs: errIncompatible},

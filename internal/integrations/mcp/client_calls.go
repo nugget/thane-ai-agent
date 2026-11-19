@@ -18,7 +18,7 @@ type toolSet struct {
 	ttl     time.Duration            // modern ttlMs (minimum across pages); 0 for legacy
 }
 
-// fetchTools runs a full paginated tools/list (AM-31). Pagination stops
+// fetchTools runs a full paginated tools/list. Pagination stops
 // only when nextCursor is absent or null ("" is a valid cursor), after
 // maxListPages pages, or when a cursor repeats. A -32601 to the first
 // page means the server offers no tools.
@@ -248,7 +248,7 @@ func (c *serverClient) offers(name string) bool {
 	return ok
 }
 
-// callTool invokes a tool by its raw MCP name (AM-32). Tool-reported
+// callTool invokes a tool by its raw MCP name. Tool-reported
 // failures return (toolResult{IsError: true}, nil). Every other failure
 // returns an error classified by errors.go classes.
 //
@@ -336,8 +336,9 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 			}
 			state = r.RequestState
 		default:
-			// Never an empty success (A18): "task" and anything else is
-			// a result type Thane did not ask for.
+			// Never an empty success: Thane advertises no extension, so
+			// "task" and any other non-core resultType is invalid
+			// (2026-07-28 basic/index.mdx "ResultType").
 			return toolResult{}, fmt.Errorf("%w: unsupported tools/call resultType %q", errProtocol, logText(r.ResultType))
 		}
 	}

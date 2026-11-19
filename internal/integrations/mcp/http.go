@@ -203,8 +203,8 @@ func httpVisibleASCII(v string) bool {
 }
 
 // Call POSTs req with a fresh integer ID and returns the matching
-// JSON-RPC response from the JSON body or SSE stream (DESIGN-AMENDMENTS
-// AM-11, AM-24 to AM-26). On a legacy cancellable call whose ctx ends
+// JSON-RPC response from the JSON body or SSE stream (streamable-http
+// "Sending Messages"). On a legacy cancellable call whose ctx ends
 // first, notifications/cancelled is POSTed before returning; modern
 // calls cancel only by aborting the POST.
 func (t *httpTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
@@ -334,8 +334,9 @@ func (t *httpTransport) closedErrLocked(what string) error {
 
 // latch records the protocol version for transport-originated POSTs
 // (DELETE). initialize resets the latch and the session: the handshake
-// never carries MCP-Protocol-Version or Mcp-Session-Id (critic A4), and
-// a discover probe's modern version must not leak onto a legacy session.
+// never carries MCP-Protocol-Version or Mcp-Session-Id, which 2025-11-25
+// defines only for requests after initialize, and a discover probe's
+// modern version must not leak onto a legacy session.
 func (t *httpTransport) latch(version string, isInit bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
