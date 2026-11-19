@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -462,12 +464,15 @@ func TestHTTP_SSEResponses(t *testing.T) {
 		{name: "ends without response", write: func(s *httpTStream, _ string) {
 			s.data(`{"jsonrpc":"2.0","method":"notifications/progress"}`)
 		}, wantErr: errConnectionLost},
-		{name: "other event types and ids are skipped", write: func(s *httpTStream, id string) {
+		{name: "other event types and unmatched responses are skipped", write: func(s *httpTStream, id string) {
 			s.raw("event: endpoint\ndata: /messages\n\n")
-			s.data(httpTResult(json.RawMessage(`12345`), `{"wrong":1}`))
+			s.data(`[` + httpTResult(json.RawMessage(`12344`), `{"wrong":1}`) + `,` + httpTResult(json.RawMessage(`12345`), `{"wrong":2}`) + `]`)
 			s.raw("id: 3\nretry: 100\ndata:\n\n")
 			s.data(httpTResult(json.RawMessage(id), `{"right":1}`))
 		}, want: `{"right":1}`},
+		{name: "only response with another id", write: func(s *httpTStream, _ string) {
+			s.data(httpTResult(json.RawMessage(`"zzz"`), `{"b":2}`))
+		}, want: `{"b":2}`},
 		{name: "batch event", write: func(s *httpTStream, id string) {
 			s.data(`[{"jsonrpc":"2.0","method":"notifications/progress"},` + httpTResult(json.RawMessage(id), `{"b":1}`) + `]`)
 		}, want: `{"b":1}`},
@@ -518,6 +523,71 @@ func TestHTTP_SSEStopsAtResponse(t *testing.T) {
 	}
 	if !<-aborted {
 		t.Fatal("stream was not aborted after the response")
+	}
+}
+
+// A lone response whose id does not match (here the request's id as a
+// string) still answers the call, as it would in a JSON body: the stream
+// belongs to this one request. The server keeps the stream open, so a
+// dropped response would hold the call until its deadline.
+func TestHTTP_SSELoneResponseWithOtherID(t *testing.T) {
+	aborted := make(chan bool, 1)
+	srv := httpTStart(t, func(w http.ResponseWriter, r *http.Request, m *wireMessage) {
+		httpTSSE(w).data(httpTResult(json.RawMessage(`"`+string(m.ID)+`"`), `{"s":1}`))
+		aborted <- httpTBlock(r)
+	})
+	logs := &coreTLogBuffer{}
+	tr, err := newHTTPTransport(t.Context(), httpConfig{url: srv.URL, logger: logs.logger()}, transportHooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close(context.Background())
+	ctx, cancel := context.WithTimeout(t.Context(), httpTWait/2)
+	defer cancel()
+	resp, err := tr.Call(ctx, &Request{Method: methodToolsCall}, callInfo{})
+	if resp = httpTMustResp(t, resp, err); string(resp.Result) != `{"s":1}` {
+		t.Fatalf("result = %s", resp.Result)
+	}
+	if !<-aborted {
+		t.Fatal("stream was not aborted after the response")
+	}
+	if !strings.Contains(logs.String(), "accepting the only response") {
+		t.Errorf("the id mismatch was not logged: %s", logs.String())
+	}
+}
+
+// An SSE response stream that the server ends a moment after the
+// response (as the spec says it SHOULD) leaves the HTTP/1.1 connection
+// reusable: the transport gives the stream a short time to end instead
+// of aborting it at once, which would close the connection.
+func TestHTTP_SSEEndedStreamReusesConnection(t *testing.T) {
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		msgs, err := decodeMessages(body)
+		if err != nil || len(msgs) != 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		httpTSSE(w).data(httpTResult(msgs[0].ID, `{}`))
+		time.Sleep(2 * time.Millisecond) // the end of the stream trails the event, as over a network
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+	tr := httpTNew(t, srv.URL, nil, transportHooks{})
+	const calls = 10
+	for range calls {
+		httpTCall(t, tr, &Request{Method: methodToolsCall}, callInfo{})
+	}
+	// One connection serves them all; a scheduling hiccup past the tail
+	// wait may cost one or two more. Aborting every stream costs one each.
+	if n := conns.Load(); n > 3 {
+		t.Errorf("%d calls used %d connections, want the connection reused", calls, n)
 	}
 }
 

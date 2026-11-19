@@ -8,8 +8,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 )
@@ -138,8 +138,13 @@ func (t *httpTransport) readJSON(ctx context.Context, hresp *http.Response, meth
 
 // readSSE reads an SSE response stream until the response that answers
 // id arrives, dispatching server requests and notifications on the way.
-// The stream is aborted (never drained) once the response is in, so a
-// server that keeps the stream open cannot hold the call.
+// Each event's data is matched like a JSON body (readJSON): the only
+// response in it answers the request even when its id differs, because
+// the stream belongs to this one request. Once the response is in, the
+// stream gets httpSSETailWait to end, which keeps the HTTP/1.1
+// connection reusable for a server that ends it promptly (the spec says
+// it SHOULD), and is then aborted, never drained, so a server that keeps
+// the stream open cannot hold the call.
 func (t *httpTransport) readSSE(ctx context.Context, hresp *http.Response, cancel context.CancelFunc, method string, id int64, rf httpFrame) (*Response, error) {
 	defer func() {
 		cancel()
@@ -168,22 +173,52 @@ func (t *httpTransport) readSSE(ctx context.Context, hresp *http.Response, cance
 		if err != nil {
 			return nil, fmt.Errorf("%w: http %s: malformed SSE message: %w", errProtocol, method, err)
 		}
-		var match *Response
-		for i := range msgs {
-			m := &msgs[i]
-			switch {
-			case m.kind() != kindResponse:
-				t.dispatch(m, rf)
-			case match == nil && httpAnswers(m, id):
-				match = m.response()
-			default:
-				t.logger.Debug("mcp: dropping unmatched response", "method", method)
-			}
-		}
-		if match != nil {
+		if match := t.matchSSE(msgs, method, id, rf); match != nil {
+			httpSSETail(hresp.Body, cancel)
 			return match, nil
 		}
 	}
+}
+
+// matchSSE dispatches the requests and notifications of one SSE event
+// and returns the response that answers id, if the event carries one: the
+// response with that id, else the event's only response. A lone response
+// with another id is accepted the way readJSON accepts it; the server
+// sends nothing else on this request's stream, and Thane never batches.
+func (t *httpTransport) matchSSE(msgs []wireMessage, method string, id int64, rf httpFrame) *Response {
+	responses := 0
+	for i := range msgs {
+		if msgs[i].kind() == kindResponse {
+			responses++
+		}
+	}
+	var match *Response
+	for i := range msgs {
+		m := &msgs[i]
+		switch {
+		case m.kind() != kindResponse:
+			t.dispatch(m, rf)
+		case match == nil && httpAnswers(m, id):
+			match = m.response()
+		case match == nil && responses == 1:
+			t.logger.Debug("mcp: accepting the only response on the request's stream although its id does not match", "method", method)
+			match = m.response()
+		default:
+			t.logger.Debug("mcp: dropping unmatched response", "method", method)
+		}
+	}
+	return match
+}
+
+// httpSSETail gives a response stream httpSSETailWait to end after the
+// matching event, reading at most httpDrainLimit more bytes, then lets
+// the caller abort it. A stream that reached EOF has already returned its
+// connection to the pool, so the later abort is harmless. The bytes are
+// discarded, so reading underneath the SSE parser's buffer is fine.
+func httpSSETail(body io.Reader, abort context.CancelFunc) {
+	timer := time.AfterFunc(httpSSETailWait, abort)
+	defer timer.Stop()
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, httpDrainLimit))
 }
 
 // dispatch hands an inbound request or notification to the hooks.
@@ -280,11 +315,7 @@ func (t *httpTransport) logRefusedRedirect(hresp *http.Response, err error) {
 	if hresp == nil || !errors.Is(err, errProtocol) {
 		return
 	}
-	loc := "(unparseable)"
-	if u, perr := url.Parse(hresp.Header.Get(httpHeaderLocation)); perr == nil {
-		u.RawQuery, u.Fragment, u.User = "", "", nil
-		loc = u.String()
-	}
+	loc := httpRedactURL(hresp.Header.Get(httpHeaderLocation))
 	t.logger.Warn("mcp: refused HTTP redirect; set url to the final MCP endpoint (only 307/308 to the same host are followed)",
 		"status", hresp.StatusCode, "location", truncateUTF8(loc, 512))
 }

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -109,8 +110,12 @@ func TestHTTP_RedirectRefused(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer tr.Close(t.Context())
-			if _, err := tr.Call(t.Context(), &Request{Method: methodToolsCall}, callInfo{}); !errors.Is(err, errProtocol) {
+			_, err = tr.Call(t.Context(), &Request{Method: methodToolsCall}, callInfo{})
+			if !errors.Is(err, errProtocol) {
 				t.Fatalf("Call err = %v, want errProtocol", err)
+			}
+			if strings.Contains(err.Error(), "secret") {
+				t.Errorf("error text leaks the Location query: %v", err)
 			}
 			if err := tr.Notify(t.Context(), &Notification{Method: methodInitialized}, callInfo{}); !errors.Is(err, errProtocol) {
 				t.Fatalf("Notify err = %v, want errProtocol", err)
@@ -127,4 +132,82 @@ func TestHTTP_RedirectRefused(t *testing.T) {
 	if n := len(other.requests("")); n != 0 {
 		t.Fatalf("cross-origin server received %d requests", n)
 	}
+}
+
+// httpTSecretURL is a server URL carrying credentials in its userinfo,
+// query and fragment.
+func httpTSecretURL(hostport string) string {
+	return "http://alice:pw@" + hostport + "/mcp?api_key=SECRET123#frag"
+}
+
+// httpTAssertRedacted fails when text carries any part of httpTSecretURL
+// that may hold credentials.
+func httpTAssertRedacted(t *testing.T, what, text string) {
+	t.Helper()
+	for _, leak := range []string{"SECRET123", "api_key", "alice", "***", "frag"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("%s carries %q: %s", what, leak, text)
+		}
+	}
+}
+
+// Transport errors, and the logs built from them, never carry the
+// configured URL's query, fragment or userinfo: operators keep API keys
+// there, and these texts reach the WARN logs and health views.
+func TestHTTP_ErrorsRedactURL(t *testing.T) {
+	t.Run("round trip error", func(t *testing.T) {
+		raw := &url.Error{Op: "Post", URL: httpTSecretURL("mcp.example"),
+			Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+		err := httpRoundTripError(t.Context(), false, methodToolsCall, raw)
+		if !errors.Is(err, errUnreachable) {
+			t.Fatalf("err = %v, want errUnreachable", err)
+		}
+		httpTAssertRedacted(t, "error", err.Error())
+		if !strings.Contains(err.Error(), "http://mcp.example/mcp") {
+			t.Errorf("error lost the redacted URL: %v", err)
+		}
+	})
+	t.Run("unparseable URL", func(t *testing.T) {
+		raw := &url.Error{Op: "Post", URL: "http://h/%zz?api_key=SECRET123", Err: errors.New("broken")}
+		httpTAssertRedacted(t, "error", httpRoundTripError(t.Context(), false, methodToolsCall, raw).Error())
+	})
+	t.Run("unreachable server", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := l.Addr().String()
+		_ = l.Close()
+		tr := httpTNew(t, httpTSecretURL(addr), nil, transportHooks{})
+		_, err = tr.Call(t.Context(), &Request{Method: methodDiscover}, callInfo{})
+		if !errors.Is(err, errUnreachable) {
+			t.Fatalf("Call err = %v, want errUnreachable", err)
+		}
+		httpTAssertRedacted(t, "Call error", err.Error())
+		err = tr.Notify(t.Context(), &Notification{Method: methodInitialized}, callInfo{})
+		if !errors.Is(err, errUnreachable) {
+			t.Fatalf("Notify err = %v, want errUnreachable", err)
+		}
+		httpTAssertRedacted(t, "Notify error", err.Error())
+	})
+	t.Run("session DELETE log", func(t *testing.T) {
+		srv := httpTStart(t, func(w http.ResponseWriter, _ *http.Request, m *wireMessage) {
+			w.Header().Set(httpHeaderSessionID, "sess-1")
+			httpTJSON(w, http.StatusOK, httpTResult(m.ID, httpTInitResult))
+		})
+		logs := &coreTLogBuffer{}
+		u, _ := url.Parse(srv.URL)
+		tr, err := newHTTPTransport(t.Context(), httpConfig{url: httpTSecretURL(u.Host), logger: logs.logger()}, transportHooks{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpTCall(t, tr, &Request{Method: methodInitialize}, callInfo{})
+		srv.Close()
+		_ = tr.Close(t.Context())
+		out := logs.String()
+		if !strings.Contains(out, "ending HTTP session failed") {
+			t.Fatalf("DELETE failure not logged: %s", out)
+		}
+		httpTAssertRedacted(t, "log", out)
+	})
 }

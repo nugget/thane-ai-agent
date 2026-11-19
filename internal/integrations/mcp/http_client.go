@@ -106,7 +106,9 @@ func httpEffectivePort(u *url.URL) string {
 
 // httpRoundTripError classifies an error from http.Client.Do (or from
 // reading a response body). ctx is the caller's ctx; life reports
-// whether the transport was closed meanwhile.
+// whether the transport was closed meanwhile. The URL in err is
+// redacted (httpRedact) first, so neither the returned text nor a log
+// line built from it carries credentials kept in the configured URL.
 //
 //   - caller ctx done: wraps ctx.Err() (DeadlineExceeded / Canceled);
 //   - refused redirect: errProtocol;
@@ -116,6 +118,7 @@ func httpEffectivePort(u *url.URL) string {
 //   - anything else (reset, EOF, broken stream): errConnectionLost
 //     (outcome unknown).
 func httpRoundTripError(ctx context.Context, lifeDone bool, method string, err error) error {
+	err = httpRedact(err)
 	switch {
 	case ctx.Err() != nil:
 		return fmt.Errorf("mcp: http %s: %w", method, ctx.Err())
@@ -162,4 +165,29 @@ func httpNotDelivered(err error) bool {
 		invalidErr  x509.CertificateInvalidError
 	)
 	return errors.As(err, &unknownAuth) || errors.As(err, &hostErr) || errors.As(err, &invalidErr)
+}
+
+// httpRedact strips the query, fragment and userinfo from the URL of the
+// *url.Error in err's chain, which http.Client.Do puts in its error text
+// (net/http masks only the password). Operators often keep an API key in
+// the query string. The *url.Error is the one Do built for this request,
+// so it is edited in place and the chain errors.Is and errors.As walk
+// stays intact.
+func httpRedact(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = httpRedactURL(ue.URL)
+	}
+	return err
+}
+
+// httpRedactURL returns raw without its query, fragment and userinfo, or
+// a placeholder when raw does not parse.
+func httpRedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(unparseable)"
+	}
+	u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
+	return u.String()
 }

@@ -44,6 +44,11 @@ const (
 	httpLogBodyCap = 1 << 10
 	// httpDrainLimit bounds draining a finished body for connection reuse.
 	httpDrainLimit = 4096
+	// httpSSETailWait is how long an SSE response stream may take to end
+	// after the matching response before it is aborted. Ending it lets
+	// net/http reuse the connection; the wait is short so a stream the
+	// server keeps open never holds the call.
+	httpSSETailWait = 50 * time.Millisecond
 	// httpDeleteTimeout caps the session DELETE sent by Close.
 	httpDeleteTimeout = 5 * time.Second
 )
@@ -462,7 +467,7 @@ func (t *httpTransport) deleteSession(ctx context.Context, version string) {
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
-		t.logger.Debug("mcp: ending HTTP session failed", "error", err)
+		t.logger.Debug("mcp: ending HTTP session failed", "error", httpRedact(err))
 		return
 	}
 	httpDrain(resp)
