@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -201,7 +203,9 @@ func (b *serverBridge) bridgeOne(def toolDefinition) bridgedTool {
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			res, err := client.callTool(ctx, raw, args)
 			if err != nil {
-				return "", modelFacingCallError(name, err)
+				modelErr := modelFacingCallError(name, err)
+				b.logCallStatus(name, err, modelErr)
+				return "", modelErr
 			}
 			if res.IsError {
 				return "", modelFacingToolError(name, res.Text)
@@ -214,6 +218,28 @@ func (b *serverBridge) bridgeOne(def toolDefinition) bridgedTool {
 		params = nil
 	}
 	return bridgedTool{raw: raw, tool: tool, fp: desc + "\x00" + string(params)}
+}
+
+// logCallStatus logs the HTTP status details of a failed call (the
+// WWW-Authenticate header and body, which the model never sees) once per
+// status class: at WARN when the operator has to act, because
+// credentials were refused or the model was told the details are in the
+// logs; at Debug otherwise.
+func (b *serverBridge) logCallStatus(tool string, err, modelErr error) {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		return
+	}
+	const msg = "mcp: tool call failed with an HTTP error status"
+	args := append([]any{"tool", tool, "error", err}, httpStatusLogArgs(err)...)
+	class := classifyStatus(statusErr.Status)
+	var mfe *promptfmt.ModelFacingError
+	unusable := errors.As(modelErr, &mfe) && mfe.Text == textUnusable
+	if class != statusAuth && !unusable {
+		b.logger.Debug(msg, args...)
+		return
+	}
+	b.logOnce(slog.LevelWarn, "call-status:"+class.String(), msg, args...)
 }
 
 // description picks the operator override, else the server's text

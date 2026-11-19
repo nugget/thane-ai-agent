@@ -42,8 +42,11 @@ func (m *Manager) rebuild() {
 //
 //   - a name registered at Start by the same server is left to the
 //     registry unless its definition drifted, in which case the new
-//     definition is included under the same name (the main loop sees
-//     it; delegates keep the boot-time one);
+//     definition is included under the same name. Runs use it: the
+//     main loop and any delegate whose tags cover it, since delegates
+//     run through the same loop. Only delegate model routing (its tool
+//     count) and capability views such as tag_inspect still reflect the
+//     startup registry;
 //   - a name the registry already holds for anything else (a native
 //     tool, another server's static tool) always wins over the overlay;
 //   - among overlay tools the first claim to a name wins.
@@ -74,7 +77,7 @@ func (m *Manager) rebuildLocked() {
 					continue
 				}
 				s.bridge.logOnce(slog.LevelInfo, "drift:"+bt.raw+":"+fingerprintKey(bt.fp),
-					"mcp: tool definition changed after startup; the main loop uses the new definition, delegates keep the startup one",
+					"mcp: tool definition changed after startup; runs use the new definition",
 					"tool", name)
 			} else if _, taken := m.reserved[name]; taken {
 				m.logCollision(s, bt)

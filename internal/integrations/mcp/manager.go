@@ -49,8 +49,9 @@ type ToolOverride struct {
 // process. Each server has a supervisor that connects, negotiates the
 // protocol era, lists tools and reconnects in the background. Tools of
 // servers ready at Start are registered on the shared registry; tools
-// that appear later (a late server, a changed list) reach the main loop
-// through Snapshot, the agent.DynamicToolSource overlay.
+// that appear later (a late server, a changed list) reach agent runs
+// through Snapshot, the agent.DynamicToolSource overlay: the main loop
+// and any delegate whose tags cover them.
 type Manager struct {
 	logger    *slog.Logger
 	servers   []*managedServer // config order
@@ -184,14 +185,19 @@ func (m *Manager) factoryFor(cfg ServerConfig, logger *slog.Logger) transportFac
 	}
 }
 
-// Start connects every server in parallel (ctx is the lifetime ctx:
-// cancelling it stops all supervisors), waits until each first attempt
-// has finished or the boot cap has elapsed, then registers the tools of
-// servers that have a tool list on reg, serially, in config order and
-// then sorted by raw tool name. reg is never written after Start
-// returns; later changes reach the main loop through Snapshot. Call
-// Start once.
+// Start connects every server in parallel, waits until each first
+// attempt has finished, the boot cap has elapsed or ctx is done, then
+// registers the tools of servers that have a tool list on reg, serially,
+// in config order and then sorted by raw tool name. reg is never written
+// after Start returns; later changes reach agent runs through Snapshot.
+// Call Start once.
+//
+// The supervisors keep ctx's values but not its cancellation: only
+// Close stops them. Shutdown cancels the app ctx before draining
+// in-flight requests, and those requests may still be waiting on MCP
+// tool calls.
 func (m *Manager) Start(ctx context.Context, reg *tools.Registry) {
+	life := context.WithoutCancel(ctx)
 	for _, s := range m.servers {
 		cc := clientConfig{
 			name:           s.cfg.Name,
@@ -205,7 +211,7 @@ func (m *Manager) Start(ctx context.Context, reg *tools.Registry) {
 		if m.tuneClients != nil {
 			m.tuneClients(&cc)
 		}
-		s.client = newServerClient(ctx, cc, m.factoryFor(s.cfg, s.logger))
+		s.client = newServerClient(life, cc, m.factoryFor(s.cfg, s.logger))
 		s.bridge = newServerBridge(s.cfg, s.client, s.logger)
 	}
 	for _, s := range m.servers {
@@ -269,15 +275,51 @@ func (m *Manager) logCollision(s *managedServer, bt bridgedTool) {
 		"tool", bt.tool.Name, "raw_tool", logText(bt.raw))
 }
 
+// Probe errors. Their text is fixed because it is shown in health
+// views (connwatch, system_health, the metacognitive panel): it never
+// carries a URL, host or server-authored text. The full error is
+// logged at Debug.
+var (
+	errProbeUnreachable  = errors.New("mcp: not connected: unreachable")
+	errProbeAuth         = errors.New("mcp: not connected: credentials refused")
+	errProbeIncompatible = errors.New("mcp: not connected: protocol incompatible")
+	errProbeTimeout      = errors.New("mcp: health check timed out")
+	errProbeNotConnected = errors.New("mcp: not connected")
+)
+
 // Probe is the connwatch health check for one server: an era-correct
 // ping or discover while connected, the last connect error otherwise.
-// A failed probe never tears a connection down.
+// A failed probe never tears a connection down. A failure is reported as
+// one of the fixed errProbe* errors.
 func (m *Manager) Probe(ctx context.Context, server string) error {
 	s, ok := m.byName[server]
 	if !ok || s.client == nil {
 		return fmt.Errorf("mcp: no started server named %q", server)
 	}
-	return s.client.probe(ctx)
+	err := s.client.probe(ctx)
+	if err == nil {
+		return nil
+	}
+	s.logger.Debug("mcp: health check failed", append([]any{"error", err}, httpStatusLogArgs(err)...)...)
+	return probeError(err)
+}
+
+// probeError maps a probe failure to its fixed health-view error.
+func probeError(err error) error {
+	var statusErr *httpStatusError
+	switch {
+	case errors.As(err, &statusErr) && classifyStatus(statusErr.Status) == statusAuth:
+		return errProbeAuth
+	case errors.Is(err, errIncompatible), errors.Is(err, errProtocol):
+		return errProbeIncompatible
+	case errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, errNotReady):
+		return errProbeTimeout
+	case errors.Is(err, errUnreachable), errors.Is(err, errConnectionLost),
+		errors.Is(err, context.DeadlineExceeded):
+		return errProbeUnreachable
+	default:
+		return errProbeNotConnected
+	}
 }
 
 // Close stops every server in parallel, bounded by ctx. Idempotent.

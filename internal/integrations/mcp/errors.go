@@ -42,6 +42,32 @@ func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("mcp: http status %d", e.Status)
 }
 
+// httpStatusLogArgs returns slog attributes for the HTTP status error in
+// err's chain: the status, and the cleaned, capped WWW-Authenticate
+// header and body, which say why credentials or a request were refused.
+// They are for operator logs only: Error() leaves them out, so they
+// never reach the model or health views. nil when err carries no HTTP
+// status.
+func httpStatusLogArgs(err error) []any {
+	var se *httpStatusError
+	if !errors.As(err, &se) {
+		return nil
+	}
+	args := []any{"http_status", se.Status}
+	if v := httpLogText(se.WWWAuthenticate); v != "" {
+		args = append(args, "www_authenticate", v)
+	}
+	if v := httpLogText(se.Body); v != "" {
+		args = append(args, "http_body", v)
+	}
+	return args
+}
+
+// httpLogText cleans server-authored HTTP text for a log attribute.
+func httpLogText(s string) string {
+	return truncateUTF8(cleanServerText(s), httpLogBodyCap)
+}
+
 // Unwrap exposes RPC to errors.As (so a modern 400 + -32602 classifies
 // as invalid params). Returns a nil interface, never a typed nil.
 func (e *httpStatusError) Unwrap() error {
@@ -108,8 +134,9 @@ const serverTextCapBytes = 2048
 // Fixed model-facing wording (DESIGN-AMENDMENTS AM-34). Thane-authored
 // text never carries a URL, host, header value or HTTP body.
 const (
-	reasonToolGone    = "its MCP server no longer offers this tool; use another tool"
-	reasonUnreachable = "its MCP server is not reachable right now; Thane keeps retrying the connection in the background. Use another tool, or try this one again later"
+	reasonToolGone     = "its MCP server no longer offers this tool; use another tool"
+	reasonShuttingDown = "Thane is shutting down, so this MCP tool is unavailable; use another tool or finish without it"
+	reasonUnreachable  = "its MCP server is not reachable right now; Thane keeps retrying the connection in the background. Use another tool, or try this one again later"
 
 	textInputRequired = "This MCP tool needs interactive input from a person, which Thane cannot provide through tool calls. Use another tool, or ask the user to do this step directly."
 	textAuth          = "The MCP server refused Thane's credentials. Only the operator can fix this; use another tool, or tell the user this integration needs its credentials updated."
@@ -143,6 +170,9 @@ func modelFacingCallError(tool string, err error) error {
 	}
 	if errors.Is(err, errToolGone) {
 		return tools.ErrUnavailable{Tool: tool, Reason: reasonToolGone}
+	}
+	if errors.Is(err, errClientClosed) {
+		return tools.ErrUnavailable{Tool: tool, Reason: reasonShuttingDown}
 	}
 	if errors.Is(err, errNotReady) || errors.Is(err, errUnreachable) || errors.Is(err, errSessionExpired) {
 		return tools.ErrUnavailable{Tool: tool, Reason: reasonUnreachable}
