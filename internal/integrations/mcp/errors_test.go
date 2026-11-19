@@ -122,6 +122,11 @@ func TestErrors_ModelFacingCallError(t *testing.T) {
 	const tool = "mcp_weather_get"
 	rpcInvalid := &RPCError{Code: codeInvalidParams, Message: "region must be one of us, eu"}
 	rpcOther := &RPCError{Code: -32603, Message: "database offline"}
+	rpcCapability := &RPCError{
+		Code:    codeMissingClientCapability,
+		Message: "Client did not declare the form elicitation capability required by resolver '__main__:ask_confirm'",
+		Data:    []byte(`{"requiredCapabilities":{"elicitation":{"form":{}}}}`),
+	}
 
 	tests := []struct {
 		name        string
@@ -136,6 +141,14 @@ func TestErrors_ModelFacingCallError(t *testing.T) {
 		{name: "unreachable", err: fmt.Errorf("%w: connection refused", errUnreachable), unavailable: reasonUnreachable},
 		{name: "session expired", err: fmt.Errorf("%w: %w", errSessionExpired, &httpStatusError{Status: 404}), unavailable: reasonUnreachable},
 		{name: "input required", err: errInputRequired, text: textInputRequired},
+		{
+			name: "relayed decline beats invalid params",
+			err: fmt.Errorf("%w: tool x: the server relayed Thane's refusal: %w", errInputRequired,
+				&RPCError{Code: codeInvalidParams, Message: declineElicitation}),
+			text: textInputRequired,
+		},
+		{name: "missing client capability", err: fmt.Errorf("mcp: tools/call x: %w", rpcCapability), text: textInputRequired},
+		{name: "400 carrying missing client capability", err: &httpStatusError{Status: 400, RPC: rpcCapability}, text: textInputRequired},
 		{name: "401", err: &httpStatusError{Status: 401, WWWAuthenticate: `Bearer error="invalid_token"`}, text: textAuth},
 		{name: "403 with rpc invalid params", err: &httpStatusError{Status: 403, RPC: rpcInvalid}, text: textAuth},
 		{name: "408", err: &httpStatusError{Status: 408}, text: textTransient},
@@ -237,6 +250,8 @@ func TestErrors_ModelTextNeverLeaksTransportDetails(t *testing.T) {
 		status(502, cleanRPC(-32603)),
 		status(400, cleanRPC(codeInvalidParams)),
 		status(400, cleanRPC(codeHeaderMismatch)),
+		status(400, cleanRPC(codeMissingClientCapability)),
+		fmt.Errorf("%s: %w", leaky, cleanRPC(codeMissingClientCapability)),
 		status(400, nil),
 		status(404, nil),
 		status(418, nil),
@@ -276,9 +291,21 @@ func TestErrors_ModelFacingToolError(t *testing.T) {
 		t.Errorf("Err = %q, want tool name and message for logs", mfe.Err)
 	}
 
-	empty := modelFacingToolError("t", " \x00\n ")
-	if text, _ := promptfmt.ModelFacingText(empty); text != leadToolError+" "+tailToolError {
-		t.Errorf("empty server text: %q", text)
+	for _, noMessage := range []string{"", " \x00\n ", emptyResultText, "\n" + emptyResultText + " "} {
+		err := modelFacingToolError("mcp_gh_issue_read", noMessage)
+		text, _ := promptfmt.ModelFacingText(err)
+		if text != textToolErrorNoMessage {
+			t.Errorf("server text %q: model text = %q, want textToolErrorNoMessage", noMessage, text)
+		}
+		var mfe *promptfmt.ModelFacingError
+		if errors.As(err, &mfe) && !strings.Contains(mfe.Err.Error(), "mcp_gh_issue_read") {
+			t.Errorf("log error %q does not name the tool", mfe.Err)
+		}
+	}
+	for _, phrase := range []string{strings.TrimSpace(serverBlockOpen), "based on that message"} {
+		if strings.Contains(textToolErrorNoMessage, phrase) {
+			t.Errorf("textToolErrorNoMessage contains %q, which points at a message that does not exist", phrase)
+		}
 	}
 
 	long := modelFacingToolError("t", strings.Repeat("é", 3000))
@@ -289,6 +316,23 @@ func TestErrors_ModelFacingToolError(t *testing.T) {
 	}
 	if len(mfe.Err.Error()) > serverTextCapBytes+100 {
 		t.Errorf("log error is not capped: %d bytes", len(mfe.Err.Error()))
+	}
+}
+
+// TestErrors_InputRequiredTextTeachesNoArgumentChange covers the text
+// for a tool that needs a client feature Thane does not offer: changing
+// the arguments cannot help, so it must not suggest that, and the -32021
+// mapping must not quote the server's message.
+func TestErrors_InputRequiredTextTeachesNoArgumentChange(t *testing.T) {
+	for _, phrase := range []string{"Change the request", "Change the arguments", "Adjust the arguments"} {
+		if strings.Contains(textInputRequired, phrase) {
+			t.Errorf("textInputRequired contains %q", phrase)
+		}
+	}
+	err := &httpStatusError{Status: 400, RPC: &RPCError{Code: codeMissingClientCapability, Message: "resolver '__main__:secret' needs elicitation"}}
+	text, _ := coreTModelText(t, modelFacingCallError("mcp_py_delete_thing", err))
+	if strings.Contains(text, "resolver") || strings.Contains(text, serverBlockOpen) {
+		t.Errorf("model text quotes the server's message:\n%s", text)
 	}
 }
 

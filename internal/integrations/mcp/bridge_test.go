@@ -273,10 +273,13 @@ func TestBridge_SkipsToolWithOversizedSchema(t *testing.T) {
 func TestBridge_HandlerRoutesThroughClient(t *testing.T) {
 	t.Parallel()
 	srv := &clientTFakeServer{}
-	routes := clientTLegacyRoutes("", clientTTool("echo"), clientTTool("fail"))
+	routes := clientTLegacyRoutes("", clientTTool("echo"), clientTTool("fail"), clientTTool("silent"))
 	routes[methodToolsCall] = clientTLegacyGuard(func(ctx2 context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
 		if strings.Contains(string(req.Params), `"fail"`) {
 			return clientTOK(`{"content":[{"type":"text","text":"bad input: use a number"}],"isError":true}`), nil
+		}
+		if strings.Contains(string(req.Params), `"silent"`) {
+			return clientTOK(`{"content":[],"isError":true}`), nil
 		}
 		return clientTEcho(ctx2, tr, req, info)
 	})
@@ -285,7 +288,7 @@ func TestBridge_HandlerRoutesThroughClient(t *testing.T) {
 	b := newServerBridge(ServerConfig{Name: "fake"}, c, coreTLogger(t))
 
 	// Not connected yet: unavailable, not an illegal-tool error.
-	bts := b.bridge(wireTDefs("echo", "fail"))
+	bts := b.bridge(wireTDefs("echo", "fail", "silent"))
 	_, err := bts[0].tool.Handler(t.Context(), map[string]any{"text": "hi"})
 	var unavailable tools.ErrUnavailable
 	if !errors.As(err, &unavailable) || unavailable.Tool != "mcp_fake_echo" {
@@ -302,6 +305,10 @@ func TestBridge_HandlerRoutesThroughClient(t *testing.T) {
 	var mf *promptfmt.ModelFacingError
 	if !errors.As(err, &mf) || !strings.Contains(mf.Text, "bad input: use a number") || !strings.Contains(mf.Text, leadToolError) {
 		t.Fatalf("isError result = %v, want a model-facing tool error quoting the server", err)
+	}
+	_, err = bts[2].tool.Handler(t.Context(), nil)
+	if !errors.As(err, &mf) || mf.Text != textToolErrorNoMessage {
+		t.Fatalf("isError result without content = %v, want textToolErrorNoMessage", err)
 	}
 }
 

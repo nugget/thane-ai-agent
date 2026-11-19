@@ -77,9 +77,9 @@ func (e *httpStatusError) Unwrap() error {
 	return e.RPC
 }
 
-// statusClass groups HTTP status codes by what they say about a server
-// (critic A5/H2): only 2xx bodies and 400/404/405 bodies are evidence of
-// the protocol era; the other classes are never era verdicts.
+// statusClass groups HTTP status codes by what they say about a server:
+// only 2xx bodies and 400/404/405 bodies are evidence of the protocol
+// era; the other classes are never era verdicts.
 type statusClass int
 
 const (
@@ -131,20 +131,34 @@ func classifyStatus(code int) statusClass {
 // model-facing error (isError text, JSON-RPC error messages).
 const serverTextCapBytes = 2048
 
-// Fixed model-facing wording (DESIGN-AMENDMENTS AM-34). Thane-authored
-// text never carries a URL, host, header value or HTTP body.
+// Fixed model-facing wording. Thane-authored text never carries a URL,
+// host, header value or HTTP body.
+//
+// textInputRequired covers every tool that needs something from the
+// client that Thane does not offer MCP servers. A conforming server
+// answers -32021 MissingRequiredClientCapability (2026-07-28 spec,
+// basic overview, "_meta": a server must not rely on capabilities the
+// client did not declare); a legacy server may ask for elicitation
+// anyway and relay Thane's decline; a modern one may return
+// inputRequests. No argument change helps, so the text says so, and it
+// names no single kind of input.
+//
+// textToolErrorNoMessage replaces the server-message frame when an
+// isError result carries no text: there is no message to quote or to
+// adjust the arguments by.
 const (
 	reasonToolGone     = "its MCP server no longer offers this tool; use another tool"
 	reasonShuttingDown = "Thane is shutting down, so this MCP tool is unavailable; use another tool or finish without it"
 	reasonUnreachable  = "its MCP server is not reachable right now; Thane keeps retrying the connection in the background. Use another tool, or try this one again later"
 
-	textInputRequired = "This MCP tool needs interactive input from a person, which Thane cannot provide through tool calls. Use another tool, or ask the user to do this step directly."
-	textAuth          = "The MCP server refused Thane's credentials. Only the operator can fix this; use another tool, or tell the user this integration needs its credentials updated."
-	textTransient     = "The MCP server reported a temporary failure. Use another tool, or try this one again later."
-	textConnLost      = "The connection to the MCP server broke during the call, so the outcome is unknown. Thane is reconnecting in the background. If this tool changes state, check the current state before calling it again."
-	textDeadline      = "The MCP server did not answer before the time limit, so the outcome is unknown. If this tool changes state, check the current state before calling it again; otherwise narrow the request or use another tool."
-	textCanceled      = "The MCP tool call was cancelled before it finished, so the outcome is unknown. If this tool changes state, check the current state before calling it again."
-	textUnusable      = "The MCP server sent a response Thane could not use. Use another tool; the operator can see the details in Thane's logs."
+	textInputRequired      = "This MCP tool needs something Thane does not provide to MCP servers (such as asking a person for input, sampling or roots), so it cannot run through Thane. Changing the arguments will not help. Use another tool, or ask the user to do this step directly."
+	textToolErrorNoMessage = "The MCP tool reported a failure without saying why. Check the arguments against the tool's parameters, or use another tool."
+	textAuth               = "The MCP server refused Thane's credentials. Only the operator can fix this; use another tool, or tell the user this integration needs its credentials updated."
+	textTransient          = "The MCP server reported a temporary failure. Use another tool, or try this one again later."
+	textConnLost           = "The connection to the MCP server broke during the call, so the outcome is unknown. Thane is reconnecting in the background. If this tool changes state, check the current state before calling it again."
+	textDeadline           = "The MCP server did not answer before the time limit, so the outcome is unknown. If this tool changes state, check the current state before calling it again; otherwise narrow the request or use another tool."
+	textCanceled           = "The MCP tool call was cancelled before it finished, so the outcome is unknown. If this tool changes state, check the current state before calling it again."
+	textUnusable           = "The MCP server sent a response Thane could not use. Use another tool; the operator can see the details in Thane's logs."
 
 	leadInvalidParams = "The MCP server rejected the arguments."
 	tailInvalidParams = "Change the arguments to match the tool's parameters and call again."
@@ -162,8 +176,9 @@ const (
 // only two shapes a bridged handler may return: tools.ErrUnavailable
 // (fixed Reason) or *promptfmt.ModelFacingError (fixed words, plus
 // framed and capped server-authored text where the class allows it).
-// Err keeps the original error for logs. Classes are checked in the
-// AM-34 order; the first match wins. A nil err returns nil.
+// Err keeps the original error for logs. Classes are checked in a fixed
+// order, most specific first; the first match wins. A nil err returns
+// nil.
 func modelFacingCallError(tool string, err error) error {
 	if err == nil {
 		return nil
@@ -191,7 +206,12 @@ func modelFacingCallError(tool string, err error) error {
 	}
 	var rpcErr *RPCError
 	if errors.As(err, &rpcErr) {
-		if rpcErr.Code == codeInvalidParams {
+		switch rpcErr.Code {
+		case codeMissingClientCapability:
+			// The server's text names the capability or its own
+			// internals; the model needs only the fixed next move.
+			return modelFacing(textInputRequired, err)
+		case codeInvalidParams:
 			return modelFacing(framedServerText(leadInvalidParams, rpcErr.Message, tailInvalidParams), err)
 		}
 		return modelFacing(framedServerText(leadRPCError, rpcErr.Message, tailRPCError), err)
@@ -210,7 +230,12 @@ func modelFacingCallError(tool string, err error) error {
 // modelFacingToolError wraps an isError tool result's rendered text.
 // The server wrote that text for the model, so it is quoted (cleaned
 // and capped) inside a fixed frame. Err carries a capped copy for logs.
+// A result with no text (empty, or only renderToolResult's placeholder
+// for no content) gets textToolErrorNoMessage instead, with no frame.
 func modelFacingToolError(tool, text string) error {
+	if clean := cleanServerText(text); clean == "" || clean == emptyResultText {
+		return modelFacing(textToolErrorNoMessage, fmt.Errorf("mcp: tool %s reported an error with no message", tool))
+	}
 	return modelFacing(
 		framedServerText(leadToolError, text, tailToolError),
 		fmt.Errorf("mcp: tool %s reported an error: %s", tool, cleanServerText(text)),
