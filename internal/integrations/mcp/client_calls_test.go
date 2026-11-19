@@ -355,6 +355,15 @@ func TestClient_CallToolResults(t *testing.T) {
 			wantText: "done", calls: 3},
 		{name: "requestState continuation is bounded", modern: true, call: state("again"),
 			wantErr: errProtocol, calls: 1 + maxInputRequiredRounds},
+		// The server ran the first round, so a continuation that never
+		// left Thane leaves the outcome unknown: not "unreachable, try
+		// again later", and not re-issued from the first round.
+		{name: "undelivered continuation is an unknown outcome", modern: true,
+			call:    clientTSeq(state("s1"), clientTReply(nil, fmt.Errorf("%w: http: dial refused", errUnreachable))),
+			wantErr: errConnectionLost, wantModel: textConnLost, calls: 2},
+		{name: "expired session on a continuation is not re-issued", modern: true,
+			call:    clientTSeq(state("s1"), clientTReply(nil, fmt.Errorf("%w: http status 404", errSessionExpired))),
+			wantErr: errConnectionLost, wantModel: textConnLost, calls: 2},
 		{name: "input_required with neither field is invalid", modern: true, call: ok(`{"resultType":"input_required"}`),
 			wantErr: errProtocol, calls: 1},
 		{name: "task result is never an empty success", modern: true,
@@ -467,6 +476,86 @@ func clientTCallDuringClose(t *testing.T, resp *Response, failure error) error {
 	}
 }
 
+// clientTContinuationDuringClose starts a tools/call whose first round
+// the server answers with a requestState-only input_required result.
+// The continuation waits in the transport until Close starts, then fails
+// with failure. It returns callTool's error.
+func clientTContinuationDuringClose(t *testing.T, failure error) error {
+	t.Helper()
+	srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
+	inFlight := make(chan struct{}, 1)
+	factory := func(ctx context.Context, hooks transportHooks) (Transport, error) {
+		tr, err := srv.factory()(ctx, hooks)
+		if err != nil {
+			return nil, err
+		}
+		return &clientTContinuationTransport{Transport: tr, inFlight: inFlight, closing: make(chan struct{}), err: failure}, nil
+	}
+	cfg := clientTConfig(transportStdio, protocolLegacy)
+	cfg.logger = coreTLogger(t)
+	c := newServerClient(t.Context(), cfg, factory)
+	t.Cleanup(func() { _ = c.close(context.WithoutCancel(t.Context())) })
+	clientTStart(t, c)
+	clientTReadyConn(t, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.callTool(t.Context(), "echo", nil)
+		done <- err
+	}()
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the continuation never reached the transport")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := c.close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("callTool did not return after close")
+		return nil
+	}
+}
+
+// clientTContinuationTransport answers the first tools/call with a
+// requestState-only input_required result; every later tools/call waits
+// for Close to start and then fails with err.
+type clientTContinuationTransport struct {
+	Transport
+	calls    atomic.Int32
+	inFlight chan<- struct{}
+	closing  chan struct{}
+	once     sync.Once
+	err      error
+}
+
+func (t *clientTContinuationTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
+	if req.Method != methodToolsCall {
+		return t.Transport.Call(ctx, req, info)
+	}
+	if t.calls.Add(1) == 1 {
+		return &Response{JSONRPC: jsonrpcVersion, ID: req.ID,
+			Result: json.RawMessage(`{"resultType":"input_required","requestState":"s1"}`)}, nil
+	}
+	t.inFlight <- struct{}{}
+	select {
+	case <-t.closing:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return nil, t.err
+}
+
+func (t *clientTContinuationTransport) Close(ctx context.Context) error {
+	t.once.Do(func() { close(t.closing) })
+	return t.Transport.Close(ctx)
+}
+
 // TestClient_CallCutOffByShutdown: a call in flight when the client
 // closes is cut off by the shutdown, whatever the server or transport
 // then reports. The model is told Thane is shutting down and the outcome
@@ -521,6 +610,19 @@ func TestClient_CallCutOffByShutdown(t *testing.T) {
 		var unavailable tools.ErrUnavailable
 		if got := modelFacingCallError("mcp_fake_echo", err); !errors.As(got, &unavailable) || unavailable.Reason != reasonShuttingDown {
 			t.Errorf("model error = %v, want ErrUnavailable(%q)", got, reasonShuttingDown)
+		}
+	})
+
+	// A requestState continuation refused unsent at shutdown: the server
+	// already ran the first round, so the call was cut off, not never
+	// started.
+	t.Run("a continuation refused at shutdown was cut off", func(t *testing.T) {
+		err := clientTContinuationDuringClose(t, fmt.Errorf("%w: stdio: %w", errUnreachable, errStdioClosed))
+		if !errors.Is(err, errCallCutOff) {
+			t.Errorf("err = %v, want errCallCutOff", err)
+		}
+		if mfe := clientTModelFacing(t, err); mfe.Text != textShutdownMidCall {
+			t.Errorf("model text =\n%q\nwant\n%q", mfe.Text, textShutdownMidCall)
 		}
 	})
 

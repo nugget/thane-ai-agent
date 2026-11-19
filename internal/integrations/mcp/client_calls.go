@@ -280,10 +280,12 @@ func (c *serverClient) offers(name string) bool {
 // server rejected the request unprocessed); an HTTP HeaderMismatch
 // (-32020) re-lists and retries once with fresh Mcp-Param-* headers. A
 // call whose outcome is unknown (connection lost, timeout) is never
-// re-issued. A call that fails once the client is closing wraps
+// re-issued, and neither is one whose first round the server already
+// answered. A call that fails once the client is closing wraps
 // errCallCutOff: the failure is the shutdown's doing, whatever it says.
-// One the closing transport refused unsent (errUnreachable) never
-// started, so it wraps errClientClosed instead.
+// One the closing transport refused unsent (errUnreachable) before any
+// round reached the server never started, so it wraps errClientClosed
+// instead.
 func (c *serverClient) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
 	c.noteAccess()
 	conn, err := c.readyConn()
@@ -300,15 +302,15 @@ func (c *serverClient) callTool(ctx context.Context, name string, args map[strin
 		args = map[string]any{}
 	}
 	for retried := false; ; retried = true {
-		res, err := c.callRounds(ctx, conn, name, args)
+		res, started, err := c.callRounds(ctx, conn, name, args)
 		if err != nil && c.lifeCtx.Err() != nil {
-			if errors.Is(err, errUnreachable) {
+			if !started && errors.Is(err, errUnreachable) {
 				// The closing transport refused it unsent: it never started.
 				return toolResult{}, fmt.Errorf("%w: %w", errClientClosed, err)
 			}
 			return toolResult{}, fmt.Errorf("%w: %w", errCallCutOff, err)
 		}
-		if err == nil || retried {
+		if err == nil || retried || started {
 			return res, err
 		}
 		switch {
@@ -334,9 +336,13 @@ func (c *serverClient) callTool(ctx context.Context, name string, args map[strin
 
 // callRounds sends one tools/call and follows requestState-only
 // input_required continuations, up to maxInputRequiredRounds re-sends.
-func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name string, args map[string]any) (toolResult, error) {
+// started reports whether the server answered a round, so the call ran
+// there at least in part and must not be re-issued or reported as never
+// started.
+func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name string, args map[string]any) (toolResult, bool, error) {
 	var state *string
 	for round := 0; ; round++ {
+		started := round > 0
 		fields := map[string]any{"name": name, "arguments": args}
 		if state != nil {
 			fields["requestState"] = *state
@@ -344,28 +350,36 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 		resp, err := conn.call(ctx, methodToolsCall, fields, c.callInfoFor(conn, name, args))
 		if err != nil {
 			if rpcErr := statusCarriedRPC(err); rpcErr != nil {
-				return toolResult{}, c.callRPCError(ctx, conn, name, rpcErr, err)
+				return toolResult{}, started, c.callRPCError(ctx, conn, name, rpcErr, err)
 			}
-			return toolResult{}, fmt.Errorf("%s %s: %w", methodToolsCall, logText(name), err)
+			if started && (errors.Is(err, errUnreachable) || errors.Is(err, errSessionExpired)) {
+				// Only the continuation went undelivered; the server already
+				// ran the first round, so the outcome is unknown. %v keeps
+				// errUnreachable and errSessionExpired out of the chain: they
+				// would read as "never ran" and trigger a retry.
+				return toolResult{}, started, fmt.Errorf("%w: %s %s: continuation not delivered: %v",
+					errConnectionLost, methodToolsCall, logText(name), err)
+			}
+			return toolResult{}, started, fmt.Errorf("%s %s: %w", methodToolsCall, logText(name), err)
 		}
 		if resp.Error != nil {
-			return toolResult{}, c.callRPCError(ctx, conn, name, resp.Error, resp.Error)
+			return toolResult{}, started, c.callRPCError(ctx, conn, name, resp.Error, resp.Error)
 		}
 		var r callToolResult
 		if err := json.Unmarshal(resp.Result, &r); err != nil {
-			return toolResult{}, fmt.Errorf("%w: malformed tools/call result: %w", errProtocol, err)
+			return toolResult{}, true, fmt.Errorf("%w: malformed tools/call result: %w", errProtocol, err)
 		}
 		switch r.ResultType {
 		case "", resultTypeComplete:
-			return toolResult{Text: renderToolResult(&r), IsError: r.IsError}, nil
+			return toolResult{Text: renderToolResult(&r), IsError: r.IsError}, true, nil
 		case resultTypeInputRequired:
 			switch {
 			case len(r.InputRequests) > 0:
-				return toolResult{}, fmt.Errorf("%w: tool %s", errInputRequired, logText(name))
+				return toolResult{}, true, fmt.Errorf("%w: tool %s", errInputRequired, logText(name))
 			case r.RequestState == nil:
-				return toolResult{}, fmt.Errorf("%w: input_required result without inputRequests or requestState", errProtocol)
+				return toolResult{}, true, fmt.Errorf("%w: input_required result without inputRequests or requestState", errProtocol)
 			case round >= maxInputRequiredRounds:
-				return toolResult{}, fmt.Errorf("%w: tool %s still required input after %d continuations",
+				return toolResult{}, true, fmt.Errorf("%w: tool %s still required input after %d continuations",
 					errProtocol, logText(name), maxInputRequiredRounds)
 			}
 			state = r.RequestState
@@ -373,7 +387,7 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 			// Never an empty success: Thane advertises no extension, so
 			// "task" and any other non-core resultType is invalid
 			// (2026-07-28 basic/index.mdx "ResultType").
-			return toolResult{}, fmt.Errorf("%w: unsupported tools/call resultType %q", errProtocol, logText(r.ResultType))
+			return toolResult{}, true, fmt.Errorf("%w: unsupported tools/call resultType %q", errProtocol, logText(r.ResultType))
 		}
 	}
 }
