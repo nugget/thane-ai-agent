@@ -16,7 +16,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/notifications"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
-	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/search"
 	"github.com/nugget/thane-ai-agent/internal/model/llm"
@@ -32,21 +31,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/state/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
-
-func toMCPToolOverrides(cfg map[string]config.MCPToolConfig) map[string]mcp.ToolOverride {
-	if len(cfg) == 0 {
-		return nil
-	}
-	out := make(map[string]mcp.ToolOverride, len(cfg))
-	for name, toolCfg := range cfg {
-		out[name] = mcp.ToolOverride{
-			Enabled:     toolCfg.Enabled,
-			Tags:        append([]string(nil), toolCfg.Tags...),
-			Description: toolCfg.Description,
-		}
-	}
-	return out
-}
 
 type contactIdentityConfig struct {
 	operatorContactID          uuid.UUID
@@ -747,81 +731,6 @@ func (a *App) initChannels(s *newState) error {
 		contactTools.SetEmbeddingClient(embClient)
 		s.embClient = embClient
 		a.logger.Info("embeddings enabled", "model", a.cfg.Embeddings.Model, "url", a.cfg.Embeddings.BaseURL)
-	}
-
-	// --- MCP servers ---
-	// Connect to configured MCP servers and bridge their tools into the
-	// registry. This must happen before delegate executor creation so
-	// delegates have access to MCP tools.
-	for _, serverCfg := range a.cfg.MCP.Servers {
-		var transport mcp.Transport
-		switch serverCfg.Transport {
-		case "stdio":
-			transport = mcp.NewStdioTransport(mcp.StdioConfig{
-				Command: serverCfg.Command,
-				Args:    serverCfg.Args,
-				Env:     serverCfg.Env,
-				Logger:  a.logger,
-			})
-		case "http":
-			transport = mcp.NewHTTPTransport(mcp.HTTPConfig{
-				URL:     serverCfg.URL,
-				Headers: serverCfg.Headers,
-				Logger:  a.logger,
-			})
-		}
-
-		client := mcp.NewClient(serverCfg.Name, transport, a.logger)
-
-		initCtx, initCancel := context.WithTimeout(s.ctx, 30*time.Second)
-		err := client.Initialize(initCtx)
-		initCancel()
-		if err != nil {
-			a.logger.Error("MCP server initialization failed",
-				"server", serverCfg.Name,
-				"error", err,
-			)
-			client.Close()
-			continue
-		}
-
-		bridgeCtx, bridgeCancel := context.WithTimeout(s.ctx, 30*time.Second)
-		count, err := mcp.BridgeTools(
-			bridgeCtx,
-			client, serverCfg.Name, a.loop.Tools(),
-			mcp.BridgeOptions{
-				Include:       serverCfg.IncludeTools,
-				Exclude:       serverCfg.ExcludeTools,
-				Tags:          serverCfg.Tags,
-				ToolOverrides: toMCPToolOverrides(serverCfg.Tools),
-			},
-			a.logger,
-		)
-		bridgeCancel()
-		if err != nil {
-			a.logger.Error("MCP tool bridge failed",
-				"server", serverCfg.Name,
-				"error", err,
-			)
-			client.Close()
-			continue
-		}
-
-		a.mcpClients = append(a.mcpClients, client)
-		mcpName := serverCfg.Name // capture for closure
-		a.onCloseErr("mcp-"+mcpName, client.Close)
-
-		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-			Name:    "mcp-" + serverCfg.Name,
-			Probe:   func(pCtx context.Context) error { return client.Ping(pCtx) },
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  a.logger,
-		})
-
-		a.logger.Info("MCP server connected",
-			"server", serverCfg.Name,
-			"tools", count,
-		)
 	}
 
 	// --- Signal message bridge ---
