@@ -13,17 +13,20 @@ import (
 func TestClient_InboundRequests(t *testing.T) {
 	type want struct {
 		reply bool
-		code  int // 0: result {}
+		code  int    // 0: result {}
+		msg   string // error message
 	}
+	// Thane's own declines carry distinctive messages, so a decline a
+	// server relays back as a tools/call error is recognized.
 	cases := []struct {
 		method string
 		legacy want // legacy and era unknown
 	}{
 		{method: methodPing, legacy: want{reply: true}},
-		{method: methodRootsList, legacy: want{reply: true, code: codeMethodNotFound}},
-		{method: methodSampling, legacy: want{reply: true, code: codeMethodNotFound}},
-		{method: methodElicitation, legacy: want{reply: true, code: codeInvalidParams}},
-		{method: "vendor/custom", legacy: want{reply: true, code: codeMethodNotFound}},
+		{method: methodRootsList, legacy: want{reply: true, code: codeMethodNotFound, msg: declineRoots}},
+		{method: methodSampling, legacy: want{reply: true, code: codeMethodNotFound, msg: declineSampling}},
+		{method: methodElicitation, legacy: want{reply: true, code: codeInvalidParams, msg: declineElicitation}},
+		{method: "vendor/custom", legacy: want{reply: true, code: codeMethodNotFound, msg: "Method not found"}},
 	}
 	for _, e := range []era{eraUnknown, eraLegacy, eraModern} {
 		for _, tt := range cases {
@@ -48,8 +51,8 @@ func TestClient_InboundRequests(t *testing.T) {
 						t.Errorf("reply = %+v, want result {}", resp)
 					}
 				default:
-					if resp.Error == nil || resp.Error.Code != w.code {
-						t.Errorf("reply = %+v, want error %d", resp, w.code)
+					if resp.Error == nil || resp.Error.Code != w.code || resp.Error.Message != w.msg {
+						t.Errorf("reply = %+v, want error %d %q", resp.Error, w.code, w.msg)
 					}
 				}
 			})

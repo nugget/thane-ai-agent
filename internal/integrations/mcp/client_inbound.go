@@ -8,6 +8,31 @@ import (
 	"strings"
 )
 
+// Thane's answers to server requests it declines. Each is distinctive
+// so that callTool recognizes one a server relays back as its tools/call
+// error (a tool that elicits or samples without checking the client's
+// capabilities) and reports that the tool needs input Thane cannot
+// give, instead of blaming the arguments.
+const (
+	declineElicitation = "Thane cannot answer elicitation requests"
+	declineSampling    = "Thane does not support sampling/createMessage"
+	declineRoots       = "Thane does not support roots/list"
+)
+
+// isThaneDecline reports whether rpcErr relays one of Thane's own
+// declines (a server may prefix the message).
+func isThaneDecline(rpcErr *RPCError) bool {
+	if rpcErr.Code != codeMethodNotFound && rpcErr.Code != codeInvalidParams {
+		return false
+	}
+	for _, d := range []string{declineElicitation, declineSampling, declineRoots} {
+		if strings.Contains(rpcErr.Message, d) {
+			return true
+		}
+	}
+	return false
+}
+
 // serverLogCapBytes bounds server-authored log text (notifications/message
 // data, progress params) copied into Thane's logs.
 const serverLogCapBytes = 2048
@@ -47,7 +72,13 @@ func (c *serverClient) handleRequest(_ context.Context, conn *clientConn, req *R
 		return &Response{Result: json.RawMessage(`{}`)}
 	case methodElicitation:
 		c.logger.Debug("mcp: declined a server elicitation request")
-		return &Response{Error: &RPCError{Code: codeInvalidParams, Message: "elicitation is not supported by this client"}}
+		return &Response{Error: &RPCError{Code: codeInvalidParams, Message: declineElicitation}}
+	case methodSampling:
+		c.logger.Debug("mcp: declined a server sampling request")
+		return &Response{Error: &RPCError{Code: codeMethodNotFound, Message: declineSampling}}
+	case methodRootsList:
+		c.logger.Debug("mcp: declined a server roots request")
+		return &Response{Error: &RPCError{Code: codeMethodNotFound, Message: declineRoots}}
 	default:
 		c.logger.Debug("mcp: declined a server request", "method", logText(req.Method))
 		return &Response{Error: &RPCError{Code: codeMethodNotFound, Message: "Method not found"}}

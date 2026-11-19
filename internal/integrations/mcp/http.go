@@ -85,8 +85,14 @@ type httpTransport struct {
 	mu      sync.Mutex
 	session string // legacy Mcp-Session-Id from the initialize response
 	version string // latched MCP-Protocol-Version for transport-originated POSTs
-	expired bool   // the server answered 404 to our session
-	closing bool
+	// expired: the server rejected our session (404, or a 400 with an
+	// unattributed JSON-RPC error; see httpSessionRejected). Close then
+	// skips the DELETE.
+	expired  bool
+	retiring bool // set by retire: no new requests, in-flight ones finish
+	closing  bool // set by Close
+
+	inflight sync.WaitGroup // exchanges admitted by begin; retire waits for them
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -196,8 +202,8 @@ func httpVisibleASCII(v string) bool {
 // first, notifications/cancelled is POSTed before returning; modern
 // calls cancel only by aborting the POST.
 func (t *httpTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
-	if t.isClosing() {
-		return nil, fmt.Errorf("%w: http %s: transport closed", errUnreachable, req.Method)
+	if err := t.closedErr(req.Method); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("mcp: http %s: %w", req.Method, err)
@@ -234,10 +240,11 @@ func (t *httpTransport) Notify(ctx context.Context, n *Notification, info callIn
 	return t.send(ctx, n.Method, body, t.frame(n.Method, info, false))
 }
 
-// Close ends the transport: in-flight POSTs are aborted, a legacy
-// session is ended with DELETE (bounded by ctx and httpDeleteTimeout;
-// any status, 404 and 405 included, is fine), idle connections are
-// closed and Done closes. Idempotent and safe to call concurrently.
+// Close ends the transport: in-flight POSTs are aborted (retire first
+// lets them finish), a legacy session is ended with DELETE (bounded by
+// ctx and httpDeleteTimeout; any status, 404 and 405 included, is
+// fine), idle connections are closed and Done closes. Idempotent and
+// safe to call concurrently.
 func (t *httpTransport) Close(ctx context.Context) error {
 	t.closeOnce.Do(func() {
 		t.mu.Lock()
@@ -258,10 +265,65 @@ func (t *httpTransport) Close(ctx context.Context) error {
 // Done is closed once Close has run.
 func (t *httpTransport) Done() <-chan struct{} { return t.done }
 
+// retire stops admitting requests and waits, bounded by ctx, for the
+// exchanges already in flight to finish on their own; their replies to
+// server requests and their cancellations are still sent. The client
+// retires a transport whose session expired instead of closing it, so
+// sibling requests still get their real answers (the server rejects
+// them unprocessed, and the client retries them on a new session). It
+// does not close the transport: Close must still be called.
+func (t *httpTransport) retire(ctx context.Context) {
+	t.mu.Lock()
+	t.retiring = true
+	t.mu.Unlock()
+	idle := make(chan struct{})
+	go func() {
+		t.inflight.Wait()
+		close(idle)
+	}()
+	select {
+	case <-idle:
+	case <-ctx.Done():
+	}
+}
+
+// begin admits one exchange, or refuses it once the transport is
+// retiring or closed. An admitted exchange must call t.inflight.Done.
+func (t *httpTransport) begin(what string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.retiring || t.closing {
+		return t.closedErrLocked(what)
+	}
+	t.inflight.Add(1)
+	return nil
+}
+
 func (t *httpTransport) isClosing() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closing
+}
+
+// closedErr is the error for a request on a retiring or closed
+// transport, or nil while it is open.
+func (t *httpTransport) closedErr(what string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.retiring && !t.closing {
+		return nil
+	}
+	return t.closedErrLocked(what)
+}
+
+// closedErrLocked: a request refused because its session expired was
+// never processed, so it reports errSessionExpired and the client
+// retries it on the replacement connection. t.mu must be held.
+func (t *httpTransport) closedErrLocked(what string) error {
+	if t.expired {
+		return fmt.Errorf("%w: http %s: session expired", errSessionExpired, what)
+	}
+	return fmt.Errorf("%w: http %s: transport closed", errUnreachable, what)
 }
 
 // latch records the protocol version for transport-originated POSTs
@@ -297,7 +359,8 @@ func (t *httpTransport) frame(method string, info callInfo, isInit bool) httpFra
 
 // newRequest builds one HTTP request: operator headers first, then the
 // protocol headers (which win). It reports whether Mcp-Session-Id was
-// attached, because only then does a 404 mean the session expired.
+// attached, because only then can a 404 (or a 400 with an unattributed
+// JSON-RPC error) mean the session expired.
 func (t *httpTransport) newRequest(ctx context.Context, method string, body []byte, f httpFrame) (*http.Request, bool, error) {
 	var rd io.Reader
 	if body != nil {

@@ -14,10 +14,15 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/httpkit"
 )
 
-// exchange POSTs one request body and reads its response (AM-26). The
+// exchange POSTs one request body and reads its response. The
 // POST runs on its own ctx, cancelled when the caller's ctx ends, when
-// the transport closes, or once the matching response has arrived.
+// the transport closes, or once the matching response has arrived. It
+// counts as in flight for retire until it returns.
 func (t *httpTransport) exchange(ctx context.Context, method string, body []byte, f httpFrame, id int64, isInit bool) (*Response, error) {
+	if err := t.begin(method); err != nil {
+		return nil, err
+	}
+	defer t.inflight.Done()
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(t.lifeCtx, cancel)

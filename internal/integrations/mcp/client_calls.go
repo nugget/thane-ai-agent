@@ -309,10 +309,13 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 		}
 		resp, err := conn.call(ctx, methodToolsCall, fields, c.callInfoFor(conn, name, args))
 		if err != nil {
+			if rpcErr := statusCarriedRPC(err); rpcErr != nil {
+				return toolResult{}, c.callRPCError(ctx, conn, name, rpcErr, err)
+			}
 			return toolResult{}, fmt.Errorf("mcp: %s %s: %w", methodToolsCall, logText(name), err)
 		}
 		if resp.Error != nil {
-			return toolResult{}, c.callRPCError(ctx, conn, name, resp.Error)
+			return toolResult{}, c.callRPCError(ctx, conn, name, resp.Error, resp.Error)
 		}
 		var r callToolResult
 		if err := json.Unmarshal(resp.Result, &r); err != nil {
@@ -340,10 +343,35 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 	}
 }
 
-// callRPCError handles a JSON-RPC error answering tools/call. -32601 and
-// -32602 may mean the tool list moved, so the list is refreshed and a
-// tool that disappeared is reported as gone.
-func (c *serverClient) callRPCError(ctx context.Context, conn *clientConn, name string, rpcErr *RPCError) error {
+// statusCarriedRPC returns the -32601 or -32602 that a non-2xx HTTP
+// status carries. The 2026-07-28 Streamable HTTP transport sends
+// JSON-RPC errors with a matching status (404 for an unknown method, 400
+// for invalid params), and they mean the same as in a 200 body. nil for
+// anything else, including an expired session (callTool retries those)
+// and -32020 (callTool re-lists and retries).
+func statusCarriedRPC(err error) *RPCError {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) || statusErr.RPC == nil || errors.Is(err, errSessionExpired) {
+		return nil
+	}
+	if code := statusErr.RPC.Code; code != codeMethodNotFound && code != codeInvalidParams {
+		return nil
+	}
+	return statusErr.RPC
+}
+
+// callRPCError handles a JSON-RPC error answering tools/call; cause is
+// what the transport returned (the error object itself, or the HTTP
+// status error carrying it), kept for the logs.
+//
+// A relayed decline of Thane's own (the tool asked Thane for input it
+// cannot give) means the tool needs input. Otherwise -32601 and -32602
+// may mean the tool list moved, so the list is refreshed and a tool that
+// disappeared is reported as gone.
+func (c *serverClient) callRPCError(ctx context.Context, conn *clientConn, name string, rpcErr *RPCError, cause error) error {
+	if isThaneDecline(rpcErr) {
+		return fmt.Errorf("%w: tool %s: the server relayed Thane's refusal: %w", errInputRequired, logText(name), cause)
+	}
 	if rpcErr.Code == codeMethodNotFound || rpcErr.Code == codeInvalidParams {
 		if err := c.relist(ctx, conn); err != nil {
 			c.logger.Debug("mcp: re-listing tools after a tools/call error failed", "error", err)
@@ -351,7 +379,7 @@ func (c *serverClient) callRPCError(ctx context.Context, conn *clientConn, name 
 			return fmt.Errorf("%w: %s", errToolGone, logText(name))
 		}
 	}
-	return fmt.Errorf("mcp: %s %s: %w", methodToolsCall, logText(name), rpcErr)
+	return fmt.Errorf("mcp: %s %s: %w", methodToolsCall, logText(name), cause)
 }
 
 // isHeaderMismatch reports a -32020 HeaderMismatch answer (normally an

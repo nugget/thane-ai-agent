@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,24 +22,20 @@ func TestProtocol_EraString(t *testing.T) {
 func TestProtocol_VersionSets(t *testing.T) {
 	tests := []struct {
 		v         string
-		modern    bool
 		handshake bool
 	}{
-		{"2026-07-28", true, false},
-		{"2025-11-25", false, true},
-		{"2025-06-18", false, true},
-		{"2025-03-26", false, true},
-		{"2024-11-05", false, true},
-		{"2024-10-07", false, false},
-		{"2027-01-01", false, false},
-		{"draft", false, false},
-		{"", false, false},
-		{"2025-11-25 ", false, false},
+		{"2026-07-28", false},
+		{"2025-11-25", true},
+		{"2025-06-18", true},
+		{"2025-03-26", true},
+		{"2024-11-05", true},
+		{"2024-10-07", false},
+		{"2027-01-01", false},
+		{"draft", false},
+		{"", false},
+		{"2025-11-25 ", false},
 	}
 	for _, tt := range tests {
-		if got := isModernVersion(tt.v); got != tt.modern {
-			t.Errorf("isModernVersion(%q) = %v, want %v", tt.v, got, tt.modern)
-		}
 		if got := isHandshakeVersion(tt.v); got != tt.handshake {
 			t.Errorf("isHandshakeVersion(%q) = %v, want %v", tt.v, got, tt.handshake)
 		}
@@ -49,8 +46,8 @@ func TestProtocol_VersionSets(t *testing.T) {
 	if handshakeVersions[0] != handshakeOfferVersion {
 		t.Errorf("handshakeOfferVersion %q is not the newest handshake version %q", handshakeOfferVersion, handshakeVersions[0])
 	}
-	if !isModernVersion(modernProtocolVersion) {
-		t.Errorf("modernProtocolVersion %q is not modern", modernProtocolVersion)
+	if !slices.Equal(modernVersions, []string{modernProtocolVersion}) {
+		t.Errorf("modernVersions = %q, want only %q", modernVersions, modernProtocolVersion)
 	}
 }
 

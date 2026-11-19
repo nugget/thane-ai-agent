@@ -248,8 +248,10 @@ type clientTCallCase struct {
 	isError  bool
 	wantErr  error // errors.Is target; *RPCError: errors.As
 	wantCode int   // with wantErr *RPCError
-	calls    int   // expected tools/call count; 0 = skip, -1 = none
-	lists    int   // expected tools/list count; 0 = skip
+	// wantStatus: the error must still carry this HTTP status (logs).
+	wantStatus int
+	calls      int // expected tools/call count; 0 = skip, -1 = none
+	lists      int // expected tools/list count; 0 = skip
 }
 
 func clientTRunCall(t *testing.T, tt clientTCallCase) *clientTFakeServer {
@@ -289,6 +291,12 @@ func clientTRunCall(t *testing.T, tt clientTCallCase) *clientTFakeServer {
 	default:
 		if !errors.Is(err, tt.wantErr) {
 			t.Errorf("err = %v, want %v", err, tt.wantErr)
+		}
+	}
+	if tt.wantStatus != 0 {
+		var statusErr *httpStatusError
+		if !errors.As(err, &statusErr) || statusErr.Status != tt.wantStatus {
+			t.Errorf("err = %v, want it to keep HTTP status %d", err, tt.wantStatus)
 		}
 	}
 	if tt.calls != 0 {
@@ -412,9 +420,54 @@ func TestClient_CallToolRelists(t *testing.T) {
 			call:    clientTReply(nil, clientTStatus(400, clientTRPC(codeHeaderMismatch, ""))),
 			list:    clientTSeq(clientTReply(clientTToolsPage(nil, clientTTool("echo")), nil), gone),
 			wantErr: errToolGone, calls: 1, lists: 2},
+		// Modern Streamable HTTP sends JSON-RPC errors with a matching
+		// HTTP status; they mean what they mean in a 200 body.
+		{name: "modern HTTP 400 carrying -32602 for a tool that disappeared is tool gone", modern: true,
+			call:    clientTReply(nil, clientTStatus(400, clientTRPC(codeInvalidParams, ""))),
+			list:    clientTSeq(clientTReply(clientTToolsPage(nil, clientTTool("echo")), nil), gone),
+			wantErr: errToolGone, calls: 1, lists: 2},
+		{name: "modern HTTP 404 carrying -32601 for a tool that disappeared is tool gone", modern: true,
+			call:    clientTReply(nil, clientTStatus(404, clientTRPC(codeMethodNotFound, ""))),
+			list:    clientTSeq(clientTReply(clientTToolsPage(nil, clientTTool("echo")), nil), gone),
+			wantErr: errToolGone, calls: 1, lists: 2},
+		{name: "modern HTTP 400 carrying -32602 with the tool still listed returns the server error", modern: true,
+			call:    clientTReply(nil, clientTStatus(400, clientTRPC(codeInvalidParams, ""))),
+			wantErr: &RPCError{}, wantCode: codeInvalidParams, wantStatus: 400, calls: 1, lists: 2},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) { clientTRunCall(t, tt) })
+	}
+}
+
+// TestClient_CallToolRelayedDecline: a legacy tool that asks Thane for
+// input (elicitation, sampling, roots) gets Thane's decline, and many
+// servers relay it as the tools/call error. That means the tool needs
+// input Thane cannot give: no re-list, and not "change the arguments".
+func TestClient_CallToolRelayedDecline(t *testing.T) {
+	reply := func(code int, msg string) clientTHandler {
+		return clientTReply(&Response{Error: &RPCError{Code: code, Message: msg}}, nil)
+	}
+	cases := []clientTCallCase{
+		{name: "relayed elicitation decline", call: reply(codeInvalidParams, declineElicitation),
+			wantErr: errInputRequired, calls: 1, lists: 1},
+		{name: "relayed sampling decline", call: reply(codeMethodNotFound, declineSampling),
+			wantErr: errInputRequired, calls: 1, lists: 1},
+		{name: "relayed roots decline with a server prefix", call: reply(codeMethodNotFound, "Error: "+declineRoots),
+			wantErr: errInputRequired, calls: 1, lists: 1},
+		{name: "-32602 with another message still re-lists", call: reply(codeInvalidParams, "region is required"),
+			wantErr: &RPCError{}, wantCode: codeInvalidParams, calls: 1, lists: 2},
+		{name: "a decline under another code is the server's error", call: reply(-32603, declineElicitation),
+			wantErr: &RPCError{}, wantCode: -32603, calls: 1, lists: 1},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) { clientTRunCall(t, tt) })
+	}
+
+	err := fmt.Errorf("%w: tool echo: the server relayed Thane's refusal: %w", errInputRequired,
+		&RPCError{Code: codeInvalidParams, Message: declineElicitation})
+	text, _ := coreTModelText(t, modelFacingCallError("mcp_s_echo", err))
+	if text != textInputRequired {
+		t.Errorf("model text = %q, want textInputRequired", text)
 	}
 }
 

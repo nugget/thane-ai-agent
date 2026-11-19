@@ -89,10 +89,6 @@ func (e era) String() string {
 	}
 }
 
-// isModernVersion reports whether v is a stateless (server/discover)
-// protocol version Thane speaks.
-func isModernVersion(v string) bool { return slices.Contains(modernVersions, v) }
-
 // isHandshakeVersion reports whether v is an initialize-handshake
 // protocol version Thane speaks.
 func isHandshakeVersion(v string) bool { return slices.Contains(handshakeVersions, v) }
