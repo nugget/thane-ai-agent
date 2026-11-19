@@ -87,11 +87,7 @@ func TestDynamicToolSourcesHonorTagExcludes(t *testing.T) {
 	cfg := &config.Config{CapabilityTags: map[string]config.CapabilityTagConfig{
 		"people": {Exclude: []string{"macos_delete_person"}},
 	}}
-	src := &dynamicToolSources{
-		mcp:         mcp.NewManager(nil, logger),
-		companion:   tools.NewCompanionRegistrar(registry, time.UTC, logger),
-		tagExcludes: capabilityTagExcludes(cfg),
-	}
+	src := newDynamicToolSources(cfg, mcp.NewManager(nil, logger), tools.NewCompanionRegistrar(registry, time.UTC, logger))
 
 	got, tags := src.Snapshot()
 	if len(got) != 2 {

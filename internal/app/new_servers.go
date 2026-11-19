@@ -407,14 +407,8 @@ func (a *App) initServers(s *newState) error {
 	// overlay (tools of servers that came up after boot, and tools added
 	// or changed later) and the companion registrar, merged per run.
 	// Installed whenever either exists, so MCP works without companion.
-	// The operator's capability_tags excludes apply to the overlay's tag
-	// additions as they do to the static tag index.
 	if a.mcpManager != nil || registrar != nil {
-		a.loop.SetDynamicToolSource(&dynamicToolSources{
-			mcp:         a.mcpManager,
-			companion:   registrar,
-			tagExcludes: capabilityTagExcludes(cfg),
-		})
+		a.loop.SetDynamicToolSource(newDynamicToolSources(cfg, a.mcpManager, registrar))
 	}
 
 	// Counterparty enrichment of channel context (#1450): the contact

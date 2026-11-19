@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/runtime/agent"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -23,6 +24,19 @@ type dynamicToolSources struct {
 }
 
 var _ agent.DynamicToolSource = (*dynamicToolSources)(nil)
+
+// newDynamicToolSources builds the value initServers installs with
+// Loop.SetDynamicToolSource from the MCP manager and the companion
+// registrar (either may be nil), carrying the operator's
+// capability_tags excludes so they apply to the overlay's tag additions
+// as they do to the static tag index.
+func newDynamicToolSources(cfg *config.Config, m *mcp.Manager, r *tools.CompanionRegistrar) *dynamicToolSources {
+	return &dynamicToolSources{
+		mcp:         m,
+		companion:   r,
+		tagExcludes: capabilityTagExcludes(cfg),
+	}
+}
 
 // Snapshot merges both sources into a freshly allocated slice and map,
 // MCP entries first, never appending into a source's own values, and
