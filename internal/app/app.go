@@ -23,6 +23,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 	"github.com/nugget/thane-ai-agent/internal/integrations/forge"
 	"github.com/nugget/thane-ai-agent/internal/integrations/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
 	"github.com/nugget/thane-ai-agent/internal/integrations/media"
 	"github.com/nugget/thane-ai-agent/internal/integrations/unifi"
 	"github.com/nugget/thane-ai-agent/internal/model/fleet"
@@ -172,6 +173,11 @@ type App struct {
 
 	// Forge integration
 	forgeService *forge.Service
+
+	// MCP servers: supervisors, statically registered tools, and the
+	// dynamic overlay for tools that appear after boot (closed on
+	// shutdown).
+	mcpManager *mcp.Manager
 
 	// Logging infrastructure
 	indexDB             *sql.DB

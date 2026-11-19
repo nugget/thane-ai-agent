@@ -545,10 +545,14 @@ func ExampleConfig() *Config {
 		MCP: MCPConfig{
 			Servers: []MCPServerConfig{
 				{
-					Name:      "my-mcp-server",
-					Transport: "stdio",
-					Command:   "npx",
-					Args:      []string{"-y", "@modelcontextprotocol/server-example"},
+					Name:           "files",
+					Transport:      "stdio",
+					Protocol:       "auto",
+					ConnectTimeout: 30 * time.Second,
+					CallTimeout:    2 * time.Minute,
+					Command:        "npx",
+					Args:           []string{"-y", "@modelcontextprotocol/server-filesystem", "/srv/thane/shared"},
+					Tags:           []string{"files"},
 				},
 			},
 		},

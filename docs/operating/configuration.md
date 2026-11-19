@@ -1134,22 +1134,93 @@ can be piped through `grep` or `jq`.
 
 ## MCP Servers
 
+Optional. Connects Thane to external
+[Model Context Protocol](https://modelcontextprotocol.io) servers and
+bridges their tools into the registry as `mcp_{server}_{tool}`. Thane is
+only ever the client.
+
 ```yaml
 mcp:
   servers:
-    - name: github
+    # A local subprocess speaking MCP over stdin/stdout.
+    - name: files
       transport: stdio
-      command: docker
-      args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/thane/shared"]
+      cwd: ~/thane            # optional; root prefixes and ~/ expand, result must be absolute
       env:
-        - "GITHUB_PERSONAL_ACCESS_TOKEN=your_token"
-      include_tools:
-        - search_code
-        - issue_read
+        - "LOG_LEVEL=warn"    # KEY=VALUE, added to Thane's own environment
+      tags: [files]
+
+    # A server already listening on this machine (Streamable HTTP).
+    - name: game
+      transport: http
+      url: http://localhost:11212/mcp
+      protocol: legacy        # skip the server/discover probe
+      tags: [game]
+
+    # A hosted server with a static token.
+    - name: github
+      transport: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+      include_tools: [search_code, issue_read]
+      connect_timeout: 30s
+      call_timeout: 5m
+      tags: [forge]
+      tools:
+        issue_read:
+          description: "Read one GitHub issue with its comments."
 ```
 
-Optional. Extends Thane's capabilities via the Model Context Protocol.
-See [Delegation & MCP](../understanding/delegation.md).
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `name` | required | Short identifier. It prefixes tool names after sanitizing (lowercase, other characters become `_`), so two names that sanitize alike, or one that sanitizes to nothing, are rejected. |
+| `transport` | required | `stdio` (spawn `command` with `args`) or `http` (Streamable HTTP at `url`, `http` or `https`). |
+| `protocol` | `auto` | `auto` probes with `server/discover` and falls back to the `initialize` handshake; `modern` requires a stateless 2026-07-28 server; `legacy` runs `initialize` directly (2024-11-05 through 2025-11-25). Use `legacy` for older servers that answer the probe slowly; the probe waits up to 10s for a reply before falling back on stdio. |
+| `connect_timeout` | `30s` | One connection attempt: start or reach the server, negotiate, list tools. Failed attempts retry in the background with backoff from 2s up to 60s. |
+| `call_timeout` | `2m` | One tool call, unless the caller already has an earlier deadline. |
+| `cwd` | Thane's | stdio working directory. |
+| `env` | none | stdio extra environment, `KEY=VALUE`. The subprocess also inherits Thane's environment. Entries without `=` are dropped with a warning. |
+| `headers` | none | http headers sent on every request. Protocol headers (`Accept`, `Content-Type`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*`, `Last-Event-ID`) belong to Thane and are dropped with a warning. |
+| `include_tools` / `exclude_tools` | all tools | Raw MCP tool names to bridge or skip (not both). Names the server never reports are logged as a warning. |
+| `tags` | none | Capability tags for every tool of this server. |
+| `tools` | none | Per raw tool name: `enabled` (`true` bridges it even when the include/exclude lists would not, `false` never bridges it), `tags` (replaces the server tags), `description` (replaces the server's). |
+
+**Tags are required for visibility.** A tool with no capability tag is
+never offered in a run scoped by capability tags, so give every server
+`tags:` (or tag its tools under `tools:`). Thane warns at startup about
+a server whose tools have no tag. The tags exist in the `tag_activate`
+manifest even while the server is down.
+
+**Authentication** is static headers only, typically
+`Authorization: Bearer …`. Config expands `${VAR}` anywhere in the file,
+and an unset variable expands to an empty string, so a missing token
+shows up as the server refusing Thane's credentials rather than as a
+config error. OAuth sign-in is not supported.
+
+**Availability.** Servers connect in parallel at startup; Thane waits up
+to 30 seconds for them. Tools of servers that are ready by then are
+registered like native tools and reach delegates. A server that is down
+at startup keeps reconnecting in the background. One that crashes or
+restarts later reconnects too, and meanwhile its tools stay declared and
+answer that the server is not reachable right now. Tools that first
+appear after startup (a late server, or a server that changes its tool
+list) reach the main loop but not delegates. Each server's health shows
+up as `mcp-<name>` in `/health`. Tool names longer than 64 characters
+are shortened with a short stable hash suffix. If two tools map to the
+same name, the first one (servers in config order, then raw tool names
+sorted) wins and the other is skipped with a warning.
+
+**Arguments** go through Thane's usual `temp:`/`kb:` prefix expansion,
+so file content referenced that way is sent to the MCP server.
+
+**Not supported yet:** OAuth, the legacy HTTP notification stream (GET)
+and stream resumption, the deprecated 2024-11-05 HTTP+SSE transport,
+resources, prompts, completion, tasks, and server instructions in
+prompts. Image and audio results are summarized as text, not shown to
+the model. See [Delegation & MCP](../understanding/delegation.md).
 
 ## Delegation
 

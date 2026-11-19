@@ -166,10 +166,12 @@ only in Go contexts where the type matters.
 ### MCP (Model Context Protocol)
 
 A standard protocol for extending LLM capabilities via external tool
-servers. Thane hosts MCP servers as subprocesses and bridges their tools
+servers. Thane is an MCP client: it connects to servers running as local
+subprocesses (stdio) or over Streamable HTTP, and bridges their tools
 into the agent loop as `mcp_{server}_{tool}` — the extension path for
 capabilities Thane doesn't implement natively.
-See [Delegation](delegation.md).
+See [Delegation](delegation.md) and
+[MCP Servers](../operating/configuration.md#mcp-servers).
 
 ### Metacognitive Loop
 

@@ -162,7 +162,7 @@ same fix after a release ships is migration work.
   - [ ] [CONTRIBUTING.md](../CONTRIBUTING.md) — accurate for current development workflow
 - [ ] **Config review**
   - [ ] [`examples/config.example.yaml`](../examples/config.example.yaml) is current and committed — the `config-generate-check` gate in `just ci` regenerates it and fails on drift, so a green `just ci` is the real check; run `go generate ./internal/platform/config/...` and commit only if the gate flags it stale
-  - [ ] Stale config-owned tool lists removed where compiled defaults or MCP `default_tags` can own membership
+  - [ ] Stale config-owned tool lists removed where compiled defaults or MCP server `tags` can own membership
   - [ ] Production config checked for removed or renamed tools,
         deprecated aliases, and stale capability-tag memberships
         before the binary swap

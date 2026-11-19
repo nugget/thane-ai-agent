@@ -49,7 +49,10 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 			"tools", tools.DirectHumanEgressToolNames())
 	}
 
-	resolved := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
+	// MCP server tags join the overrides so the tags of a server that is
+	// down at boot still exist (with no tools yet) in the tag_activate
+	// manifest and tag_inspect.
+	resolved := resolveCapabilityTags(a.loop.Tools(), mcpCapabilityTagOverrides(cfg))
 	resolvedCapTags := resolved.Configs
 	if len(resolvedCapTags) == 0 {
 		return nil

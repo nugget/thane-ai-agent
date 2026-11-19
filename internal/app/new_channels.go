@@ -733,6 +733,14 @@ func (a *App) initChannels(s *newState) error {
 		a.logger.Info("embeddings enabled", "model", a.cfg.Embeddings.Model, "url", a.cfg.Embeddings.BaseURL)
 	}
 
+	// --- MCP servers ---
+	// Connect to configured MCP servers and bridge their tools into the
+	// registry. This must happen before delegate executor creation so
+	// delegates have access to the tools of servers ready at boot.
+	if err := a.initMCP(s); err != nil {
+		return err
+	}
+
 	// --- Signal message bridge ---
 	// Launches a native signal-cli jsonRpc subprocess and receives
 	// messages event-driven, routing them through the agent loop.

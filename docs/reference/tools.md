@@ -885,11 +885,36 @@ no cost.
 
 ## MCP tools
 
-Thane hosts MCP servers as subprocesses and bridges their tools into
-the registry as `mcp_{server}_{tool}`. MCP tools inherit their default
-tags from the MCP config's `default_tags` or configuration-side tag
-overrides; they do not have a compiled-in entry in
-`internal/model/toolcatalog/catalog.go`.
+Thane connects to MCP servers over stdio (a subprocess) or Streamable
+HTTP (local or remote) and bridges their tools into the registry as
+`mcp_{server}_{tool}`, sanitized and capped at 64 characters (longer
+names keep a readable prefix plus a short stable hash). Each bridged tool
+carries `CanonicalID` `mcp:{server}/{tool}`, source `mcp` and the server
+name as its origin, which is how `tag_inspect` attributes it. MCP tools
+have no compiled-in entry in `internal/model/toolcatalog/catalog.go`;
+their capability tags come from the server's `tags:` or a per-tool
+`tools.<name>.tags` override (the older `default_tags:` key was renamed
+to `tags:` and is rejected). An untagged MCP tool is never offered in a
+tag-scoped run.
+
+The description and input schema come from the server. Descriptions are
+capped at 4096 bytes. Schemas are copied and adjusted only where model
+providers require it (local `$ref` pointers inlined, top-level
+`oneOf`/`anyOf`/`allOf` merged, root forced to an object), and each
+adjustment is logged once.
+
+**Availability.** Tools of servers ready at startup are registered on
+the shared registry and reach delegates. Tools that appear later reach
+the main loop through the dynamic tool overlay, not delegates. A server
+that is down or reconnecting answers `tools.ErrUnavailable`, so the tool
+stays declared and the model is told to use another tool or try later;
+a tool the server stopped offering answers the same way. Other failures
+reach the model as fixed sentences that say what to do next: a timeout
+or broken connection is an unknown outcome, refused credentials need the
+operator, rejected arguments quote the server's message. The model never
+sees hosts, URLs or raw HTTP bodies. Results prefer the server's
+structured JSON, summarize images and binary resources instead of
+inlining them, and are capped at 16,000 bytes.
 
 Home Assistant needs no MCP bridge: the native `ha_*` tool set above is
 the complete HA surface (the `ha-mcp` bridge was retired in v0.10.2 once
@@ -897,5 +922,6 @@ native parity landed). MCP remains the extension path for capabilities
 Thane doesn't implement natively; `include_tools` filtering in the config
 narrows the bridged surface.
 
-See [Delegation & MCP](../understanding/delegation.md) for
-configuration details.
+See [MCP Servers](../operating/configuration.md#mcp-servers) for
+configuration and [Delegation & MCP](../understanding/delegation.md) for
+how delegates use these tools.
