@@ -260,6 +260,10 @@ func TestJSONRPC_MarshalParams(t *testing.T) {
 				if err == nil {
 					t.Fatalf("marshalParams = %q, want error", got)
 				}
+				// The caller's class layer names mcp: once per chain.
+				if strings.Contains(err.Error(), "mcp:") {
+					t.Errorf("marshalParams error %q repeats the mcp: prefix", err)
+				}
 				return
 			}
 			if err != nil {

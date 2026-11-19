@@ -229,7 +229,7 @@ func marshalParams(v any) (json.RawMessage, error) {
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("mcp: marshal params: %w", err)
+		return nil, fmt.Errorf("marshal params: %w", err)
 	}
 	if bytes.Equal(b, []byte("null")) {
 		return nil, nil
