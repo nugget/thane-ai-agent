@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -28,10 +29,19 @@ const blockTypeCapBytes = 64
 // render from content blocks only, never structuredContent.
 //
 // A successful result with structuredContent renders as that value's
-// compact JSON when it fits within the cap, followed by one line per
-// non-text block; text blocks are skipped because the spec has servers
-// repeat the structured value in them. When the JSON does not fit but
-// the content blocks do, the blocks are used instead.
+// compact JSON (see compactStructured) when it fits within the cap,
+// followed by one line per non-text block; text blocks are skipped
+// because the spec has servers repeat the structured value in them.
+// When the JSON does not fit but the content blocks do, the blocks are
+// used instead.
+//
+// One shape renders from the content blocks instead: structuredContent
+// that is a single-key object whose value is a string equal to the
+// joined text blocks. The reference Python SDK wraps every primitive
+// return value that way ({"result": "..."}) beside a text block holding
+// the value itself, so the wrapper adds no structure, and as JSON the
+// value would reach the model on one line with its newlines and quotes
+// escaped.
 func renderToolResult(res *callToolResult) string {
 	if res == nil {
 		return emptyResultText
@@ -40,6 +50,9 @@ func renderToolResult(res *callToolResult) string {
 	if !res.IsError {
 		if structured, ok := compactStructured(res.StructuredContent); ok {
 			joinedBlocks := strings.Join(blocks.all, "\n")
+			if len(blocks.text) > 0 && wrapsText(res.StructuredContent, strings.Join(blocks.text, "\n")) {
+				return capResult(joinedBlocks)
+			}
 			if len(structured) <= resultCapBytes || joinedBlocks == "" || len(joinedBlocks) > resultCapBytes {
 				return capResult(strings.Join(append([]string{structured}, blocks.nonText...), "\n"))
 			}
@@ -50,10 +63,26 @@ func renderToolResult(res *callToolResult) string {
 }
 
 // renderedBlocks holds each content block rendered as text, in order,
-// and the subset that are not text blocks.
+// the subset that are not text blocks, and the texts of the text
+// blocks.
 type renderedBlocks struct {
 	all     []string
 	nonText []string
+	text    []string
+}
+
+// wrapsText reports whether structured is a single-key object whose
+// one value is a JSON string equal to text.
+func wrapsText(structured json.RawMessage, text string) bool {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(structured, &obj) != nil || len(obj) != 1 {
+		return false
+	}
+	for _, v := range obj {
+		var s string
+		return json.Unmarshal(v, &s) == nil && s == text
+	}
+	return false
 }
 
 func renderBlocks(raws []json.RawMessage) renderedBlocks {
@@ -64,7 +93,9 @@ func renderBlocks(raws []json.RawMessage) renderedBlocks {
 			continue
 		}
 		out.all = append(out.all, text)
-		if !isText {
+		if isText {
+			out.text = append(out.text, text)
+		} else {
 			out.nonText = append(out.nonText, text)
 		}
 	}
@@ -164,8 +195,10 @@ func base64DecodedLen(s string) int {
 	return len(s) * 3 / 4
 }
 
-// compactStructured returns structuredContent as compact JSON, and false
-// when it is absent, JSON null, or not valid JSON.
+// compactStructured returns structuredContent as compact JSON with its
+// \uXXXX escapes decoded where JSON allows (unescapeJSONStrings), and
+// false when it is absent, JSON null, or not valid JSON. Key order and
+// number spelling are the server's.
 func compactStructured(raw json.RawMessage) (string, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -175,7 +208,93 @@ func compactStructured(raw json.RawMessage) (string, bool) {
 	if err := json.Compact(&buf, trimmed); err != nil {
 		return "", false
 	}
-	return buf.String(), true
+	return string(unescapeJSONStrings(buf.Bytes())), true
+}
+
+// unescapeJSONStrings rewrites the \uXXXX escapes in valid JSON as the
+// UTF-8 characters they stand for, combining surrogate pairs, so the
+// model reads "Zürich" and "a&b" rather than escape codes (Python's
+// json.dumps escapes every non-ASCII character by default, and Go's
+// encoder escapes <, > and &). An escape stays as it is when its
+// character is a control character (below U+0020, or U+007F), '"' or
+// '\\', or a lone surrogate. Every other escape (\n, \", \\ and the
+// rest) and every byte outside an escape is copied unchanged, so the
+// output is still valid JSON with the same key order and numbers. In
+// valid JSON a backslash occurs only inside a string, so the scan needs
+// no string tracking.
+func unescapeJSONStrings(b []byte) []byte {
+	if bytes.IndexByte(b, '\\') < 0 {
+		return b
+	}
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); {
+		if b[i] != '\\' || i+1 >= len(b) {
+			out = append(out, b[i])
+			i++
+			continue
+		}
+		if b[i+1] != 'u' {
+			out = append(out, b[i], b[i+1])
+			i += 2
+			continue
+		}
+		r, n := unicodeEscape(b[i:])
+		if n == 0 {
+			out = append(out, b[i], b[i+1])
+			i += 2
+			continue
+		}
+		if r >= 0x20 && r != 0x7f && r != '"' && r != '\\' && utf8.ValidRune(r) {
+			out = utf8.AppendRune(out, r)
+		} else {
+			out = append(out, b[i:i+n]...)
+		}
+		i += n
+	}
+	return out
+}
+
+// unicodeEscape decodes the \uXXXX escape at the start of b, combined
+// with a following low-surrogate escape when it is a high surrogate.
+// n is the number of bytes consumed (6 or 12), or 0 when b does not
+// start with a well-formed escape. A lone surrogate is returned as is.
+func unicodeEscape(b []byte) (r rune, n int) {
+	r, ok := hex4(b, 2)
+	if !ok {
+		return 0, 0
+	}
+	if !utf16.IsSurrogate(r) || len(b) < 12 || b[6] != '\\' || b[7] != 'u' {
+		return r, 6
+	}
+	low, ok := hex4(b, 8)
+	if !ok {
+		return r, 6
+	}
+	if pair := utf16.DecodeRune(r, low); pair != utf8.RuneError {
+		return pair, 12
+	}
+	return r, 6
+}
+
+// hex4 parses the four hex digits at b[at:].
+func hex4(b []byte, at int) (rune, bool) {
+	if len(b) < at+4 {
+		return 0, false
+	}
+	var r rune
+	for _, c := range b[at : at+4] {
+		switch {
+		case '0' <= c && c <= '9':
+			r = r<<4 | rune(c-'0')
+		case 'a' <= c && c <= 'f':
+			r = r<<4 | rune(c-'a'+10)
+		case 'A' <= c && c <= 'F':
+			r = r<<4 | rune(c-'A'+10)
+		default:
+			return 0, false
+		}
+	}
+	return r, true
 }
 
 // capResult bounds rendered output at resultCapBytes, note included, and

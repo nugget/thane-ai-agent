@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -47,6 +48,48 @@ func TestContent_RenderToolResult(t *testing.T) {
 			raw: `{"content":[{"type":"text","text":"dup"},{"type":"resource_link","uri":"file:///r.txt","name":"r.txt","mimeType":"text/plain"},` +
 				`{"type":"image","data":"` + png + `","mimeType":"image/png"}],"structuredContent":{"ok":true}}`,
 			want: `{"ok":true}` + "\n[resource link: r.txt file:///r.txt (text/plain)]\n[image (image/png, 300 bytes) omitted; not viewable through this tool]",
+		},
+		{
+			name: "SDK string wrapper renders the text",
+			raw:  `{"content":[{"type":"text","text":"a\nb"}],"structuredContent":{"result":"a\nb"}}`,
+			want: "a\nb",
+		},
+		{
+			name: "SDK string wrapper of a multi-line table",
+			raw: `{"content":[{"type":"text","text":"| a | b |\n|---|---|\n| 1 | \"zwei\" | \u4e09 |"}],` +
+				`"structuredContent":{"result":"| a | b |\n|---|---|\n| 1 | \"zwei\" | \u4e09 |"}}`,
+			want: "| a | b |\n|---|---|\n| 1 | \"zwei\" | 三 |",
+		},
+		{
+			name: "string wrapper matches the joined text blocks",
+			raw:  `{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}],"structuredContent":{"value":"a\nb"}}`,
+			want: "a\nb",
+		},
+		{
+			name: "string wrapper keeps non-text blocks in order",
+			raw: `{"content":[{"type":"text","text":"hi"},{"type":"image","data":"` + png + `","mimeType":"image/png"}],` +
+				`"structuredContent":{"result":"hi"}}`,
+			want: "hi\n[image (image/png, 300 bytes) omitted; not viewable through this tool]",
+		},
+		{
+			name: "string wrapper that differs from the text stays JSON",
+			raw:  `{"content":[{"type":"text","text":"y"}],"structuredContent":{"result":"x"}}`,
+			want: `{"result":"x"}`,
+		},
+		{
+			name: "two-key object stays JSON",
+			raw:  `{"content":[{"type":"text","text":"x"}],"structuredContent":{"result":"x","more":1}}`,
+			want: `{"result":"x","more":1}`,
+		},
+		{
+			name: "single-key non-string value stays JSON",
+			raw:  `{"content":[{"type":"text","text":"5"}],"structuredContent":{"result":5}}`,
+			want: `{"result":5}`,
+		},
+		{
+			name: "string wrapper of empty text stays JSON",
+			raw:  `{"content":[{"type":"text","text":""}],"structuredContent":{"result":""}}`,
+			want: `{"result":""}`,
 		},
 		{
 			name: "isError ignores structured",
@@ -181,6 +224,88 @@ func TestContent_RenderCapsAndFallbacks(t *testing.T) {
 		got := renderToolResult(coreTCallResult(t, `{"isError":true,"content":[`+textBlock(bigText)+`]}`))
 		coreTCheckCapped(t, got)
 	})
+}
+
+// TestContent_StructuredEscapesDecoded covers compactStructured's
+// unescaping: \uXXXX escapes become UTF-8 where JSON allows it, and
+// everything else (key order, numbers, other escapes) is the server's.
+func TestContent_StructuredEscapesDecoded(t *testing.T) {
+	tests := []struct {
+		name, structured, want string // want "" = unchanged
+	}{
+		{name: "non-ASCII, surrogate pair and HTML escapes",
+			structured: `{"a":"Gr\u00fc\u00dfe","b":"\ud83d\ude00","c":"a\u0026b\u003c"}`,
+			want:       `{"a":"Grüße","b":"😀","c":"a&b<"}`},
+		{name: "key order and number spelling kept",
+			structured: `{"b":"\u4e16\u754c \u003cb\u003e \u0026", "a":1.50, "n":12345678901234567890}`,
+			want:       `{"b":"世界 <b> &","a":1.50,"n":12345678901234567890}`},
+		{name: "big number untouched", structured: `{"n":12345678901234567890}`},
+		{name: "uppercase hex", structured: `{"a":"\u00FC\uD83D\uDE00"}`, want: `{"a":"ü😀"}`},
+		{name: "escaped key", structured: `{"k\u00e9y":[1,"\u00e9"]}`, want: `{"kéy":[1,"é"]}`},
+		{name: "top-level string", structured: `"\u00fc"`, want: `"ü"`},
+		{name: "replacement character itself", structured: `{"a":"\ufffd"}`, want: `{"a":"�"}`},
+		{name: "quote stays escaped", structured: `{"a":"\u0022"}`},
+		{name: "backslash stays escaped", structured: `{"a":"\u005c"}`},
+		{name: "controls stay escaped", structured: `{"a":"\u0000\u0001\u001f\u007f"}`},
+		{name: "lone high surrogate", structured: `{"a":"\ud800"}`},
+		{name: "lone low surrogate", structured: `{"a":"\udc00x"}`},
+		{name: "high surrogate before a plain escape", structured: `{"a":"\ud83d\u0041"}`, want: `{"a":"\ud83dA"}`},
+		{name: "high surrogate before a pair", structured: `{"a":"\ud83d\ud83d\ude00"}`, want: `{"a":"\ud83d😀"}`},
+		{name: "escaped backslash then literal u", structured: `{"a":"\\u00fc"}`},
+		{name: "escaped backslash then escape", structured: `{"a":"\\\u00fc"}`, want: `{"a":"\\ü"}`},
+		{name: "other escapes kept", structured: `{"a":"x\ny\t\"q\" \/ \b\f\r"}`},
+		{name: "no escapes", structured: `{"a":"plain"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			if want == "" {
+				want = tt.structured
+			}
+			got := renderToolResult(&callToolResult{StructuredContent: json.RawMessage(tt.structured)})
+			if got != want {
+				t.Fatalf("rendered\n%s\nwant\n%s", got, want)
+			}
+			if !json.Valid([]byte(got)) {
+				t.Fatalf("rendered JSON is not valid: %s", got)
+			}
+			var before, after any
+			if json.Unmarshal([]byte(tt.structured), &before) != nil || json.Unmarshal([]byte(got), &after) != nil ||
+				!reflect.DeepEqual(before, after) {
+				t.Errorf("unescaping changed the value: %v -> %v", before, after)
+			}
+		})
+	}
+}
+
+// TestContent_EscapedStructuredKeepsBudget: a fully escaped CJK result
+// spends 6 bytes per character before decoding and 3 after, so decoding
+// roughly doubles what fits within resultCapBytes.
+func TestContent_EscapedStructuredKeepsBudget(t *testing.T) {
+	cjk := []rune{0x65e5, 0x672c, 0x8a9e} // 日本語
+	var sb strings.Builder
+	sb.WriteString(`{"text":"`)
+	for i := range 6000 {
+		sb.WriteString(`\u` + fmtHex4(cjk[i%3]))
+	}
+	sb.WriteString(`"}`)
+	got := renderToolResult(&callToolResult{StructuredContent: json.RawMessage(sb.String())})
+	coreTCheckCapped(t, got)
+	kept := 0
+	for _, r := range got {
+		if r == cjk[0] || r == cjk[1] || r == cjk[2] {
+			kept++
+		}
+	}
+	if kept < 5000 {
+		t.Errorf("kept %d of 6000 characters within the cap, want at least 5000", kept)
+	}
+}
+
+// fmtHex4 formats r as four lowercase hex digits.
+func fmtHex4(r rune) string {
+	const digits = "0123456789abcdef"
+	return string([]byte{digits[r>>12&0xf], digits[r>>8&0xf], digits[r>>4&0xf], digits[r&0xf]})
 }
 
 func coreTCheckCapped(t *testing.T, got string) {

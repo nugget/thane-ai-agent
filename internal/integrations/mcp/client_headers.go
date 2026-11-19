@@ -143,8 +143,8 @@ func (w *headerWalker) annotation(node map[string]any, v any, path []string, rea
 // headerValues extracts the Mcp-Param-* values for a tools/call: the
 // argument at each parameter's exact property path, rendered per the
 // value-encoding rules (strings as-is, integers in decimal, booleans
-// lowercase). Absent and null arguments are omitted. The values are raw;
-// the transport applies encodeHeaderValue.
+// lowercase). Absent, null and non-scalar arguments are omitted. The
+// values are raw; the transport applies encodeHeaderValue.
 func headerValues(params []headerParam, args map[string]any) map[string]string {
 	var out map[string]string
 	for _, p := range params {
@@ -185,7 +185,11 @@ func argumentAt(args map[string]any, path []string) (any, bool) {
 	return nil, false
 }
 
-// headerArgString renders one argument value as a header value.
+// headerArgString renders one argument value as a header value. The
+// spec converts only strings, integers and booleans (streamable-http
+// "Value Encoding"). A non-scalar has no header rendering, so ok is
+// false and the header is omitted, as the reference SDK does; the
+// server's own argument validation then reports the type error.
 func headerArgString(v any) (string, bool) {
 	switch x := v.(type) {
 	case string:
@@ -203,9 +207,6 @@ func headerArgString(v any) (string, bool) {
 	case json.Number:
 		return x.String(), true
 	default:
-		// A mismatched value (object, array); the server decides. Send
-		// its JSON so the header still mirrors the body.
-		b, err := json.Marshal(x)
-		return string(b), err == nil
+		return "", false
 	}
 }

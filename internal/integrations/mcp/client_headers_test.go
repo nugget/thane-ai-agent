@@ -99,6 +99,7 @@ func TestClient_HeaderValues(t *testing.T) {
 		{name: "Num", path: []string{"num"}},
 		{name: "Int", path: []string{"int"}},
 		{name: "Obj", path: []string{"obj"}},
+		{name: "Arr", path: []string{"arr"}},
 	}
 	args := map[string]any{
 		"s":      "Hello, 世界",
@@ -111,10 +112,14 @@ func TestClient_HeaderValues(t *testing.T) {
 		"num":    json.Number("12"),
 		"int":    5,
 		"obj":    map[string]any{"k": 1},
+		"arr":    []any{"x"},
 	}
+	// Objects and arrays have no header rendering (streamable-http
+	// "Value Encoding" covers strings, integers and booleans only), so
+	// Obj and Arr are omitted and the server validates the argument.
 	want := map[string]string{
 		"S": "Hello, 世界", "I": "42", "Neg": "-7", "Big": "9007199254740991", "B": "false", "N": "x",
-		"Num": "12", "Int": "5", "Obj": `{"k":1}`,
+		"Num": "12", "Int": "5",
 	}
 	got := headerValues(params, args)
 	if !maps.Equal(got, want) {
