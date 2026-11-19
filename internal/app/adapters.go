@@ -1253,6 +1253,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		AllowedTools:          append([]string(nil), req.AllowedTools...),
 		ExcludeTools:          append([]string(nil), req.ExcludeTools...),
 		SkipTagFilter:         req.SkipTagFilter,
+		SkipDynamicTools:      req.SkipDynamicTools,
 		RoutingFactors:        cloneStringMap(req.RoutingFactors),
 		Bindings:              cloneStringMap(req.Bindings),
 		DelegationGating:      req.DelegationGating,

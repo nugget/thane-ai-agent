@@ -310,6 +310,61 @@ func TestExecute_LoopBackedExplicitEmptyTagsExposeNoTools(t *testing.T) {
 	}
 }
 
+// TestExecute_LoopBackedSkipsDynamicToolsOnlyForExplicitEmptyScope pins
+// which launches leave out the agent loop's dynamic tool overlay (MCP
+// tools that appeared after startup, companion tools). ExcludeTools
+// names only static tools, so the explicit-empty-scope delegate with no
+// core tags must skip the overlay to get no parent tools. Every other
+// delegate keeps it, so overlay tools whose tags its scope covers still
+// reach it.
+func TestExecute_LoopBackedSkipsDynamicToolsOnlyForExplicitEmptyScope(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		tags     []string
+		explicit bool
+		coreTags []string
+		want     bool
+	}{
+		{name: "explicit empty scope", tags: []string{}, explicit: true, want: true},
+		{name: "explicit empty scope with core tags", tags: []string{}, explicit: true, coreTags: []string{"web"}},
+		{name: "tag scoped", tags: []string{"web"}, explicit: true},
+		{name: "no scope requested", tags: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var captured looppkg.Request
+			runner := &mockLoopRunner{
+				onRun: func(req looppkg.Request) {
+					captured = req
+				},
+				resp: &looppkg.Response{
+					Content: "delegate answer",
+					Model:   "deepslate/google/gemma-3-4b",
+				},
+			}
+
+			exec := NewExecutor(slog.Default(), nil, newTestRegistry(), "spark/gpt-oss:20b")
+			exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+			if tc.coreTags != nil {
+				exec.SetCoreTags(tc.coreTags)
+			}
+
+			_, err := exec.execute(context.Background(), "task", "ha", "", tc.tags, executionOptions{
+				explicitTagScope: tc.explicit,
+			})
+			if err != nil {
+				t.Fatalf("execute() error = %v", err)
+			}
+			if captured.SkipDynamicTools != tc.want {
+				t.Fatalf("SkipDynamicTools = %v, want %v", captured.SkipDynamicTools, tc.want)
+			}
+		})
+	}
+}
+
 // TestExecute_LoopBackedTagScopedExcludesDelegateFamily exercises the
 // common delegate-launch path: caller specifies non-empty tags, so the
 // AllToolNames-based wholesale exclusion at the explicit-empty-scope

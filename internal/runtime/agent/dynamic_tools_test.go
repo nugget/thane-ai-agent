@@ -158,3 +158,69 @@ func TestRun_DelegateShapedRequestSeesDynamicTools(t *testing.T) {
 		}
 	}
 }
+
+// TestRun_ExplicitEmptyScopeDelegateSeesNoDynamicTools covers the
+// delegate that asked for an explicit empty tag scope with no core tags
+// to widen it. Its intent is "no parent tools": the executor excludes
+// every name in the static registry and sets SkipDynamicTools, so the
+// tools that reach runs through the dynamic overlay (late MCP tools,
+// changed definitions of startup tools, companion tools) stay hidden
+// too. The two cases mirror what the loop runtime sends: with nothing in
+// scope it also sets SkipTagFilter; with a lens active the scope holds
+// that tag, which an overlay tool may carry.
+func TestRun_ExplicitEmptyScopeDelegateSeesNoDynamicTools(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		initialTags   []string
+		skipTagFilter bool
+	}{
+		{name: "nothing in scope", skipTagFilter: true},
+		{name: "lens tag in scope", initialTags: []string{"game"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockLLM{responses: []*llm.ChatResponse{{
+				Model:   "test-model",
+				Message: llm.Message{Role: "assistant", Content: "done"},
+			}}}
+			capTags := map[string]config.CapabilityTagConfig{
+				"base":      {Tools: []string{"base_tool"}},
+				"game":      {Tools: []string{"mcp_game_look"}},
+				"companion": {},
+			}
+			loop := setupCapabilityLoopWithClient(mock, []string{"base_tool", "mcp_game_look"}, capTags, "test-model")
+			loop.SetDynamicToolSource(fakeDynamicSource{
+				tools: []*tools.Tool{
+					dynTool("mcp_game_move"),         // MCP tool that appeared after startup
+					dynTool("mcp_game_look"),         // changed definition of a startup tool
+					dynTool("macos_search_contacts"), // companion tool
+				},
+				tagAdds: map[string][]string{
+					"game":      {"mcp_game_move", "mcp_game_look"},
+					"companion": {"macos_search_contacts"},
+				},
+			})
+
+			// What the delegate executor sends for this scope: every
+			// static tool name excluded, plus the delegate family.
+			exclude := append(loop.Tools().AllToolNames(), "thane_delegate")
+			_, err := loop.Run(context.Background(), &Request{
+				Messages:         []Message{{Role: "user", Content: "Summarize the text above."}},
+				InitialTags:      tc.initialTags,
+				SkipTagFilter:    tc.skipTagFilter,
+				DelegationGating: "disabled",
+				ExcludeTools:     exclude,
+				SkipDynamicTools: true,
+				UsageRole:        "delegate",
+			}, nil)
+			if err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+			if len(mock.calls) == 0 {
+				t.Fatal("no LLM call recorded")
+			}
+			if names := toolNames(mock.calls[0].Tools); len(names) != 0 {
+				t.Errorf("explicit-empty-scope delegate was offered %v, want no tools", names)
+			}
+		})
+	}
+}
