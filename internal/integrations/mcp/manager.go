@@ -291,8 +291,9 @@ var (
 
 // Probe is the connwatch health check for one server: an era-correct
 // ping or discover while connected, the last connect error otherwise.
-// A failed probe never tears a connection down. A failure is reported as
-// one of the fixed errProbe* errors.
+// A failed probe never tears a connection down, except that an expired
+// HTTP session makes the client reconnect at once. A failure is reported
+// as one of the fixed errProbe* errors.
 func (m *Manager) Probe(ctx context.Context, server string) error {
 	s, ok := m.byName[server]
 	if !ok || s.client == nil {

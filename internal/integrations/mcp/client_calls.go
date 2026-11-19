@@ -238,8 +238,9 @@ func (c *serverClient) noteAccess() {
 
 // probe is the connwatch health check. Not ready: returns the
 // last connect error (wrapping errNotReady) with no I/O. Ready: legacy →
-// ping, modern → server/discover; any JSON-RPC response (result or
-// error) counts as healthy. Failures are reported, never acted on,
+// ping, modern → server/discover; a JSON-RPC response (result or error)
+// counts as healthy, but on HTTP an error status is a failure even when
+// it carries a JSON-RPC error. Failures are reported, never acted on,
 // except errSessionExpired, which triggers an immediate re-initialize.
 func (c *serverClient) probe(ctx context.Context) error {
 	conn, err := c.readyConn()

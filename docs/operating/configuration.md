@@ -1279,8 +1279,12 @@ reports `status: degraded` and `system_health` shows
 some of the time, such as a game that exposes MCP only while it is open.
 
 While a server is connected, the health check is a `ping` (or
-`server/discover` for a stateless 2026-07-28 server), and any JSON-RPC
-answer counts as healthy. A failed check never drops the connection.
+`server/discover` for a stateless 2026-07-28 server). A JSON-RPC answer
+on stdio, or in a successful HTTP response, counts as healthy, even
+when it is a JSON-RPC error. An HTTP error status counts as a failure,
+even when its body carries a JSON-RPC error. A failed check never drops
+the connection, except that an expired HTTP session makes Thane
+reconnect at once; that check reports `mcp: not connected`.
 The error that `/health` and `system_health` show is one of a fixed set,
 never a host, URL or server text; the full error is logged at Debug as
 `mcp: health check failed`.
