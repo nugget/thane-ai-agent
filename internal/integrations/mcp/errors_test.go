@@ -136,6 +136,8 @@ func TestErrors_ModelFacingCallError(t *testing.T) {
 	}{
 		{name: "tool gone", err: errToolGone, unavailable: reasonToolGone},
 		{name: "closed before the call", err: errClientClosed, unavailable: reasonShuttingDown},
+		{name: "refused unsent by a closing transport", err: fmt.Errorf("%w: tools/call x: %w", errClientClosed,
+			fmt.Errorf("%w: stdio: transport closed", errUnreachable)), unavailable: reasonShuttingDown},
 		{name: "cut off by shutdown, server -32000", err: fmt.Errorf("%w: tools/call x: %w", errCallCutOff,
 			&RPCError{Code: -32000, Message: "Connection closed"}), text: textShutdownMidCall},
 		{name: "cut off by shutdown, connection lost", err: fmt.Errorf("%w: tools/call x: %w", errCallCutOff,

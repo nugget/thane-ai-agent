@@ -282,6 +282,8 @@ func (c *serverClient) offers(name string) bool {
 // call whose outcome is unknown (connection lost, timeout) is never
 // re-issued. A call that fails once the client is closing wraps
 // errCallCutOff: the failure is the shutdown's doing, whatever it says.
+// One the closing transport refused unsent (errUnreachable) never
+// started, so it wraps errClientClosed instead.
 func (c *serverClient) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
 	c.noteAccess()
 	conn, err := c.readyConn()
@@ -300,6 +302,10 @@ func (c *serverClient) callTool(ctx context.Context, name string, args map[strin
 	for retried := false; ; retried = true {
 		res, err := c.callRounds(ctx, conn, name, args)
 		if err != nil && c.lifeCtx.Err() != nil {
+			if errors.Is(err, errUnreachable) {
+				// The closing transport refused it unsent: it never started.
+				return toolResult{}, fmt.Errorf("%w: %w", errClientClosed, err)
+			}
 			return toolResult{}, fmt.Errorf("%w: %w", errCallCutOff, err)
 		}
 		if err == nil || retried {

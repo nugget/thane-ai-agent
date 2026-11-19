@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // clientTCursor returns the cursor in params and whether one was sent.
@@ -421,6 +422,51 @@ func clientTModelFacing(t *testing.T, err error) *promptfmt.ModelFacingError {
 	return mfe
 }
 
+// clientTCallDuringClose starts a tools/call, closes the client while
+// the call waits in the transport, and returns callTool's error. Once
+// Close starts, the transport answers the call with resp or err.
+func clientTCallDuringClose(t *testing.T, resp *Response, failure error) error {
+	t.Helper()
+	srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
+	inFlight := make(chan struct{}, 1)
+	factory := func(ctx context.Context, hooks transportHooks) (Transport, error) {
+		tr, err := srv.factory()(ctx, hooks)
+		if err != nil {
+			return nil, err
+		}
+		return &clientTCutOffTransport{Transport: tr, inFlight: inFlight, closing: make(chan struct{}), resp: resp, err: failure}, nil
+	}
+	cfg := clientTConfig(transportStdio, protocolLegacy)
+	cfg.logger = coreTLogger(t)
+	c := newServerClient(t.Context(), cfg, factory)
+	t.Cleanup(func() { _ = c.close(context.WithoutCancel(t.Context())) })
+	clientTStart(t, c)
+	clientTReadyConn(t, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.callTool(t.Context(), "echo", nil)
+		done <- err
+	}()
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tools/call never reached the transport")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := c.close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("callTool did not return after close")
+		return nil
+	}
+}
+
 // TestClient_CallCutOffByShutdown: a call in flight when the client
 // closes is cut off by the shutdown, whatever the server or transport
 // then reports. The model is told Thane is shutting down and the outcome
@@ -446,43 +492,7 @@ func TestClient_CallCutOffByShutdown(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
-			inFlight := make(chan struct{}, 1)
-			factory := func(ctx context.Context, hooks transportHooks) (Transport, error) {
-				tr, err := srv.factory()(ctx, hooks)
-				if err != nil {
-					return nil, err
-				}
-				return &clientTCutOffTransport{Transport: tr, inFlight: inFlight, closing: make(chan struct{}), resp: tt.resp, err: tt.err}, nil
-			}
-			cfg := clientTConfig(transportStdio, protocolLegacy)
-			cfg.logger = coreTLogger(t)
-			c := newServerClient(t.Context(), cfg, factory)
-			t.Cleanup(func() { _ = c.close(context.WithoutCancel(t.Context())) })
-			clientTStart(t, c)
-			clientTReadyConn(t, c)
-
-			done := make(chan error, 1)
-			go func() {
-				_, err := c.callTool(t.Context(), "echo", nil)
-				done <- err
-			}()
-			select {
-			case <-inFlight:
-			case <-time.After(5 * time.Second):
-				t.Fatal("tools/call never reached the transport")
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
-			if err := c.close(ctx); err != nil {
-				t.Fatalf("close: %v", err)
-			}
-			var err error
-			select {
-			case err = <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatal("callTool did not return after close")
-			}
+			err := clientTCallDuringClose(t, tt.resp, tt.err)
 			if !errors.Is(err, errCallCutOff) || !errors.Is(err, errClientClosed) {
 				t.Errorf("err = %v, want it to wrap errCallCutOff and errClientClosed", err)
 			}
@@ -498,6 +508,21 @@ func TestClient_CallCutOffByShutdown(t *testing.T) {
 			}
 		})
 	}
+
+	// A call that reaches the transport only as it closes is refused
+	// unsent (stdio's register or writeFrame, HTTP's closed check report
+	// errUnreachable). It never started, so the model gets the
+	// shutting-down unavailability, not an unknown outcome.
+	t.Run("a call the closing transport never sent never started", func(t *testing.T) {
+		err := clientTCallDuringClose(t, nil, fmt.Errorf("%w: stdio: %w", errUnreachable, errStdioClosed))
+		if errors.Is(err, errCallCutOff) || !errors.Is(err, errClientClosed) || !errors.Is(err, errUnreachable) {
+			t.Errorf("err = %v, want errClientClosed wrapping the transport's errUnreachable, not errCallCutOff", err)
+		}
+		var unavailable tools.ErrUnavailable
+		if got := modelFacingCallError("mcp_fake_echo", err); !errors.As(got, &unavailable) || unavailable.Reason != reasonShuttingDown {
+			t.Errorf("model error = %v, want ErrUnavailable(%q)", got, reasonShuttingDown)
+		}
+	})
 
 	t.Run("a -32000 while the client is live is the server's error", func(t *testing.T) {
 		routes := clientTLegacyRoutes("", clientTTool("echo"))

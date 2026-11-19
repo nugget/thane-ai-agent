@@ -154,13 +154,47 @@ func TestStdio_CloseDuringFinishFrameKeepsCloseCause(t *testing.T) {
 	if cause := tr.cause(); !errors.Is(cause, errStdioClosed) {
 		t.Errorf("cause = %q, want Close's %q", cause, errStdioClosed)
 	}
-	stdioTEventually(t, "writeSem free", func() bool {
-		select {
-		case tr.writeSem <- struct{}{}:
-			<-tr.writeSem
-			return true
-		default:
-			return false
-		}
-	})
+	stdioTEventually(t, "writeSem free", func() bool { return stdioTWriteSemFree(tr) })
+}
+
+// stdioTWriteSemFree reports whether no write holds writeSem.
+func stdioTWriteSemFree(tr *stdioTransport) bool {
+	select {
+	case tr.writeSem <- struct{}{}:
+		<-tr.writeSem
+		return true
+	default:
+		return false
+	}
+}
+
+// The write finishing a cut-short line that fails because stdin was
+// closed is a casualty of the stop sequence, which finishes the
+// transport with its own cause; finishFrame must not finish it with a
+// partial write. Close would mask that (once Close is asked for, any
+// finish records Close's cause), so this closes stdin alone, the stop
+// sequence's first step, on a server that keeps running: once the write
+// has given writeSem back, the transport is still up.
+func TestStdio_StdinClosedDuringFinishFrameIsNotALoss(t *testing.T) {
+	cfg, logs := stdioTLogs(t, "stdio-noread")
+	cfg.frameFinishWait = time.Minute
+	tr := stdioTStart(t, cfg, transportHooks{})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err := tr.Call(ctx, &Request{Method: "hold", Params: stdioTBigParams()}, callInfo{cancellable: true})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if stdioTWriteSemFree(tr) {
+		t.Fatal("no write is finishing the cut-short line")
+	}
+	tr.closeStdin()
+	stdioTEventually(t, "writeSem free", func() bool { return stdioTWriteSemFree(tr) })
+	if !strings.Contains(logs.String(), `msg="mcp: stdin closed while finishing a stdio write"`) {
+		t.Errorf("the casualty write was not logged:\n%s", logs.String())
+	}
+	if stdioTIsDone(tr.Done()) {
+		t.Fatalf("the casualty write finished the transport (cause %v)", tr.cause())
+	}
 }
