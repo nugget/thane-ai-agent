@@ -22,10 +22,17 @@ func TestValidateMCP(t *testing.T) {
 		return s
 	}
 
+	cwd := func(s MCPServerConfig, dir string) MCPServerConfig {
+		s.Cwd = dir
+		return s
+	}
+
 	tests := []struct {
-		name    string
-		servers []MCPServerConfig
-		wantErr string // "" = valid
+		name      string
+		servers   []MCPServerConfig
+		paths     map[string]string // Config.Paths, the root prefixes
+		needsHome bool              // row expands ~ and needs a home directory
+		wantErr   string            // "" = valid
 	}{
 		{name: "stdio ok", servers: []MCPServerConfig{stdio("files")}},
 		{name: "http ok", servers: []MCPServerConfig{httpSrv("game", "http://localhost:11212/mcp")}},
@@ -58,11 +65,26 @@ func TestValidateMCP(t *testing.T) {
 			s.Headers = map[string]string{"Accept": "application/json", "Authorization": "Bearer t"}
 		})}},
 		{name: "env without equals kept valid", servers: []MCPServerConfig{with(stdio("x"), func(s *MCPServerConfig) { s.Env = []string{"NOEQUALS"} })}},
+		// A stdio cwd must resolve to an absolute path the way the app
+		// resolves it (root prefixes from paths, then ~), or Thane would
+		// refuse to start after validation passed.
+		{name: "cwd absolute", servers: []MCPServerConfig{cwd(stdio("x"), "/srv/x")}},
+		{name: "cwd home", servers: []MCPServerConfig{cwd(stdio("x"), "~/x")}, needsHome: true},
+		{name: "cwd root prefix", servers: []MCPServerConfig{cwd(stdio("x"), "kb:tools")}, paths: map[string]string{"kb": "/srv/kb"}},
+		{name: "cwd relative", servers: []MCPServerConfig{cwd(stdio("x"), "relative/dir")}, wantErr: "cwd"},
+		{name: "cwd unknown root prefix", servers: []MCPServerConfig{cwd(stdio("x"), "kb:tools")}, wantErr: "cwd"},
+		{name: "cwd root with relative path", servers: []MCPServerConfig{cwd(stdio("x"), "kb:tools")}, paths: map[string]string{"kb": "relative/kb"}, wantErr: "cwd"},
+		{name: "cwd ignored for http", servers: []MCPServerConfig{cwd(httpSrv("x", "http://h/mcp"), "relative/dir")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			c := &Config{MCP: MCPConfig{Servers: tt.servers}}
+			if tt.needsHome {
+				if _, err := os.UserHomeDir(); err != nil {
+					t.Skip("no home directory")
+				}
+			}
+			c := &Config{MCP: MCPConfig{Servers: tt.servers}, Paths: tt.paths}
 			err := c.validateMCP()
 			if tt.wantErr == "" {
 				if err != nil {

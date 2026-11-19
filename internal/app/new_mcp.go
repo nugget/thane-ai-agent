@@ -57,6 +57,8 @@ func (a *App) initMCP(s *newState) error {
 
 // mcpServerConfigs maps validated config onto mcp.ServerConfig. A stdio
 // cwd is expanded like other configured paths and must end up absolute.
+// Config validation already rejects a cwd that cannot, with the same
+// resolver; the check here guards callers that skipped validation.
 func mcpServerConfigs(in []config.MCPServerConfig, resolver *paths.Resolver) ([]mcp.ServerConfig, error) {
 	out := make([]mcp.ServerConfig, 0, len(in))
 	for _, srv := range in {
