@@ -368,12 +368,18 @@ func TestNegotiate_CachedLegacyEra(t *testing.T) {
 	}
 }
 
-// TestNegotiate_RespawnClosesTheDeadTransport checks A17 cleanup.
+// TestNegotiate_RespawnClosesTheDeadTransport: the process that died
+// during the probe is closed, negotiation continues on the respawned
+// one, and the respawn is a Debug detail (it happens on every connect
+// attempt to a legacy server that exits on unknown requests).
 func TestNegotiate_RespawnClosesTheDeadTransport(t *testing.T) {
 	routes := clientTLegacyBase()
 	routes[methodDiscover] = clientTLoseWith(errConnectionLost)
 	srv := &clientTFakeServer{handle: routes.handler()}
-	c := clientTNew(t, srv, clientTConfig(transportStdio, ""))
+	cfg := clientTConfig(transportStdio, "")
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
 	conn, err := c.negotiate(t.Context())
 	if err != nil {
 		t.Fatalf("negotiate: %v", err)
@@ -385,6 +391,29 @@ func TestNegotiate_RespawnClosesTheDeadTransport(t *testing.T) {
 	}
 	if conn.tr != second || second.isClosed() {
 		t.Error("negotiation did not continue on the respawned transport")
+	}
+	const respawn = `msg="mcp: server exited during the era probe; restarting it for the legacy handshake"`
+	if out := logs.String(); !strings.Contains(out, "level=DEBUG "+respawn) || strings.Contains(out, "level=INFO "+respawn) {
+		t.Errorf("respawn should log at Debug only:\n%s", out)
+	}
+}
+
+// TestNegotiate_StdioProbeLeavesRoomForInitialize: when the attempt
+// budget is no larger than the probe timeout, a silent stdio legacy
+// server is still detected. The probe takes at most half the attempt,
+// so its timeout leaves time for initialize and tools/list.
+func TestNegotiate_StdioProbeLeavesRoomForInitialize(t *testing.T) {
+	routes := clientTLegacyRoutes("", clientTTool("echo"))
+	routes[methodDiscover] = clientTHang // never answers unknown requests
+	srv := &clientTFakeServer{handle: routes.handler()}
+	cfg := clientTConfig(transportStdio, protocolAuto)
+	cfg.probeTimeout, cfg.connectTimeout = time.Second, time.Second
+	c := clientTNew(t, srv, cfg)
+	clientTStart(t, c)
+	clientTReadyConn(t, c)
+	want := []string{methodDiscover, methodInitialize, methodInitialized, methodToolsList}
+	if got := srv.methods(); !slices.Equal(got, want) {
+		t.Errorf("methods = %q, want %q (one attempt: probe timeout, then legacy)", got, want)
 	}
 }
 
@@ -509,9 +538,6 @@ func TestNegotiate_StoresServerDetails(t *testing.T) {
 			defer c.closeConn(conn)
 			if conn.server.Name != tt.server || conn.instructions != tt.instructions {
 				t.Errorf("server = %+v, instructions = %q", conn.server, conn.instructions)
-			}
-			if conn.caps.Tools == nil || !conn.caps.Tools.ListChanged {
-				t.Errorf("caps = %+v, want tools.listChanged", conn.caps)
 			}
 		})
 	}

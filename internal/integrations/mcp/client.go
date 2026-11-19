@@ -25,6 +25,7 @@ const (
 	defaultBackoffMin       = 2 * time.Second
 	defaultBackoffMax       = 60 * time.Second
 	defaultListRefreshFloor = 60 * time.Second
+	defaultStableAfter      = 60 * time.Second
 
 	// refreshDebounce coalesces bursts of list_changed notifications and
 	// stale-list accesses into one tools/list run.
@@ -50,6 +51,7 @@ type clientConfig struct {
 	backoffMin       time.Duration // supervisor reconnect backoff start (2s)
 	backoffMax       time.Duration // supervisor reconnect backoff cap (60s)
 	listRefreshFloor time.Duration // modern ttl refresh floor (60s)
+	stableAfter      time.Duration // a connection that lived this long ends a run of failures (60s)
 
 	// onToolsChanged fires after any successful listing whose result
 	// differs from the previous one (including the first). It is called
@@ -72,6 +74,7 @@ func (cfg clientConfig) withDefaults() clientConfig {
 	fill(&cfg.backoffMin, defaultBackoffMin)
 	fill(&cfg.backoffMax, defaultBackoffMax)
 	fill(&cfg.listRefreshFloor, defaultListRefreshFloor)
+	fill(&cfg.stableAfter, defaultStableAfter)
 	if cfg.backoffMax < cfg.backoffMin {
 		cfg.backoffMax = cfg.backoffMin
 	}
@@ -117,7 +120,14 @@ type serverClient struct {
 	notifyCh    chan struct{} // cap 1: a synchronous re-list changed the tools
 	listSem     chan struct{} // cap 1: one tools/list run at a time
 
-	debounce time.Duration // refresh debounce; tests shorten it
+	debounce time.Duration                     // refresh debounce; tests shorten it
+	jitter   func(time.Duration) time.Duration // spreads reconnect waits; tests make it exact
+
+	// thaneBugLogged gates the "needs a Thane fix" ERROR to once per run
+	// of failed attempts; a successful connect re-arms it.
+	thaneBugLogged atomic.Bool
+
+	retiring sync.WaitGroup // retireConn goroutines; run waits for them
 
 	mu           sync.Mutex
 	state        connState
@@ -145,7 +155,6 @@ type clientConn struct {
 	tr           Transport
 	eraState     atomic.Int32 // era; read by the inbound hooks
 	version      string
-	caps         serverCapabilities
 	server       implementation
 	instructions string
 }
@@ -153,8 +162,9 @@ type clientConn struct {
 // currentEra returns the negotiated era (eraUnknown during negotiation).
 func (cc *clientConn) currentEra() era { return era(cc.eraState.Load()) }
 
-// newServerClient builds the client. ctx is the lifetime ctx (the
-// Manager's Start ctx); close also cancels it. No I/O, no goroutines.
+// newServerClient builds the client. Cancelling ctx stops the client
+// like close does; the Manager passes a ctx that is never cancelled, so
+// only close ends it. No I/O, no goroutines.
 func newServerClient(ctx context.Context, cfg clientConfig, f transportFactory) *serverClient {
 	cfg = cfg.withDefaults()
 	logger := cfg.logger.With("mcp_server", cfg.name)
@@ -180,6 +190,7 @@ func newServerClient(ctx context.Context, cfg clientConfig, f transportFactory) 
 		notifyCh:    make(chan struct{}, 1),
 		listSem:     make(chan struct{}, 1),
 		debounce:    refreshDebounce,
+		jitter:      jitterDuration,
 		stateCh:     make(chan struct{}),
 		warned:      make(map[string]struct{}),
 	}
@@ -230,8 +241,16 @@ const (
 	serveReconnect                 // session expired: reconnect at once
 )
 
-// run is the supervisor loop (DESIGN-AMENDMENTS AM-6). It is the only
-// place that connects, reconnects and calls onToolsChanged.
+// run is the supervisor loop. It is the only place that connects,
+// reconnects and calls onToolsChanged.
+//
+// A failed attempt, or a connection lost before stableAfter, is a
+// failure: the next attempt waits backoff, which doubles up to
+// backoffMax, so a server that crashes right after connecting is not
+// respawned at a fixed short interval. A connection that lived
+// stableAfter ends the run of failures: backoff returns to backoffMin.
+// Every wait is jittered. Within a run of failures the first failed
+// attempt and the first lost connection log at WARN, repeats at Debug.
 func (c *serverClient) run() {
 	first := true
 	finishFirst := func() {
@@ -241,11 +260,13 @@ func (c *serverClient) run() {
 		}
 	}
 	defer close(c.exited)
+	defer c.retiring.Wait()
 	defer finishFirst()
 	defer c.setDisconnected(errClientClosed)
 
 	backoff := c.cfg.backoffMin
-	failures := 0
+	failures := 0     // failed attempts and quick losses in this run
+	flapping := false // this run includes a connection lost before stableAfter
 	for c.lifeCtx.Err() == nil {
 		c.setConnecting()
 		conn, set, err := c.connectAttempt()
@@ -256,27 +277,41 @@ func (c *serverClient) run() {
 				return
 			}
 			failures++
-			c.logAttemptFailure(failures, err, backoff)
-			if !c.sleep(backoff) {
+			wait := c.jitter(backoff)
+			c.logAttemptFailure(failures, err, wait)
+			if !c.sleep(wait) {
 				return
 			}
 			backoff = min(2*backoff, c.cfg.backoffMax)
 			continue
 		}
-		failures, backoff = 0, c.cfg.backoffMin
 		c.setReady(conn, set)
-		c.logReady(conn, set)
+		readyAt := time.Now()
+		c.thaneBugLogged.Store(false)
+		c.logReady(conn, set, flapping)
 		finishFirst()
 		c.fireToolsChanged()
-		switch c.serve(conn) {
-		case serveStop:
+		end := c.serve(conn, flapping)
+		if end == serveStop {
 			c.closeConn(conn)
 			return
-		case serveLost:
-			if !c.sleep(c.cfg.backoffMin) {
-				return
-			}
-		case serveReconnect:
+		}
+		quick := time.Since(readyAt) < c.cfg.stableAfter
+		if !quick {
+			failures, backoff, flapping = 0, c.cfg.backoffMin, false
+		}
+		if end == serveReconnect {
+			continue // the session expired: reconnect at once
+		}
+		wait := c.jitter(backoff)
+		c.logLost(conn, flapping, wait)
+		if !c.sleep(wait) {
+			return
+		}
+		if quick {
+			failures++
+			flapping = true
+			backoff = min(2*backoff, c.cfg.backoffMax)
 		}
 	}
 }
@@ -303,8 +338,16 @@ func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
 }
 
 // serve waits on a ready connection until it is lost, expires, or the
-// client stops, handling list refreshes in between.
-func (c *serverClient) serve(conn *clientConn) serveEnd {
+// client stops, handling list refreshes in between. While flapping, it
+// logs once the connection has lived stableAfter, because the reconnect
+// itself was logged only at Debug.
+func (c *serverClient) serve(conn *clientConn, flapping bool) serveEnd {
+	var stable <-chan time.Time
+	if flapping {
+		t := time.NewTimer(c.cfg.stableAfter)
+		defer t.Stop()
+		stable = t.C
+	}
 	for {
 		select {
 		case <-c.lifeCtx.Done():
@@ -313,7 +356,6 @@ func (c *serverClient) serve(conn *clientConn) serveEnd {
 			if c.lifeCtx.Err() != nil {
 				return serveStop
 			}
-			c.logger.Warn("mcp: server connection lost; reconnecting", "era", conn.currentEra().String())
 			c.setDisconnected(fmt.Errorf("%w: the server connection closed", errConnectionLost))
 			c.closeConn(conn)
 			return serveLost
@@ -322,16 +364,19 @@ func (c *serverClient) serve(conn *clientConn) serveEnd {
 				continue
 			}
 			c.logger.Info("mcp: server session expired; reconnecting")
-			c.closeConn(conn)
+			c.retireConn(conn)
 			return serveReconnect
 		case <-c.refreshCh:
 			if c.refresh(conn) {
 				c.logger.Info("mcp: server session expired; reconnecting")
-				c.closeConn(conn)
+				c.retireConn(conn)
 				return serveReconnect
 			}
 		case <-c.notifyCh:
 			c.fireToolsChanged()
+		case <-stable:
+			stable = nil
+			c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
 		}
 	}
 }
@@ -366,7 +411,8 @@ func (c *serverClient) refresh(conn *clientConn) bool {
 		case <-conn.tr.Done(): // serve reports the loss
 		default:
 			if c.lifeCtx.Err() == nil {
-				c.logger.Warn("mcp: refreshing the tool list failed; keeping the previous list", "error", err)
+				c.logger.Warn("mcp: refreshing the tool list failed; keeping the previous list",
+					append([]any{"error", err}, httpStatusLogArgs(err)...)...)
 			}
 		}
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math/rand/v2"
 	"time"
 )
 
@@ -142,6 +144,42 @@ func (c *serverClient) closeConn(conn *clientConn) {
 	}
 }
 
+// retireConn ends a connection whose session expired. On a transport
+// that can retire (HTTP), requests already in flight keep running to
+// their own answers instead of being aborted: the server rejects them
+// unprocessed, so callTool retries them on the replacement connection,
+// where an abort would report an unknown outcome. The wait is bounded by
+// callTimeout and ends early when the client closes; then conn is
+// closed. Other transports are closed at once.
+func (c *serverClient) retireConn(conn *clientConn) {
+	r, ok := conn.tr.(interface{ retire(context.Context) })
+	if !ok {
+		c.closeConn(conn)
+		return
+	}
+	c.retiring.Add(1)
+	go func() {
+		defer c.retiring.Done()
+		ctx, cancel := context.WithTimeout(c.lifeCtx, c.cfg.callTimeout)
+		r.retire(ctx)
+		cancel()
+		c.closeConn(conn)
+	}()
+}
+
+// jitterFraction is how far jitterDuration moves a wait either way.
+const jitterFraction = 0.2
+
+// jitterDuration spreads d uniformly over d±20%, so servers that failed
+// together do not reconnect in lockstep.
+func jitterDuration(d time.Duration) time.Duration {
+	spread := int64(float64(d) * 2 * jitterFraction)
+	if spread <= 0 {
+		return d
+	}
+	return d - time.Duration(spread/2) + time.Duration(rand.Int64N(spread+1))
+}
+
 // sleep waits d or until the client stops; false means stop.
 func (c *serverClient) sleep(d time.Duration) bool {
 	t := time.NewTimer(d)
@@ -154,18 +192,39 @@ func (c *serverClient) sleep(d time.Duration) bool {
 	}
 }
 
-func (c *serverClient) logAttemptFailure(failures int, err error, backoff time.Duration) {
+// logAttemptFailure logs a failed connect attempt: WARN for the first
+// failure of a run, Debug for repeats.
+func (c *serverClient) logAttemptFailure(failures int, err error, retryIn time.Duration) {
+	status := httpStatusLogArgs(err)
 	if failures == 1 {
 		c.logger.Warn("mcp: connecting to the server failed; retrying in the background",
-			"error", err, "retry_in", backoff)
+			append([]any{"error", err, "retry_in", retryIn}, status...)...)
 		return
 	}
 	c.logger.Debug("mcp: connecting to the server failed again",
-		"error", err, "failures", failures, "retry_in", backoff)
+		append([]any{"error", err, "failures", failures, "retry_in", retryIn}, status...)...)
 }
 
-func (c *serverClient) logReady(conn *clientConn, set *toolSet) {
-	c.logger.Info("mcp: server connected",
+// logLost logs a lost connection: WARN, or Debug while the run is
+// already flapping (an earlier connection of it was lost quickly).
+func (c *serverClient) logLost(conn *clientConn, flapping bool, retryIn time.Duration) {
+	const msg = "mcp: server connection lost; reconnecting"
+	args := []any{"era", conn.currentEra().String(), "retry_in", retryIn}
+	if flapping {
+		c.logger.Debug(msg, args...)
+		return
+	}
+	c.logger.Warn(msg, args...)
+}
+
+// logReady logs a connect at INFO, or at Debug while the run is
+// flapping (serve logs at INFO once the connection proves stable).
+func (c *serverClient) logReady(conn *clientConn, set *toolSet, flapping bool) {
+	level := slog.LevelInfo
+	if flapping {
+		level = slog.LevelDebug
+	}
+	c.logger.Log(c.lifeCtx, level, "mcp: server connected",
 		"era", conn.currentEra().String(),
 		"protocol_version", conn.version,
 		"server_name", logText(conn.server.Name),

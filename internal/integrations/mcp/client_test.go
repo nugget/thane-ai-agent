@@ -479,3 +479,216 @@ func TestClient_ConcurrentUse(t *testing.T) {
 		t.Errorf("spawns = %d, want reconnects", srv.spawns())
 	}
 }
+
+// clientTWaits records every reconnect wait the supervisor plans (the
+// jitter hook sees each one) and returns it unchanged.
+type clientTWaits struct {
+	mu    sync.Mutex
+	waits []time.Duration
+}
+
+func (w *clientTWaits) jitter(d time.Duration) time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.waits = append(w.waits, d)
+	return d
+}
+
+func (w *clientTWaits) get() []time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]time.Duration(nil), w.waits...)
+}
+
+// clientTReadyOn waits until c is ready on the spawn-th transport
+// (1-based).
+func clientTReadyOn(t *testing.T, c *serverClient, srv *clientTFakeServer, spawn int) {
+	t.Helper()
+	clientTEventually(t, fmt.Sprintf("ready on spawn %d", spawn), func() bool {
+		conn, err := c.readyConn()
+		return err == nil && srv.spawns() == spawn && conn.tr == srv.transportAt(spawn-1)
+	})
+}
+
+// clientTLoseWhenReady waits until c is ready on the spawn-th transport,
+// then kills that connection.
+func clientTLoseWhenReady(t *testing.T, c *serverClient, srv *clientTFakeServer, spawn int) {
+	t.Helper()
+	clientTReadyOn(t, c, srv, spawn)
+	srv.transportAt(spawn - 1).lose()
+}
+
+// TestClient_FlappingServerBacksOff: a server that dies right after
+// every connect is a run of failures, not a series of fresh starts. The
+// reconnect wait doubles to the cap instead of staying at backoffMin,
+// and the run logs one WARN for the loss and one INFO for the connect;
+// repeats go to Debug.
+func TestClient_FlappingServerBacksOff(t *testing.T) {
+	srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
+	cfg := clientTConfig(transportStdio, protocolLegacy)
+	cfg.backoffMin, cfg.backoffMax = 2*time.Millisecond, 16*time.Millisecond
+	cfg.stableAfter = time.Hour
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
+	waits := &clientTWaits{}
+	c.jitter = waits.jitter
+	clientTStart(t, c)
+	for spawn := 1; spawn <= 6; spawn++ {
+		clientTLoseWhenReady(t, c, srv, spawn)
+	}
+	clientTReadyOn(t, c, srv, 7)
+
+	ms := time.Millisecond
+	if got, want := waits.get(), []time.Duration{2 * ms, 4 * ms, 8 * ms, 16 * ms, 16 * ms, 16 * ms}; !slices.Equal(got, want) {
+		t.Errorf("reconnect waits = %v, want %v (doubling to the cap)", got, want)
+	}
+	out := logs.String()
+	if n := strings.Count(out, `level=WARN msg="mcp: server connection lost; reconnecting"`); n != 1 {
+		t.Errorf("WARN connection-lost lines = %d, want 1\n%s", n, out)
+	}
+	if n := strings.Count(out, `level=INFO msg="mcp: server connected"`); n != 1 {
+		t.Errorf("INFO connected lines = %d, want 1\n%s", n, out)
+	}
+	if n := strings.Count(out, `level=DEBUG msg="mcp: server connection lost; reconnecting"`); n != 5 {
+		t.Errorf("Debug connection-lost lines = %d, want 5", n)
+	}
+}
+
+// TestClient_StableConnectionResetsBackoff: once a connection has lived
+// stableAfter, the run of failures is over. It logs that the connection
+// is stable again, and its loss waits only backoffMin.
+func TestClient_StableConnectionResetsBackoff(t *testing.T) {
+	srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
+	cfg := clientTConfig(transportStdio, protocolLegacy)
+	cfg.backoffMin, cfg.backoffMax = 2*time.Millisecond, time.Second
+	cfg.stableAfter = 300 * time.Millisecond
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
+	waits := &clientTWaits{}
+	c.jitter = waits.jitter
+	clientTStart(t, c)
+	for spawn := 1; spawn <= 3; spawn++ {
+		clientTLoseWhenReady(t, c, srv, spawn)
+	}
+	clientTEventually(t, "the fourth connection proves stable", func() bool {
+		return strings.Contains(logs.String(), `level=INFO msg="mcp: server connection is stable again"`)
+	})
+	clientTLoseWhenReady(t, c, srv, 4)
+	clientTReadyOn(t, c, srv, 5)
+
+	ms := time.Millisecond
+	if got, want := waits.get(), []time.Duration{2 * ms, 4 * ms, 8 * ms, 2 * ms}; !slices.Equal(got, want) {
+		t.Errorf("reconnect waits = %v, want %v (reset after the stable connection)", got, want)
+	}
+	if n := strings.Count(logs.String(), `level=WARN msg="mcp: server connection lost; reconnecting"`); n != 2 {
+		t.Errorf("WARN connection-lost lines = %d, want 2 (one per run of failures)", n)
+	}
+}
+
+// TestClient_JitterSpreadsWaits: the default jitter keeps every wait
+// within ±20% and actually varies it.
+func TestClient_JitterSpreadsWaits(t *testing.T) {
+	if got := jitterDuration(0); got != 0 {
+		t.Errorf("jitterDuration(0) = %v", got)
+	}
+	lo, hi := time.Hour, time.Duration(0)
+	for range 1000 {
+		d := jitterDuration(time.Second)
+		if d < 800*time.Millisecond || d > 1200*time.Millisecond {
+			t.Fatalf("jitterDuration(1s) = %v, outside ±20%%", d)
+		}
+		lo, hi = min(lo, d), max(hi, d)
+	}
+	if lo > 900*time.Millisecond || hi < 1100*time.Millisecond {
+		t.Errorf("1000 jittered waits span only [%v, %v]", lo, hi)
+	}
+}
+
+// TestClient_ThaneBugLoggedOncePerRun: a server that rejects Thane's own
+// framing (HTTP 406) logs ERROR once per run of failed attempts, not on
+// every retry; a successful connect re-arms it.
+func TestClient_ThaneBugLoggedOncePerRun(t *testing.T) {
+	var healthy atomic.Bool
+	modern := clientTModernRoutes(clientTTool("echo")).handler()
+	srv := &clientTFakeServer{handle: func(ctx context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
+		if !healthy.Load() {
+			return nil, clientTStatus(406, nil)
+		}
+		return modern(ctx, tr, req, info)
+	}}
+	cfg := clientTConfig(transportHTTP, protocolAuto)
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
+	clientTStart(t, c)
+	const errLine = `level=ERROR msg="mcp: the server rejected Thane's own request framing; this needs a Thane fix"`
+	clientTEventually(t, "four failed attempts", func() bool { return srv.spawns() >= 4 })
+	if n := strings.Count(logs.String(), errLine); n != 1 {
+		t.Fatalf("ERROR lines after %d attempts = %d, want 1\n%s", srv.spawns(), n, logs.String())
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 {
+		t.Errorf("ERROR lines in total = %d, want 1", n)
+	}
+
+	healthy.Store(true)
+	clientTReadyConn(t, c)
+	healthy.Store(false)
+	spawns := srv.spawns()
+	srv.last().lose()
+	clientTEventually(t, "three more failed attempts", func() bool { return srv.spawns() >= spawns+3 })
+	if n := strings.Count(logs.String(), errLine); n != 2 {
+		t.Errorf("ERROR lines after a recovery and a new run = %d, want 2", n)
+	}
+}
+
+// TestClient_AttemptFailureLogsHTTPDetails: the first-failure WARN of a
+// connect run carries the status, the WWW-Authenticate challenge and the
+// body, which Error() leaves out.
+func TestClient_AttemptFailureLogsHTTPDetails(t *testing.T) {
+	srv := &clientTFakeServer{handle: clientTReply(nil, clientTAuthRefusal())}
+	cfg := clientTConfig(transportHTTP, protocolAuto)
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
+	clientTStart(t, c)
+	const msg = `level=WARN msg="mcp: connecting to the server failed`
+	clientTEventually(t, "the first-failure WARN", func() bool { return strings.Contains(logs.String(), msg) })
+	var warn string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, msg) {
+			warn = line
+		}
+	}
+	for _, want := range []string{"http_status=401", "token expired", "BODY-MARKER"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("first-failure WARN lacks %q: %q", want, warn)
+		}
+	}
+}
+
+// TestClient_RefreshFailureLogsHTTPDetails: a failed background re-list
+// logs the HTTP details too.
+func TestClient_RefreshFailureLogsHTTPDetails(t *testing.T) {
+	routes := clientTLegacyRoutes("", clientTTool("echo"))
+	routes[methodToolsList] = clientTSeq(
+		clientTReply(clientTToolsPage(nil, clientTTool("echo")), nil),
+		clientTReply(nil, clientTAuthRefusal()),
+	)
+	srv := &clientTFakeServer{handle: routes.handler()}
+	cfg := clientTConfig(transportHTTP, protocolLegacy)
+	logs := &coreTLogBuffer{}
+	cfg.logger = logs.logger()
+	c := clientTNew(t, srv, cfg)
+	clientTStart(t, c)
+	clientTReadyConn(t, c)
+	srv.last().serverNotify(methodToolsListChanged, "")
+	const warn = `level=WARN msg="mcp: refreshing the tool list failed; keeping the previous list"`
+	clientTEventually(t, "the refresh failure WARN", func() bool { return strings.Contains(logs.String(), warn) })
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, warn) && (!strings.Contains(line, "http_status=401") || !strings.Contains(line, "BODY-MARKER")) {
+			t.Errorf("refresh WARN lacks the HTTP details: %q", line)
+		}
+	}
+}

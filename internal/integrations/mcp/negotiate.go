@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // maxNegotiationSteps bounds the discover/initialize exchanges of one
@@ -107,7 +108,7 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 				return conn, fmt.Errorf("mcp: %s: %w", methodDiscover, cause)
 			}
 			respawned = true
-			c.logger.Info("mcp: server exited during the era probe; restarting it for the legacy handshake",
+			c.logger.Debug("mcp: server exited during the era probe; restarting it for the legacy handshake",
 				"error", cause)
 			c.closeConn(conn)
 			if conn, err = c.dial(ctx); err != nil {
@@ -121,13 +122,24 @@ func (c *serverClient) negotiate(ctx context.Context) (*clientConn, error) {
 				ferr = fmt.Errorf("%w: negotiation failed", errProtocol)
 			}
 			if v.thaneBug {
-				c.logger.Error("mcp: the server rejected Thane's own request framing; this needs a Thane fix",
-					"method", step.method, "error", ferr)
+				c.logThaneBug(step.method, ferr)
 			}
 			return conn, fmt.Errorf("mcp: %s: %w", step.method, ferr)
 		}
 	}
 	return conn, fmt.Errorf("%w: negotiation did not settle", errProtocol)
+}
+
+// logThaneBug reports that the server rejected Thane's own framing: at
+// ERROR once per run of failed attempts (the supervisor re-arms it after
+// a successful connect), at Debug for the retries in between.
+func (c *serverClient) logThaneBug(method string, err error) {
+	const msg = "mcp: the server rejected Thane's own request framing; this needs a Thane fix"
+	if c.thaneBugLogged.CompareAndSwap(false, true) {
+		c.logger.Error(msg, "method", method, "error", err)
+		return
+	}
+	c.logger.Debug(msg, "method", method, "error", err)
 }
 
 // dial builds one transport whose inbound hooks are bound to a new
@@ -148,11 +160,19 @@ func (c *serverClient) dial(ctx context.Context) (*clientConn, error) {
 // sendDiscover sends server/discover offering version. In auto mode it
 // is the era probe and is bounded by min(probeTimeout, attempt
 // deadline); in modern mode there is nothing to fall back to, so only
-// the attempt deadline applies. Never cancellable (A8).
+// the attempt deadline applies. On stdio, where a legacy server may
+// never answer an unknown request and only the probe timing out reveals
+// it, the probe takes at most half of what is left of the attempt, so
+// initialize and tools/list still fit. Never cancellable, like
+// initialize (basic/utilities/cancellation: clients MUST NOT cancel it).
 func (c *serverClient) sendDiscover(ctx context.Context, conn *clientConn, version string) (*Response, error) {
 	if c.cfg.protocol != protocolModern {
+		bound := c.cfg.probeTimeout
+		if dl, ok := ctx.Deadline(); ok && c.cfg.transport == transportStdio {
+			bound = min(bound, time.Until(dl)/2)
+		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.cfg.probeTimeout)
+		ctx, cancel = context.WithTimeout(ctx, bound)
 		defer cancel()
 	}
 	params, err := marshalParams(map[string]any{"_meta": metaFor(version)})
@@ -183,9 +203,6 @@ func (c *serverClient) sendInitialize(ctx context.Context, conn *clientConn, ver
 func (cc *clientConn) adoptModern(v eraVerdict) {
 	cc.version = v.version
 	if d := v.discover; d != nil {
-		if d.Capabilities != nil {
-			cc.caps = *d.Capabilities
-		}
 		cc.server, _ = d.serverInfo()
 		cc.instructions = d.Instructions
 	}
@@ -196,7 +213,6 @@ func (cc *clientConn) adoptModern(v eraVerdict) {
 func (cc *clientConn) adoptLegacy(v eraVerdict) {
 	cc.version = v.version
 	if r := v.initialize; r != nil {
-		cc.caps = r.Capabilities
 		cc.server = r.ServerInfo
 		cc.instructions = r.Instructions
 	}

@@ -464,6 +464,7 @@ func clientTNew(t *testing.T, srv *clientTFakeServer, cfg clientConfig) *serverC
 	}
 	c := newServerClient(t.Context(), cfg, srv.factory())
 	c.debounce = time.Millisecond
+	c.jitter = func(d time.Duration) time.Duration { return d } // exact backoff
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
