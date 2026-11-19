@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,36 +119,79 @@ func httpTAssertNoLeak(t *testing.T, serverURL string, err error) {
 	}
 }
 
+// TestHTTP_SessionExpiry: a request carrying Mcp-Session-Id that is
+// answered 404, or 400 with a JSON-RPC error that has no id (the
+// TypeScript SDK examples' answer to an unknown session), reports
+// errSessionExpired and Close skips the DELETE. Any other 400 is a
+// plain status error and the session stays live.
 func TestHTTP_SessionExpiry(t *testing.T) {
-	srv := httpTStart(t, func(w http.ResponseWriter, r *http.Request, m *wireMessage) {
-		switch {
-		case r.Method == http.MethodDelete:
-			t.Error("DELETE sent for an expired session")
-		case m.Method == methodInitialize:
-			w.Header().Set(httpHeaderSessionID, "s1")
-			httpTJSON(w, http.StatusOK, httpTResult(m.ID, httpTInitResult))
-		default:
-			http.Error(w, "session not found", http.StatusNotFound)
-		}
-	})
-	tr := httpTNew(t, srv.URL, nil, transportHooks{})
-	httpTCall(t, tr, &Request{Method: methodInitialize}, callInfo{})
+	tests := []struct {
+		name    string
+		status  int
+		ctype   string
+		body    string
+		expired bool
+	}{
+		{name: "404 plain text", status: 404, ctype: "text/plain", body: "session not found", expired: true},
+		{name: "404 json", status: 404, ctype: "application/json",
+			body: `{"jsonrpc":"2.0","error":{"code":-32001,"message":"Session not found"},"id":null}`, expired: true},
+		{name: "400 null-id error", status: 400, ctype: "application/json",
+			body: `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: No valid session ID provided"},"id":null}`, expired: true},
+		{name: "400 absent-id error", status: 400, ctype: "application/json",
+			body: `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request"}}`, expired: true},
+		{name: "400 attributed error", status: 400, ctype: "application/json",
+			body: `{"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Invalid params"}}`},
+		{name: "400 plain text", status: 400, ctype: "text/plain", body: "Bad Request"},
+		{name: "403 null-id error", status: 403, ctype: "application/json",
+			body: `{"jsonrpc":"2.0","error":{"code":-32600,"message":"Origin not allowed"},"id":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var deletes atomic.Int32
+			srv := httpTStart(t, func(w http.ResponseWriter, r *http.Request, m *wireMessage) {
+				switch {
+				case r.Method == http.MethodDelete:
+					deletes.Add(1)
+				case m.Method == methodInitialize:
+					w.Header().Set(httpHeaderSessionID, "s1")
+					httpTJSON(w, http.StatusOK, httpTResult(m.ID, httpTInitResult))
+				default:
+					w.Header().Set("Content-Type", tt.ctype)
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(tt.body))
+				}
+			})
+			tr := httpTNew(t, srv.URL, nil, transportHooks{})
+			httpTCall(t, tr, &Request{Method: methodInitialize}, callInfo{})
 
-	_, err := tr.Call(t.Context(), &Request{Method: methodToolsList}, callInfo{protocolVersion: "2025-11-25"})
-	var se *httpStatusError
-	if !errors.Is(err, errSessionExpired) || !errors.As(err, &se) || se.Status != http.StatusNotFound {
-		t.Fatalf("Call err = %v, want errSessionExpired wrapping a 404", err)
-	}
-	if err := tr.Notify(t.Context(), &Notification{Method: methodInitialized}, callInfo{}); !errors.Is(err, errSessionExpired) {
-		t.Fatalf("Notify err = %v, want errSessionExpired", err)
-	}
-	if err := tr.Close(t.Context()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	select {
-	case <-tr.Done():
-	default:
-		t.Fatal("Done not closed after Close")
+			_, err := tr.Call(t.Context(), &Request{Method: methodToolsList}, callInfo{protocolVersion: "2025-11-25"})
+			var se *httpStatusError
+			if !errors.As(err, &se) || se.Status != tt.status {
+				t.Fatalf("Call err = %v, want a %d status error", err, tt.status)
+			}
+			if got := errors.Is(err, errSessionExpired); got != tt.expired {
+				t.Fatalf("Call err = %v: session expired %v, want %v", err, got, tt.expired)
+			}
+			err = tr.Notify(t.Context(), &Notification{Method: methodInitialized}, callInfo{})
+			if got := errors.Is(err, errSessionExpired); got != tt.expired {
+				t.Fatalf("Notify err = %v: session expired %v, want %v", err, got, tt.expired)
+			}
+			if err := tr.Close(t.Context()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			select {
+			case <-tr.Done():
+			default:
+				t.Fatal("Done not closed after Close")
+			}
+			want := int32(1)
+			if tt.expired {
+				want = 0
+			}
+			if got := deletes.Load(); got != want {
+				t.Errorf("DELETE sent %d times, want %d", got, want)
+			}
+		})
 	}
 }
 

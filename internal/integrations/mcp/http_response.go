@@ -199,17 +199,19 @@ func httpAnswers(m *wireMessage, id int64) bool {
 
 // statusError turns a non-2xx response into *httpStatusError, reading
 // at most httpErrorBodyLimit bytes to find a JSON-RPC error (any id; the
-// POST correlates it). A 404 on a request that carried Mcp-Session-Id
-// means the server ended the session: errSessionExpired wraps it.
+// POST correlates it). When a request that carried Mcp-Session-Id is
+// rejected as httpSessionRejected describes, the server no longer knows
+// the session: errSessionExpired wraps the status error.
 func (t *httpTransport) statusError(hresp *http.Response, sentSession bool) error {
 	text := httpkit.ReadErrorBody(hresp.Body, httpErrorBodyLimit)
+	rpcErr, attributed := httpRPCError(text)
 	statusErr := &httpStatusError{
 		Status:          hresp.StatusCode,
-		RPC:             httpRPCError(text),
+		RPC:             rpcErr,
 		WWWAuthenticate: truncateUTF8(hresp.Header.Get(httpHeaderWWWAuthenticate), httpLogBodyCap),
 		Body:            truncateUTF8(text, httpLogBodyCap),
 	}
-	if hresp.StatusCode == http.StatusNotFound && sentSession {
+	if sentSession && httpSessionRejected(hresp.StatusCode, rpcErr, attributed) {
 		t.mu.Lock()
 		t.expired = true
 		t.mu.Unlock()
@@ -218,14 +220,33 @@ func (t *httpTransport) statusError(hresp *http.Response, sentSession bool) erro
 	return statusErr
 }
 
+// httpSessionRejected reports a status that rejects a request's session
+// unprocessed: 404 (the spec's signal), or a 400 whose body is one
+// JSON-RPC error with no id. The second is how the TypeScript SDK's
+// server examples, which many servers copy, answer an Mcp-Session-Id
+// they no longer know ("Bad Request: No valid session ID provided"); an
+// error the server could not attribute to the request means it never
+// processed it, so re-initializing and retrying once is safe.
+func httpSessionRejected(status int, rpcErr *RPCError, attributed bool) bool {
+	switch status {
+	case http.StatusNotFound:
+		return true
+	case http.StatusBadRequest:
+		return rpcErr != nil && !attributed
+	default:
+		return false
+	}
+}
+
 // httpRPCError returns the error object of body when body is exactly
-// one JSON-RPC response carrying an error, else nil.
-func httpRPCError(body string) *RPCError {
+// one JSON-RPC response carrying an error, else nil. attributed reports
+// whether that response carries an id.
+func httpRPCError(body string) (rpcErr *RPCError, attributed bool) {
 	msgs, err := decodeMessages([]byte(body))
 	if err != nil || len(msgs) != 1 || msgs[0].kind() != kindResponse {
-		return nil
+		return nil, false
 	}
-	return msgs[0].Error
+	return msgs[0].Error, hasID(msgs[0].ID)
 }
 
 // captureSession records Mcp-Session-Id from a 2xx initialize response
