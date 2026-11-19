@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
 )
 
 // clientTCursor returns the cursor in params and whether one was sent.
@@ -248,6 +251,9 @@ type clientTCallCase struct {
 	isError  bool
 	wantErr  error // errors.Is target; *RPCError: errors.As
 	wantCode int   // with wantErr *RPCError
+	// wantModel: the exact text modelFacingCallError gives the model,
+	// whose logged error must still carry wantCode when that is set.
+	wantModel string
 	// wantStatus: the error must still carry this HTTP status (logs).
 	wantStatus int
 	calls      int // expected tools/call count; 0 = skip, -1 = none
@@ -299,6 +305,19 @@ func clientTRunCall(t *testing.T, tt clientTCallCase) *clientTFakeServer {
 			t.Errorf("err = %v, want it to keep HTTP status %d", err, tt.wantStatus)
 		}
 	}
+	if tt.wantModel != "" {
+		var mfe *promptfmt.ModelFacingError
+		if !errors.As(modelFacingCallError("mcp_fake_"+tool, err), &mfe) {
+			t.Fatalf("model error for %v is not a ModelFacingError", err)
+		}
+		if mfe.Text != tt.wantModel {
+			t.Errorf("model text =\n%q\nwant\n%q", mfe.Text, tt.wantModel)
+		}
+		var rpcErr *RPCError
+		if tt.wantCode != 0 && (!errors.As(mfe.Err, &rpcErr) || rpcErr.Code != tt.wantCode) {
+			t.Errorf("logged error %v lost JSON-RPC code %d", mfe.Err, tt.wantCode)
+		}
+	}
 	if tt.calls != 0 {
 		if got := srv.count(methodToolsCall); got != max(tt.calls, 0) {
 			t.Errorf("tools/call sent %d times, want %d", got, max(tt.calls, 0))
@@ -346,10 +365,180 @@ func TestClient_CallToolResults(t *testing.T) {
 			wantErr: errConnectionLost, calls: 1},
 		{name: "server error passes through", call: clientTReply(clientTRPCErr(-32000, ""), nil),
 			wantErr: &RPCError{}, wantCode: -32000, calls: 1, lists: 1},
+		{name: "missing client capability is not re-listed", modern: true,
+			call:    clientTReply(clientTRPCErr(codeMissingClientCapability, `{"requiredCapabilities":{"elicitation":{}}}`), nil),
+			wantErr: &RPCError{}, wantCode: codeMissingClientCapability, wantModel: textInputRequired, calls: 1, lists: 1},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) { clientTRunCall(t, tt) })
 	}
+}
+
+// clientTCutOffTransport holds tools/call until Close starts, then
+// answers resp or err, the way a server or transport reports a call the
+// shutdown cut off: stdio's -32000 "Connection closed" reply, or HTTP's
+// lost connection. Everything else goes to the wrapped fake.
+type clientTCutOffTransport struct {
+	Transport
+	inFlight chan<- struct{} // signalled when tools/call is waiting
+	closing  chan struct{}   // closed when Close starts
+	once     sync.Once
+	resp     *Response
+	err      error
+}
+
+func (t *clientTCutOffTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
+	if req.Method != methodToolsCall {
+		return t.Transport.Call(ctx, req, info)
+	}
+	t.inFlight <- struct{}{}
+	select {
+	case <-t.closing:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if t.resp == nil {
+		return nil, t.err
+	}
+	out := *t.resp
+	out.JSONRPC = jsonrpcVersion
+	return &out, nil
+}
+
+func (t *clientTCutOffTransport) Close(ctx context.Context) error {
+	t.once.Do(func() { close(t.closing) })
+	return t.Transport.Close(ctx)
+}
+
+// clientTModelFacing returns the ModelFacingError the model gets for a
+// callTool error.
+func clientTModelFacing(t *testing.T, err error) *promptfmt.ModelFacingError {
+	t.Helper()
+	var mfe *promptfmt.ModelFacingError
+	if !errors.As(modelFacingCallError("mcp_fake_echo", err), &mfe) {
+		t.Fatalf("model error for %v is not a ModelFacingError", err)
+	}
+	return mfe
+}
+
+// TestClient_CallCutOffByShutdown: a call in flight when the client
+// closes is cut off by the shutdown, whatever the server or transport
+// then reports. The model is told Thane is shutting down and the outcome
+// is unknown, not to change the request or that Thane is reconnecting,
+// and the original failure stays in the chain for the logs. A -32000
+// while the client is live is still the server's error, and a caller
+// cancellation is still a cancellation.
+func TestClient_CallCutOffByShutdown(t *testing.T) {
+	connClosed := &Response{Error: &RPCError{Code: -32000, Message: "Connection closed"}}
+	cases := []struct {
+		name  string
+		resp  *Response
+		err   error
+		cause func(error) bool
+	}{
+		{name: "stdio server answers -32000 Connection closed", resp: connClosed,
+			cause: func(err error) bool {
+				var rpcErr *RPCError
+				return errors.As(err, &rpcErr) && rpcErr.Code == -32000
+			}},
+		{name: "HTTP connection lost", err: fmt.Errorf("%w: http: transport closed", errConnectionLost),
+			cause: func(err error) bool { return errors.Is(err, errConnectionLost) }},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &clientTFakeServer{handle: clientTLegacyRoutes("", clientTTool("echo")).handler()}
+			inFlight := make(chan struct{}, 1)
+			factory := func(ctx context.Context, hooks transportHooks) (Transport, error) {
+				tr, err := srv.factory()(ctx, hooks)
+				if err != nil {
+					return nil, err
+				}
+				return &clientTCutOffTransport{Transport: tr, inFlight: inFlight, closing: make(chan struct{}), resp: tt.resp, err: tt.err}, nil
+			}
+			cfg := clientTConfig(transportStdio, protocolLegacy)
+			cfg.logger = coreTLogger(t)
+			c := newServerClient(t.Context(), cfg, factory)
+			t.Cleanup(func() { _ = c.close(context.WithoutCancel(t.Context())) })
+			clientTStart(t, c)
+			clientTReadyConn(t, c)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.callTool(t.Context(), "echo", nil)
+				done <- err
+			}()
+			select {
+			case <-inFlight:
+			case <-time.After(5 * time.Second):
+				t.Fatal("tools/call never reached the transport")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if err := c.close(ctx); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("callTool did not return after close")
+			}
+			if !errors.Is(err, errCallCutOff) || !errors.Is(err, errClientClosed) {
+				t.Errorf("err = %v, want it to wrap errCallCutOff and errClientClosed", err)
+			}
+			if !tt.cause(err) {
+				t.Errorf("err = %v lost the original failure", err)
+			}
+			mfe := clientTModelFacing(t, err)
+			if mfe.Text != textShutdownMidCall {
+				t.Errorf("model text =\n%q\nwant\n%q", mfe.Text, textShutdownMidCall)
+			}
+			if mfe.Err != err {
+				t.Errorf("logged error = %v, want the callTool error", mfe.Err)
+			}
+		})
+	}
+
+	t.Run("a -32000 while the client is live is the server's error", func(t *testing.T) {
+		routes := clientTLegacyRoutes("", clientTTool("echo"))
+		routes[methodToolsCall] = clientTLegacyGuard(clientTReply(connClosed, nil))
+		srv := &clientTFakeServer{handle: routes.handler()}
+		c := clientTNew(t, srv, clientTConfig(transportStdio, protocolLegacy))
+		clientTStart(t, c)
+		clientTReadyConn(t, c)
+		_, err := c.callTool(t.Context(), "echo", nil)
+		if errors.Is(err, errCallCutOff) {
+			t.Fatalf("err = %v, a live client's call is not cut off", err)
+		}
+		want := framedServerText(leadRPCError, "Connection closed", tailRPCError)
+		if got := clientTModelFacing(t, err).Text; got != want {
+			t.Errorf("model text =\n%q\nwant\n%q", got, want)
+		}
+	})
+
+	t.Run("a caller cancellation is still a cancellation", func(t *testing.T) {
+		routes := clientTLegacyRoutes("", clientTTool("echo"))
+		routes[methodToolsCall] = clientTLegacyGuard(clientTHang)
+		srv := &clientTFakeServer{handle: routes.handler()}
+		c := clientTNew(t, srv, clientTConfig(transportStdio, protocolLegacy))
+		clientTStart(t, c)
+		clientTReadyConn(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() {
+			_, err := c.callTool(ctx, "echo", nil)
+			done <- err
+		}()
+		clientTEventually(t, "tools/call in flight", func() bool { return srv.count(methodToolsCall) == 1 })
+		cancel()
+		err := <-done
+		if errors.Is(err, errCallCutOff) {
+			t.Fatalf("err = %v, a caller cancellation is not a shutdown", err)
+		}
+		if got := clientTModelFacing(t, err).Text; got != textCanceled {
+			t.Errorf("model text =\n%q\nwant\n%q", got, textCanceled)
+		}
+	})
 }
 
 func TestClient_CallToolRequestStateIsSentBack(t *testing.T) {

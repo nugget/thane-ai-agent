@@ -256,7 +256,8 @@ func (c *serverClient) offers(name string) bool {
 // server rejected the request unprocessed); an HTTP HeaderMismatch
 // (-32020) re-lists and retries once with fresh Mcp-Param-* headers. A
 // call whose outcome is unknown (connection lost, timeout) is never
-// re-issued.
+// re-issued. A call that fails once the client is closing wraps
+// errCallCutOff: the failure is the shutdown's doing, whatever it says.
 func (c *serverClient) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
 	c.noteAccess()
 	conn, err := c.readyConn()
@@ -274,6 +275,9 @@ func (c *serverClient) callTool(ctx context.Context, name string, args map[strin
 	}
 	for retried := false; ; retried = true {
 		res, err := c.callRounds(ctx, conn, name, args)
+		if err != nil && c.lifeCtx.Err() != nil {
+			return toolResult{}, fmt.Errorf("%w: %w", errCallCutOff, err)
+		}
 		if err == nil || retried {
 			return res, err
 		}

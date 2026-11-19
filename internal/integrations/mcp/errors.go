@@ -146,6 +146,10 @@ const serverTextCapBytes = 2048
 // textToolErrorNoMessage replaces the server-message frame when an
 // isError result carries no text: there is no message to quote or to
 // adjust the arguments by.
+//
+// reasonShuttingDown is for a call that never reached the server once
+// Thane began shutting down; textShutdownMidCall is for one that was in
+// flight and was cut off, so its outcome is unknown.
 const (
 	reasonToolGone     = "its MCP server no longer offers this tool; use another tool"
 	reasonShuttingDown = "Thane is shutting down, so this MCP tool is unavailable; use another tool or finish without it"
@@ -156,6 +160,7 @@ const (
 	textAuth               = "The MCP server refused Thane's credentials. Only the operator can fix this; use another tool, or tell the user this integration needs its credentials updated."
 	textTransient          = "The MCP server reported a temporary failure. Use another tool, or try this one again later."
 	textConnLost           = "The connection to the MCP server broke during the call, so the outcome is unknown. Thane is reconnecting in the background. If this tool changes state, check the current state before calling it again."
+	textShutdownMidCall    = "Thane is shutting down, so this MCP tool call was cut off and its outcome is unknown. If this tool changes state, check the current state before relying on the call's effect, or tell the user the outcome is unknown."
 	textDeadline           = "The MCP server did not answer before the time limit, so the outcome is unknown. If this tool changes state, check the current state before calling it again; otherwise narrow the request or use another tool."
 	textCanceled           = "The MCP tool call was cancelled before it finished, so the outcome is unknown. If this tool changes state, check the current state before calling it again."
 	textUnusable           = "The MCP server sent a response Thane could not use. Use another tool; the operator can see the details in Thane's logs."
@@ -182,6 +187,9 @@ const (
 func modelFacingCallError(tool string, err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, errCallCutOff) {
+		return modelFacing(textShutdownMidCall, err)
 	}
 	if errors.Is(err, errToolGone) {
 		return tools.ErrUnavailable{Tool: tool, Reason: reasonToolGone}

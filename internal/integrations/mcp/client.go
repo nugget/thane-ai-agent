@@ -39,6 +39,12 @@ const (
 // errClientClosed is the last error of a client after close.
 var errClientClosed = fmt.Errorf("%w: client closed", errNotReady)
 
+// errCallCutOff wraps the error of a tools/call that was in flight when
+// the client closed. Whatever the server or transport reported (stdio's
+// -32000 "Connection closed", a lost HTTP connection), the shutdown ended
+// the call, and its outcome is unknown.
+var errCallCutOff = fmt.Errorf("%w during the call", errClientClosed)
+
 // clientConfig configures one serverClient. Zero durations mean defaults.
 type clientConfig struct {
 	name      string // configured server name (logs only)

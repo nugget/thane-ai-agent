@@ -135,6 +135,11 @@ func TestErrors_ModelFacingCallError(t *testing.T) {
 		text        string // expected exact model text (ModelFacingError)
 	}{
 		{name: "tool gone", err: errToolGone, unavailable: reasonToolGone},
+		{name: "closed before the call", err: errClientClosed, unavailable: reasonShuttingDown},
+		{name: "cut off by shutdown, server -32000", err: fmt.Errorf("%w: tools/call x: %w", errCallCutOff,
+			&RPCError{Code: -32000, Message: "Connection closed"}), text: textShutdownMidCall},
+		{name: "cut off by shutdown, connection lost", err: fmt.Errorf("%w: tools/call x: %w", errCallCutOff,
+			fmt.Errorf("%w: http: transport closed", errConnectionLost)), text: textShutdownMidCall},
 		{name: "tool gone beats not ready", err: fmt.Errorf("%w: %w", errNotReady, errToolGone), unavailable: reasonToolGone},
 		{name: "not ready", err: fmt.Errorf("%w: last error: dial", errNotReady), unavailable: reasonUnreachable},
 		{name: "not ready beats auth", err: fmt.Errorf("%w: %w", errNotReady, &httpStatusError{Status: 401}), unavailable: reasonUnreachable},
@@ -238,6 +243,7 @@ func TestErrors_ModelTextNeverLeaksTransportDetails(t *testing.T) {
 
 	errs := []error{
 		fmt.Errorf("%w: %s", errToolGone, leaky),
+		fmt.Errorf("%w: %s", errCallCutOff, leaky),
 		fmt.Errorf("%w: %s", errNotReady, leaky),
 		fmt.Errorf("%w: %s", errUnreachable, leaky),
 		fmt.Errorf("%w: %w", errSessionExpired, status(404, nil)),
