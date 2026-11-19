@@ -1082,22 +1082,48 @@ compaction:
 #   servers:
 #     - # Name is a short identifier used in tool namespacing and logging
 #       (e.g., "home-assistant", "github"). Required.
-#       name: my-mcp-server
+#       name: files
 #       Transport is the connection type: "stdio" or "http". Required.
 #       transport: stdio
+#       Protocol selects how Thane negotiates the MCP protocol era with
+#       the server: "auto" (default) probes with server/discover and falls
+#       back to the initialize handshake; "modern" requires a stateless
+#       2026-07-28 server; "legacy" skips the probe and runs the
+#       initialize handshake directly (2024-11-05 through 2025-11-25).
+#       Set "legacy" for servers that answer the probe slowly or badly.
+#       protocol: auto
+#       ConnectTimeout bounds one connection attempt: starting the
+#       process or reaching the URL, protocol negotiation, and listing
+#       tools. Failed attempts retry in the background with backoff.
+#       Default: 30s.
+#       connect_timeout: 30s
+#       CallTimeout bounds a single tool call when the caller has no
+#       earlier deadline. Default: 2m.
+#       call_timeout: 2m
 #       Command is the executable to spawn (stdio transport only).
 #       command: npx
 #       Args are command-line arguments for the subprocess (stdio transport only).
 #       args:
 #         - -y
-#         - '@modelcontextprotocol/server-example'
+#         - '@modelcontextprotocol/server-filesystem'
+#         - /srv/thane/shared
 #       Env are additional environment variables for the subprocess
-#       (stdio transport only). Format: "KEY=VALUE".
+#       (stdio transport only). Format: "KEY=VALUE". The subprocess
+#       also inherits Thane's own environment.
 #       env: []
+#       Cwd is the working directory for the subprocess (stdio transport
+#       only). Root prefixes such as "kb:" and "~/" are expanded;
+#       the result must be absolute. Empty inherits Thane's working
+#       directory.
+#       cwd: ""
 #       URL is the MCP server endpoint (http transport only).
 #       url: ""
 #       Headers are additional HTTP headers sent with every request
-#       (http transport only). Useful for authentication tokens.
+#       (http transport only). Useful for static authentication tokens
+#       such as Authorization. Protocol headers (Accept, Content-Type,
+#       MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name,
+#       Mcp-Param-*, Last-Event-ID) are managed by Thane; configured
+#       values for them are dropped with a warning.
 #       headers: {}
 #       IncludeTools is an optional allowlist of MCP tool names to
 #       bridge. When non-empty, only tools in this list are registered.
@@ -1109,8 +1135,10 @@ compaction:
 #       Tags lists capability tags assigned to every bridged MCP tool from
 #       this server unless a per-tool override replaces them. Use this to
 #       attach MCP tools to existing capability tags so the model gates
-#       them behind tag_activate the same as native tools.
-#       tags: []
+#       them behind tag_activate the same as native tools. A tool with no
+#       tag is never offered in a run scoped by capability tags.
+#       tags:
+#         - files
 #       Tools contains optional metadata overrides keyed by the raw MCP tool
 #       name reported by the server.
 #       tools: {}

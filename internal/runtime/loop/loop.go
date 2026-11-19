@@ -65,6 +65,10 @@ type Request struct {
 	RuntimeTags []string `yaml:"-" json:"-"`
 	// RuntimeTools are request-scoped tools visible only to this run.
 	RuntimeTools []RuntimeTool `yaml:"-" json:"-"`
+	// SkipDynamicTools leaves the agent loop's dynamic tool overlay out
+	// of this run (see agent.Request.SkipDynamicTools). Runtime-only:
+	// set by Go callers, never by persisted specs or launch JSON.
+	SkipDynamicTools bool `yaml:"-" json:"-"`
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -2427,6 +2431,7 @@ func (l *Loop) prepareAgentTurnRequest(req Request, convID string, isSupervisor 
 	// restriction.
 	req.Bindings = MergeBindings(cascade.Bindings, l.config.Bindings, req.Bindings, l.requestOverride.Bindings)
 	req.SkipTagFilter = len(configuredInitialTags) == 0 || req.SkipTagFilter || l.requestOverride.SkipTagFilter
+	req.SkipDynamicTools = req.SkipDynamicTools || l.requestOverride.SkipDynamicTools
 	req.RoutingFactors = hints
 	// Inherited gating is the weakest priority — own config and
 	// runtime overrides take precedence, but a container's

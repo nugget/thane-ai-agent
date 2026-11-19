@@ -55,6 +55,11 @@ type Launch struct {
 	// child agent sees only tag-scoped context appropriate to the
 	// bounded task.
 	SuppressAlwaysContext bool `yaml:"suppress_always_context,omitempty" json:"suppress_always_context,omitempty"`
+
+	// SkipDynamicTools leaves the agent loop's dynamic tool overlay out
+	// of this launch's runs (see [Request.SkipDynamicTools]).
+	// Runtime-only: launch JSON cannot set it.
+	SkipDynamicTools bool `yaml:"-" json:"-"`
 }
 
 type launchJSON struct {
@@ -188,7 +193,7 @@ func (l *Launch) HasOverrides() bool {
 		l.PromptMode != "" {
 		return true
 	}
-	if l.SkipContext || l.SkipTagFilter || l.SuppressAlwaysContext {
+	if l.SkipContext || l.SkipTagFilter || l.SkipDynamicTools || l.SuppressAlwaysContext {
 		return true
 	}
 	if l.MaxIterations != 0 || l.MaxOutputTokens != 0 {
@@ -258,6 +263,7 @@ func (l *Launch) requestOverride() Request {
 		SystemPrompt:          l.SystemPrompt,
 		PromptMode:            l.PromptMode,
 		SuppressAlwaysContext: l.SuppressAlwaysContext,
+		SkipDynamicTools:      l.SkipDynamicTools,
 	}
 }
 

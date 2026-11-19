@@ -522,6 +522,7 @@ type preparedExecution struct {
 	scopeTags       []string
 	filterTags      []string
 	excludeTools    []string
+	noDynamicTools  bool
 	tagFilterActive bool
 	effectiveTags   []string
 	maxIterations   int
@@ -661,6 +662,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		ChannelBinding:           prep.channelBinding.Clone(),
 		RoutingFactors:           factors,
 		ExcludeTools:             append([]string(nil), prep.excludeTools...),
+		SkipDynamicTools:         prep.noDynamicTools,
 		SkipTagFilter:            !prep.tagFilterActive,
 		InitialTags:              append([]string(nil), prep.effectiveTags...),
 		MaxIterations:            prep.maxIterations,
@@ -816,8 +818,14 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 	// The explicit-empty-scope branch (AllToolNames) already includes the
 	// excluded names, so dedup before sorting to avoid duplicate entries
 	// when both sources contribute.
+	//
+	// That branch means "no parent tools", but AllToolNames names only
+	// the static registry. The run also skips the loop's dynamic tool
+	// overlay (MCP tools that appeared after startup, companion tools),
+	// which no tag filter would hold back when nothing is in scope.
 	var excludeTools []string
-	if explicitScopeRequested && len(filterTags) == 0 {
+	noDynamicTools := explicitScopeRequested && len(filterTags) == 0
+	if noDynamicTools {
 		excludeTools = e.parentReg.AllToolNames()
 	}
 	excludeTools = mergeExcludeToolNames(excludeTools, delegateToolExclusions())
@@ -899,6 +907,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		scopeTags:        append([]string(nil), scopeTags...),
 		filterTags:       filterTags,
 		excludeTools:     excludeTools,
+		noDynamicTools:   noDynamicTools,
 		tagFilterActive:  tagFilterActive,
 		effectiveTags:    effectiveTags,
 		maxIterations:    maxIterations,

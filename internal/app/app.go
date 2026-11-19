@@ -174,8 +174,10 @@ type App struct {
 	// Forge integration
 	forgeService *forge.Service
 
-	// MCP clients (closed on shutdown)
-	mcpClients []*mcp.Client
+	// MCP servers: supervisors, statically registered tools, and the
+	// dynamic overlay for tools that appear after boot (closed on
+	// shutdown).
+	mcpManager *mcp.Manager
 
 	// Logging infrastructure
 	indexDB             *sql.DB

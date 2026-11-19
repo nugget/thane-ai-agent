@@ -57,6 +57,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		SystemPrompt:    "custom prompt",
 		PromptMode:      agentctx.PromptModeTask,
 	}
+	req.SkipDynamicTools = true
 
 	got := compileLoopAgentRequest(req)
 	if got.Model != req.Model {
@@ -74,7 +75,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if len(got.Messages[0].Images) != 1 || got.Messages[0].Images[0].MediaType != "image/png" {
 		t.Fatalf("Images = %#v", got.Messages[0].Images)
 	}
-	if !got.SkipContext || !got.SkipTagFilter {
+	if !got.SkipContext || !got.SkipTagFilter || !got.SkipDynamicTools {
 		t.Fatalf("Skip flags = %#v", got)
 	}
 	if got.MaxIterations != 7 || got.MaxOutputTokens != 321 {

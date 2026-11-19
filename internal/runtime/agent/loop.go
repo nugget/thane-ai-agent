@@ -103,6 +103,14 @@ type Request struct {
 	// child agent sees only tag-scoped context appropriate to the
 	// bounded task.
 	SuppressAlwaysContext bool `json:"-"`
+
+	// SkipDynamicTools leaves the dynamic tool overlay (see
+	// [DynamicToolSource]: MCP tools that appeared after startup,
+	// changed definitions of startup tools, companion tools) out of
+	// this run. A delegate that asked for an explicit empty tag scope
+	// sets it: that run must get no parent tools, and ExcludeTools can
+	// only name the tools of the static registry.
+	SkipDynamicTools bool `json:"-"`
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -2086,8 +2094,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// come and go with laptop connections) before any request-level
 	// filtering, so AllowedTools/ExcludeTools/gating and the per-iteration
 	// currentTools all observe the same surface. The overlay is per-run and
-	// does not touch the shared registry.
-	baseTools = l.applyDynamicTools(baseTools)
+	// does not touch the shared registry. A run that must get no parent
+	// tools (SkipDynamicTools) does without it.
+	if !req.SkipDynamicTools {
+		baseTools = l.applyDynamicTools(baseTools)
+	}
 	if len(req.AllowedTools) > 0 {
 		baseTools = baseTools.FilteredCopy(req.AllowedTools)
 	}

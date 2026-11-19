@@ -137,6 +137,7 @@ func TestLaunchHasOverrides(t *testing.T) {
 		{"system_prompt", func(l *Launch) { l.SystemPrompt = "s" }, "SystemPrompt"},
 		{"skip_context", func(l *Launch) { l.SkipContext = true }, "SkipContext"},
 		{"skip_tag_filter", func(l *Launch) { l.SkipTagFilter = true }, "SkipTagFilter"},
+		{"skip_dynamic_tools", func(l *Launch) { l.SkipDynamicTools = true }, "SkipDynamicTools"},
 		{"suppress_always_context", func(l *Launch) { l.SuppressAlwaysContext = true }, "SuppressAlwaysContext"},
 		{"prompt_mode", func(l *Launch) { l.PromptMode = agentctx.PromptModeTask }, "PromptMode"},
 		{"usage_role", func(l *Launch) { l.UsageRole = "r" }, "UsageRole"},

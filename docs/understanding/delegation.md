@@ -80,8 +80,10 @@ delegate will have access.
 
 ## MCP: Model Context Protocol
 
-Thane hosts **MCP servers** as stdio subprocesses, bridging their tools into
-the agent loop. This extends Thane's capabilities without writing Go code.
+Thane connects to **MCP servers**, local subprocesses over stdio or
+servers reachable over Streamable HTTP (on this machine or remote), and
+bridges their tools into the agent loop. This extends Thane's
+capabilities without writing Go code.
 
 ### How It Works
 
@@ -98,12 +100,45 @@ mcp:
         - search_code
         - issue_read
         # ... selective inclusion keeps context manageable
+      tags: [forge]   # required for the tools to be offered under tag gating
+    - name: game
+      transport: http
+      url: http://localhost:11212/mcp
+      tags: [game]
 ```
 
-On startup, Thane launches each MCP server as a subprocess, discovers
-available tools via the MCP protocol, filters to `include_tools` (if
-specified), and bridges filtered tools into the agent loop as
-`mcp_{server}_{tool}` functions.
+On startup, Thane connects to every server in parallel, negotiates the
+protocol version (older handshake servers and current stateless servers
+both work), discovers the available tools, filters them by
+`include_tools`/`exclude_tools` and `tools:` overrides, and bridges them
+into the registry as `mcp_{server}_{tool}`. Each server keeps a
+supervisor running: a server that is down at startup, crashes or
+restarts is reconnected in the background, and its tools answer
+"not reachable right now" in the meantime instead of disappearing.
+
+### What delegates see
+
+Delegates run through the same agent loop as the main conversation, so
+they see the same MCP tools. Tools of servers that were ready at startup
+(Thane waits up to 30 seconds) are registered like native tools. Tools
+that first appear later, because a server came up late or changed its
+tool list, are layered into every run through the dynamic tool overlay.
+When a server changes a tool's description or schema after startup,
+every run uses the new definition. Both reach the main loop and any
+delegate whose tag scope covers them, without a restart.
+
+Two things still reflect the tools registered at startup: the
+delegate's model routing, which counts the tools in its scope, and the
+capability views (`tag_inspect` and the tool counts in the capability
+manifest).
+
+Like every other tool, an MCP tool is only offered when one of its
+capability tags is active, so give each server `tags:`. The model also
+has to be able to find the tag: a built-in tag such as `forge` is
+already named by a shipped trailhead, but a new one such as `game` also
+needs a trailhead talent with `next_tags: [game]`, or
+`capability_tags: {game: {core: true}}`. See
+[MCP Servers](../operating/configuration.md#mcp-servers).
 
 ### A note on Home Assistant
 
@@ -117,8 +152,13 @@ natively.
 
 ### Adding MCP Servers
 
-Any MCP-compatible server can be added. The MCP protocol is standardized —
-if a server exists, Thane can host it.
+Most MCP servers work: Thane speaks the stdio and Streamable HTTP
+transports and both protocol eras, authenticating with static headers.
+Servers that need OAuth sign-in, the deprecated 2024-11-05 HTTP+SSE
+transport, or client features such as sampling, elicitation or roots are
+not supported yet. See
+[MCP Servers](../operating/configuration.md#mcp-servers) for every
+option.
 
 ## Delegation Profiles
 

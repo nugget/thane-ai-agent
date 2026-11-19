@@ -2383,6 +2383,24 @@ type MCPServerConfig struct {
 	// Transport is the connection type: "stdio" or "http". Required.
 	Transport string `yaml:"transport"`
 
+	// Protocol selects how Thane negotiates the MCP protocol era with
+	// the server: "auto" (default) probes with server/discover and falls
+	// back to the initialize handshake; "modern" requires a stateless
+	// 2026-07-28 server; "legacy" skips the probe and runs the
+	// initialize handshake directly (2024-11-05 through 2025-11-25).
+	// Set "legacy" for servers that answer the probe slowly or badly.
+	Protocol string `yaml:"protocol"`
+
+	// ConnectTimeout bounds one connection attempt: starting the
+	// process or reaching the URL, protocol negotiation, and listing
+	// tools. Failed attempts retry in the background with backoff.
+	// Default: 30s.
+	ConnectTimeout time.Duration `yaml:"connect_timeout"`
+
+	// CallTimeout bounds a single tool call when the caller has no
+	// earlier deadline. Default: 2m.
+	CallTimeout time.Duration `yaml:"call_timeout"`
+
 	// Command is the executable to spawn (stdio transport only).
 	Command string `yaml:"command"`
 
@@ -2390,14 +2408,25 @@ type MCPServerConfig struct {
 	Args []string `yaml:"args"`
 
 	// Env are additional environment variables for the subprocess
-	// (stdio transport only). Format: "KEY=VALUE".
+	// (stdio transport only). Format: "KEY=VALUE". The subprocess
+	// also inherits Thane's own environment.
 	Env []string `yaml:"env"`
+
+	// Cwd is the working directory for the subprocess (stdio transport
+	// only). Root prefixes such as "kb:" and "~/" are expanded;
+	// the result must be absolute. Empty inherits Thane's working
+	// directory.
+	Cwd string `yaml:"cwd"`
 
 	// URL is the MCP server endpoint (http transport only).
 	URL string `yaml:"url"`
 
 	// Headers are additional HTTP headers sent with every request
-	// (http transport only). Useful for authentication tokens.
+	// (http transport only). Useful for static authentication tokens
+	// such as Authorization. Protocol headers (Accept, Content-Type,
+	// MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name,
+	// Mcp-Param-*, Last-Event-ID) are managed by Thane; configured
+	// values for them are dropped with a warning.
 	Headers map[string]string `yaml:"headers"`
 
 	// IncludeTools is an optional allowlist of MCP tool names to
@@ -2412,7 +2441,8 @@ type MCPServerConfig struct {
 	// Tags lists capability tags assigned to every bridged MCP tool from
 	// this server unless a per-tool override replaces them. Use this to
 	// attach MCP tools to existing capability tags so the model gates
-	// them behind tag_activate the same as native tools.
+	// them behind tag_activate the same as native tools. A tool with no
+	// tag is never offered in a run scoped by capability tags.
 	Tags []string `yaml:"tags"`
 
 	// Tools contains optional metadata overrides keyed by the raw MCP tool
@@ -2422,8 +2452,10 @@ type MCPServerConfig struct {
 
 // MCPToolConfig configures operator-supplied metadata for a bridged MCP tool.
 type MCPToolConfig struct {
-	// Enabled controls whether the tool is bridged. Nil keeps the default
-	// include/exclude behavior.
+	// Enabled controls whether the tool is bridged. True bridges the
+	// tool even when include_tools omits it or exclude_tools lists it;
+	// false never bridges it. Nil keeps the default include/exclude
+	// behavior.
 	Enabled *bool `yaml:"enabled"`
 
 	// Tags replaces the server default tags for this tool when non-empty.
@@ -3304,6 +3336,18 @@ func (c *Config) applyDefaults() {
 	// both. Explicit 0 disables the worker's idle close.
 	if c.Signal.HandleTimeout == 0 {
 		c.Signal.HandleTimeout = 10 * time.Minute
+	}
+	for i := range c.MCP.Servers {
+		s := &c.MCP.Servers[i]
+		if s.Protocol == "" {
+			s.Protocol = mcpProtocolAuto
+		}
+		if s.ConnectTimeout == 0 {
+			s.ConnectTimeout = defaultMCPConnectTimeout
+		}
+		if s.CallTimeout == 0 {
+			s.CallTimeout = defaultMCPCallTimeout
+		}
 	}
 	if c.Archive.SessionIdleMinutes == nil && c.Signal.SessionIdleMinutes > 0 {
 		v := c.Signal.SessionIdleMinutes
@@ -4222,38 +4266,6 @@ func (c *Config) validateDelegate() error {
 		}
 		if p.MaxTokens < 0 {
 			return fmt.Errorf("delegate.profiles.%s.max_tokens must be >= 0, got %d", name, p.MaxTokens)
-		}
-	}
-	return nil
-}
-
-// validateMCP checks the MCP server configuration for consistency.
-func (c *Config) validateMCP() error {
-	names := make(map[string]bool, len(c.MCP.Servers))
-	for i, srv := range c.MCP.Servers {
-		if srv.Name == "" {
-			return fmt.Errorf("mcp.servers[%d].name must not be empty", i)
-		}
-		if names[srv.Name] {
-			return fmt.Errorf("mcp.servers[%d].name %q is a duplicate", i, srv.Name)
-		}
-		names[srv.Name] = true
-
-		switch srv.Transport {
-		case "stdio":
-			if srv.Command == "" {
-				return fmt.Errorf("mcp.servers[%d] (%s): stdio transport requires a command", i, srv.Name)
-			}
-		case "http":
-			if srv.URL == "" {
-				return fmt.Errorf("mcp.servers[%d] (%s): http transport requires a url", i, srv.Name)
-			}
-		default:
-			return fmt.Errorf("mcp.servers[%d] (%s): transport %q invalid (expected stdio or http)", i, srv.Name, srv.Transport)
-		}
-
-		if len(srv.IncludeTools) > 0 && len(srv.ExcludeTools) > 0 {
-			return fmt.Errorf("mcp.servers[%d] (%s): cannot set both include_tools and exclude_tools", i, srv.Name)
 		}
 	}
 	return nil

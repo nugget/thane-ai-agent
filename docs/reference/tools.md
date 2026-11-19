@@ -885,11 +885,75 @@ no cost.
 
 ## MCP tools
 
-Thane hosts MCP servers as subprocesses and bridges their tools into
-the registry as `mcp_{server}_{tool}`. MCP tools inherit their default
-tags from the MCP config's `default_tags` or configuration-side tag
-overrides; they do not have a compiled-in entry in
-`internal/model/toolcatalog/catalog.go`.
+Thane connects to MCP servers over stdio (a subprocess) or Streamable
+HTTP (local or remote) and bridges their tools into the registry as
+`mcp_{server}_{tool}`, sanitized and capped at 64 characters (longer
+names keep a readable prefix plus a short stable hash). Each bridged tool
+carries `CanonicalID` `mcp:{server}/{tool}`, source `mcp` and the server
+name as its origin, which is how `tag_inspect` attributes it. MCP tools
+have no compiled-in entry in `internal/model/toolcatalog/catalog.go`;
+their capability tags come from the server's `tags:` or a per-tool
+`tools.<name>.tags` override (the older `default_tags:` key was renamed
+to `tags:` and is rejected). An untagged MCP tool is never offered in a
+tag-scoped run. A tag that no shipped trailhead names, such as `game`,
+also needs a way for the model to find it (a trailhead talent's
+`next_tags`, `core: true`, or channel or loop tags); `tag_inspect`
+knows it even while its server is down.
+
+The description and input schema come from the server. Descriptions are
+capped at 4096 bytes. Schemas are copied and adjusted only where model
+providers require it, and each adjustment is logged once:
+
+- Local `$ref` pointers (`#/$defs/…`, `#/definitions/…`, any `#/…`
+  JSON pointer) are replaced by copies of their targets, and `$defs`
+  and `definitions` are dropped once inlined. A recursive reference, a
+  reference nested more than 8 deep, or one that does not resolve
+  becomes `{}`. If the copies would add more than 32 KiB to the schema,
+  nothing is inlined: the schema keeps its `$ref` pointers and
+  definitions as the server sent them. Pointers into other documents
+  are left in place.
+- Top-level `oneOf`/`anyOf`/`allOf` are merged away, and the root is
+  forced to an object with a `properties` map.
+
+A tool whose input schema is still larger than 64 KiB after these
+adjustments is not offered to the model, because it would crowd the
+prompt of every request that offers it. Thane logs one WARN per such
+tool, `mcp: tool input schema too large to offer to the model; tool
+skipped`, with the schema's size and the cap.
+
+**Availability.** Tools of servers ready at startup are registered on
+the shared registry. Tools that appear later, and new definitions of
+tools whose description or schema changed, are layered into every run
+through the dynamic tool overlay, so they reach the main loop and any
+delegate whose tag scope covers them. Only delegate model routing (its
+tool count), `tag_inspect` and the capability manifest's tool counts
+reflect the startup registry. A server that is down or reconnecting
+answers `tools.ErrUnavailable`, so the tool stays declared and the
+model is told to use another tool or try later; a tool the server
+stopped offering answers the same way. Other failures reach the model
+as fixed sentences that say what to do next: a timeout or broken
+connection is an unknown outcome, refused credentials need the
+operator, rejected arguments quote the server's message. A tool that
+needs a client feature Thane does not offer MCP servers (sampling,
+elicitation, roots), whether the server answers `-32021` (missing
+client capability) or asks for input that Thane declines, gets one
+fixed sentence: the tool cannot run through Thane, other arguments will
+not help, and the model should use another tool or ask the user to do
+that step directly. The model never sees hosts, URLs or raw HTTP
+bodies.
+
+Results prefer the server's structured JSON (`structuredContent`) when
+it fits, skipping the text blocks, in which servers repeat the same
+value; when the JSON does not fit but the content blocks do, the blocks
+are used. A `structuredContent` object that only wraps the text result,
+one key whose string value equals the text (such as the
+`{"result": "..."}` the Python MCP SDK returns for a plain value), is
+rendered from the text blocks instead, so line breaks and quotes stay
+readable. `\uXXXX` escapes in structured output are decoded, so
+non-ASCII text and characters such as `<`, `>` and `&` arrive as
+themselves. Error results render from the content blocks only. Images
+and binary resources are summarized instead of inlined, and results are
+capped at 16,000 bytes.
 
 Home Assistant needs no MCP bridge: the native `ha_*` tool set above is
 the complete HA surface (the `ha-mcp` bridge was retired in v0.10.2 once
@@ -897,5 +961,6 @@ native parity landed). MCP remains the extension path for capabilities
 Thane doesn't implement natively; `include_tools` filtering in the config
 narrows the bridged surface.
 
-See [Delegation & MCP](../understanding/delegation.md) for
-configuration details.
+See [MCP Servers](../operating/configuration.md#mcp-servers) for
+configuration and [Delegation & MCP](../understanding/delegation.md) for
+how delegates use these tools.

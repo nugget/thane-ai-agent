@@ -2,19 +2,39 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
-	"log/slog"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/model/promptfmt"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-func TestToolName(t *testing.T) {
-	tests := []struct {
-		server string
-		tool   string
-		want   string
-	}{
+func TestBridge_Sanitize(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"hello":         "hello",
+		"Hello-World":   "hello_world",
+		"a--b":          "a_b",
+		"_leading_":     "leading",
+		"special!chars": "special_chars",
+		"My Server":     "my_server",
+		"ünïcode":       "n_code",
+		"":              "",
+		"---":           "",
+	}
+	for in, want := range tests {
+		if got := sanitize(in); got != want {
+			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBridge_ThaneToolName(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ server, tool, want string }{
 		{"home-assistant", "get_entities", "mcp_home_assistant_get_entities"},
 		{"github", "create_issue", "mcp_github_create_issue"},
 		{"My Server", "Do Thing", "mcp_my_server_do_thing"},
@@ -22,342 +42,303 @@ func TestToolName(t *testing.T) {
 		{"a--b", "c--d", "mcp_a_b_c_d"},
 		{"special!@#", "chars$%^", "mcp_special_chars"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.server+"/"+tt.tool, func(t *testing.T) {
-			got := ToolName(tt.server, tt.tool)
-			if got != tt.want {
-				t.Errorf("ToolName(%q, %q) = %q, want %q", tt.server, tt.tool, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestSanitize(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"hello", "hello"},
-		{"Hello-World", "hello_world"},
-		{"a--b", "a_b"},
-		{"_leading_", "leading"},
-		{"special!chars", "special_chars"},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := sanitize(tt.input)
-			if got != tt.want {
-				t.Errorf("sanitize(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestCanonicalToolIDPreservesDistinctRawNames(t *testing.T) {
-	t.Parallel()
-
-	idWithDash := canonicalToolID("github-tools", "foo-bar")
-	idWithUnderscore := canonicalToolID("github-tools", "foo_bar")
-	if idWithDash == idWithUnderscore {
-		t.Fatalf("canonicalToolID collision: %q", idWithDash)
-	}
-	if want := "mcp:github-tools/foo-bar"; idWithDash != want {
-		t.Fatalf("canonicalToolID with dash = %q, want %q", idWithDash, want)
-	}
-	if want := "mcp:github-tools/foo_bar"; idWithUnderscore != want {
-		t.Fatalf("canonicalToolID with underscore = %q, want %q", idWithUnderscore, want)
-	}
-}
-
-func TestBridgeTools_AllTools(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{
-				Name:        "get_entities",
-				Description: "List all entities",
-				InputSchema: map[string]any{"type": "object"},
-			},
-			{
-				Name:        "call_service",
-				Description: "Call a Home Assistant service",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"domain":  map[string]any{"type": "string"},
-						"service": map[string]any{"type": "string"},
-					},
-				},
-			},
-		},
-	})
-
-	client := NewClient("ha", mt, nil)
-	registry := tools.NewEmptyRegistry()
-	logger := slog.Default()
-
-	count, err := BridgeTools(context.Background(), client, "home-assistant", registry, BridgeOptions{}, logger)
-	if err != nil {
-		t.Fatalf("BridgeTools: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("count = %d, want 2", count)
-	}
-
-	// Verify tool names are namespaced.
-	if registry.Get("mcp_home_assistant_get_entities") == nil {
-		t.Error("expected mcp_home_assistant_get_entities in registry")
-	}
-	if registry.Get("mcp_home_assistant_call_service") == nil {
-		t.Error("expected mcp_home_assistant_call_service in registry")
-	}
-
-	// Verify schema is passed through.
-	tool := registry.Get("mcp_home_assistant_call_service")
-	if tool.Parameters == nil {
-		t.Fatal("Parameters is nil")
-	}
-	if tool.CanonicalID != "mcp:home-assistant/call_service" {
-		t.Fatalf("CanonicalID = %q, want mcp:home-assistant/call_service", tool.CanonicalID)
-	}
-	props, ok := tool.Parameters["properties"]
-	if !ok {
-		t.Fatal("Parameters missing 'properties'")
-	}
-	propsMap, ok := props.(map[string]any)
-	if !ok {
-		t.Fatal("properties is not a map")
-	}
-	if _, ok := propsMap["domain"]; !ok {
-		t.Error("missing 'domain' in parameters properties")
-	}
-}
-
-func TestBridgeTools_IncludeFilter(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{Name: "get_entities", Description: "List entities", InputSchema: map[string]any{"type": "object"}},
-			{Name: "call_service", Description: "Call service", InputSchema: map[string]any{"type": "object"}},
-			{Name: "get_history", Description: "Get history", InputSchema: map[string]any{"type": "object"}},
-		},
-	})
-
-	client := NewClient("ha", mt, nil)
-	registry := tools.NewEmptyRegistry()
-	logger := slog.Default()
-
-	count, err := BridgeTools(context.Background(), client, "ha", registry,
-		BridgeOptions{Include: []string{"get_entities", "get_history"}}, logger)
-	if err != nil {
-		t.Fatalf("BridgeTools: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("count = %d, want 2", count)
-	}
-	if registry.Get("mcp_ha_get_entities") == nil {
-		t.Error("expected mcp_ha_get_entities")
-	}
-	if registry.Get("mcp_ha_get_history") == nil {
-		t.Error("expected mcp_ha_get_history")
-	}
-	if registry.Get("mcp_ha_call_service") != nil {
-		t.Error("mcp_ha_call_service should have been filtered out")
-	}
-}
-
-func TestBridgeTools_ExcludeFilter(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{Name: "get_entities", Description: "List entities", InputSchema: map[string]any{"type": "object"}},
-			{Name: "call_service", Description: "Call service", InputSchema: map[string]any{"type": "object"}},
-			{Name: "get_history", Description: "Get history", InputSchema: map[string]any{"type": "object"}},
-		},
-	})
-
-	client := NewClient("ha", mt, nil)
-	registry := tools.NewEmptyRegistry()
-	logger := slog.Default()
-
-	count, err := BridgeTools(context.Background(), client, "ha", registry,
-		BridgeOptions{Exclude: []string{"call_service"}}, logger)
-	if err != nil {
-		t.Fatalf("BridgeTools: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("count = %d, want 2", count)
-	}
-	if registry.Get("mcp_ha_call_service") != nil {
-		t.Error("mcp_ha_call_service should have been excluded")
-	}
-}
-
-func TestBridgeTools_HandlerProxiesCallTool(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{Name: "get_state", Description: "Get entity state", InputSchema: map[string]any{"type": "object"}},
-		},
-	})
-	mt.addResponse("tools/call", callToolResult{
-		Content: []ContentBlock{
-			{Type: "text", Text: "light.kitchen is off"},
-		},
-	})
-
-	client := NewClient("ha", mt, nil)
-	registry := tools.NewEmptyRegistry()
-	logger := slog.Default()
-
-	_, err := BridgeTools(context.Background(), client, "ha", registry, BridgeOptions{}, logger)
-	if err != nil {
-		t.Fatalf("BridgeTools: %v", err)
-	}
-
-	tool := registry.Get("mcp_ha_get_state")
-	if tool == nil {
-		t.Fatal("tool not found")
-	}
-
-	// Call the handler and verify it proxies to the MCP client.
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"entity_id": "light.kitchen",
-	})
-	if err != nil {
-		t.Fatalf("Handler: %v", err)
-	}
-	if result != "light.kitchen is off" {
-		t.Errorf("result = %q, want %q", result, "light.kitchen is off")
-	}
-
-	// Verify the tools/call request used the original MCP tool name.
-	mt.mu.Lock()
-	defer mt.mu.Unlock()
-	found := false
-	for _, req := range mt.sent {
-		if req.Method == "tools/call" {
-			paramsJSON, _ := json.Marshal(req.Params)
-			if string(paramsJSON) == "" {
-				continue
-			}
-			var params map[string]any
-			json.Unmarshal(paramsJSON, &params)
-			if params["name"] == "get_state" {
-				found = true
-			}
-			break
+		if got := thaneToolName(tt.server, tt.tool); got != tt.want {
+			t.Errorf("thaneToolName(%q, %q) = %q, want %q", tt.server, tt.tool, got, tt.want)
 		}
 	}
-	if !found {
-		t.Error("tools/call request should use original MCP name 'get_state', not namespaced name")
+
+	long := strings.Repeat("very_long_tool_name_", 5)
+	a := thaneToolName("server", long+"alpha")
+	b := thaneToolName("server", long+"beta")
+	if len(a) > maxToolNameBytes || len(b) > maxToolNameBytes {
+		t.Fatalf("long names not capped: %d %d bytes", len(a), len(b))
+	}
+	if a == b {
+		t.Fatalf("distinct long tools share the name %q", a)
+	}
+	if a != thaneToolName("server", long+"alpha") {
+		t.Fatal("shortened name is not stable")
+	}
+	if !strings.HasPrefix(a, "mcp_server_very_long_tool_name") {
+		t.Errorf("shortened name lost its readable prefix: %q", a)
+	}
+	exact := "mcp_s_" + strings.Repeat("x", maxToolNameBytes-len("mcp_s_"))
+	if got := thaneToolName("s", strings.Repeat("x", maxToolNameBytes-len("mcp_s_"))); got != exact {
+		t.Errorf("a 64-byte name was changed: %q", got)
 	}
 }
 
-func TestBridgeTools_SanitizesTopLevelCompositionKeywords(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{
-				Name:        "notify_state",
-				Description: "Notify on state changes",
-				InputSchema: map[string]any{
-					"type": "object",
-					"anyOf": []any{
-						map[string]any{"required": []any{"entity_id"}},
-						map[string]any{"required": []any{"area_id"}},
-					},
-					"properties": map[string]any{
-						"entity_id": map[string]any{"type": "string"},
-						"area_id":   map[string]any{"type": "string"},
-					},
-				},
-			},
-		},
-	})
-
-	client := NewClient("ha", mt, nil)
-	registry := tools.NewEmptyRegistry()
-
-	if _, err := BridgeTools(context.Background(), client, "ha", registry, BridgeOptions{}, slog.Default()); err != nil {
-		t.Fatalf("BridgeTools: %v", err)
+func TestBridge_CanonicalIDKeepsRawNames(t *testing.T) {
+	t.Parallel()
+	dash, under := canonicalToolID("github-tools", "foo-bar"), canonicalToolID("github-tools", "foo_bar")
+	if dash != "mcp:github-tools/foo-bar" || under != "mcp:github-tools/foo_bar" {
+		t.Fatalf("canonical IDs = %q, %q", dash, under)
 	}
-
-	tool := registry.Get("mcp_ha_notify_state")
-	if tool == nil {
-		t.Fatal("tool not found")
-	}
-	if _, ok := tool.Parameters["anyOf"]; ok {
-		t.Fatalf("top-level anyOf should be removed from bridged schema: %#v", tool.Parameters)
-	}
-	props, ok := tool.Parameters["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("properties type = %T, want map[string]any", tool.Parameters["properties"])
-	}
-	if _, ok := props["entity_id"]; !ok {
-		t.Fatalf("entity_id missing from sanitized schema: %#v", props)
-	}
-	if _, ok := props["area_id"]; !ok {
-		t.Fatalf("area_id missing from sanitized schema: %#v", props)
+	if got := canonicalToolID("a/b", "c d"); got != "mcp:a%2Fb/c%20d" {
+		t.Errorf("canonicalToolID escapes = %q", got)
 	}
 }
 
-func TestBridgeTools_MetadataOverrides(t *testing.T) {
-	mt := newMockTransport()
-	mt.addResponse("tools/list", toolsListResult{
-		Tools: []ToolDefinition{
-			{Name: "create_pull_request", Description: "Raw MCP description", InputSchema: map[string]any{"type": "object"}},
-			{Name: "delete_branch", Description: "Dangerous branch delete", InputSchema: map[string]any{"type": "object"}},
-		},
-	})
+// wireTBridge builds a bridge with no client (handlers are not called).
+func wireTBridge(t *testing.T, cfg ServerConfig) (*serverBridge, *coreTLogBuffer) {
+	t.Helper()
+	logs := &coreTLogBuffer{}
+	if cfg.Name == "" {
+		cfg.Name = "srv"
+	}
+	return newServerBridge(cfg, nil, logs.logger()), logs
+}
 
-	client := NewClient("github", mt, nil)
-	registry := tools.NewEmptyRegistry()
-	logger := slog.Default()
-	enabled := false
+// wireTDefs builds tool definitions with an object schema.
+func wireTDefs(names ...string) []toolDefinition {
+	out := make([]toolDefinition, 0, len(names))
+	for _, n := range names {
+		out = append(out, toolDefinition{
+			Name:        n,
+			Description: "does " + n,
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		})
+	}
+	return out
+}
 
-	count, err := BridgeTools(context.Background(), client, "github", registry, BridgeOptions{
-		Tags: []string{"forge"},
+func wireTRawNames(bts []bridgedTool) []string {
+	var out []string
+	for _, bt := range bts {
+		out = append(out, bt.raw)
+	}
+	return out
+}
+
+func TestBridge_Filtering(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	tests := []struct {
+		name string
+		cfg  ServerConfig
+		want []string
+	}{
+		{name: "all by default", want: []string{"a", "b", "c"}},
+		{name: "include list", cfg: ServerConfig{Include: []string{"a", "c"}}, want: []string{"a", "c"}},
+		{name: "exclude list", cfg: ServerConfig{Exclude: []string{"b"}}, want: []string{"a", "c"}},
+		{name: "enabled false excludes", cfg: ServerConfig{ToolOverrides: map[string]ToolOverride{"a": {Enabled: &no}}}, want: []string{"b", "c"}},
+		{name: "enabled true beats include", cfg: ServerConfig{
+			Include:       []string{"a"},
+			ToolOverrides: map[string]ToolOverride{"c": {Enabled: &yes}},
+		}, want: []string{"a", "c"}},
+		{name: "enabled true beats exclude", cfg: ServerConfig{
+			Exclude:       []string{"b", "c"},
+			ToolOverrides: map[string]ToolOverride{"b": {Enabled: &yes}},
+		}, want: []string{"a", "b"}},
+		{name: "enabled false beats include", cfg: ServerConfig{
+			Include:       []string{"a", "b"},
+			ToolOverrides: map[string]ToolOverride{"a": {Enabled: &no}},
+		}, want: []string{"b"}},
+		{name: "nil enabled keeps filters", cfg: ServerConfig{
+			Include:       []string{"a"},
+			ToolOverrides: map[string]ToolOverride{"b": {Description: "x"}},
+		}, want: []string{"a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b, _ := wireTBridge(t, tt.cfg)
+			got := wireTRawNames(b.bridge(wireTDefs("c", "a", "b")))
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("bridged = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBridge_ToolShape(t *testing.T) {
+	t.Parallel()
+	b, _ := wireTBridge(t, ServerConfig{
+		Name: "Home-Assistant",
+		Tags: []string{" ha ", "", "ha", "home"},
 		ToolOverrides: map[string]ToolOverride{
-			"create_pull_request": {
-				Description: "Open a pull request in GitHub",
-				Tags:        []string{"forge", "publish"},
-			},
-			"delete_branch": {
-				Enabled: &enabled,
-			},
+			"special": {Tags: []string{"admin"}, Description: "  operator text  "},
 		},
-	}, logger)
-	if err != nil {
-		t.Fatalf("BridgeTools: %v", err)
+	})
+	defs := wireTDefs("get_state", "special")
+	defs = append(defs, toolDefinition{Name: "titled", Title: "Title only", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}})
+	bts := b.bridge(defs)
+	if len(bts) != 3 {
+		t.Fatalf("bridged %d tools, want 3", len(bts))
 	}
-	if count != 1 {
-		t.Fatalf("count = %d, want 1", count)
+	get, special, titled := bts[0].tool, bts[1].tool, bts[2].tool
+	if get.Name != "mcp_home_assistant_get_state" || get.CanonicalID != "mcp:Home-Assistant/get_state" ||
+		get.Source != "mcp" || get.Origin != "Home-Assistant" || get.Core || get.SkipContentResolve {
+		t.Errorf("tool fields = %+v", get)
+	}
+	if !slices.Equal(get.Tags, []string{"ha", "home"}) {
+		t.Errorf("server tags = %v, want [ha home]", get.Tags)
+	}
+	if !slices.Equal(special.Tags, []string{"admin"}) || special.Description != "operator text" {
+		t.Errorf("override = tags %v description %q", special.Tags, special.Description)
+	}
+	if titled.Description != "Title only" {
+		t.Errorf("title fallback = %q", titled.Description)
+	}
+}
+
+func TestBridge_DescriptionCap(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{})
+	defs := wireTDefs("big")
+	defs[0].Description = strings.Repeat("é", maxToolDescriptionBytes) // 2 bytes per rune
+	for range 2 {
+		desc := b.bridge(defs)[0].tool.Description
+		if len(desc) > maxToolDescriptionBytes || !strings.HasPrefix(desc, "éé") || strings.ContainsRune(desc, '�') {
+			t.Fatalf("description not capped rune-safely: %d bytes", len(desc))
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN msg=\"mcp: tool description truncated\""); n != 1 {
+		t.Errorf("truncation warned %d times, want once:\n%s", n, logs.String())
+	}
+}
+
+func TestBridge_LocalCollisionKeepsFirst(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{})
+	bts := b.bridge(wireTDefs("foo_bar", "foo-bar", "Foo.Bar", "other"))
+	if got := wireTRawNames(bts); !slices.Equal(got, []string{"Foo.Bar", "other"}) {
+		t.Fatalf("bridged = %v, want [Foo.Bar other] (first in raw-name order wins)", got)
+	}
+	if !strings.Contains(logs.String(), "same Thane tool name") {
+		t.Errorf("collision not logged:\n%s", logs.String())
+	}
+}
+
+func TestBridge_UnknownKeysWarnOncePerSet(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{
+		Include:       []string{"a", "typo"},
+		ToolOverrides: map[string]ToolOverride{"ghost": {Description: "x"}},
+	})
+	b.bridge(wireTDefs("a", "b"))
+	b.bridge(wireTDefs("a", "b"))
+	out := logs.String()
+	if n := strings.Count(out, "does not offer"); n != 1 {
+		t.Fatalf("unknown keys warned %d times, want 1:\n%s", n, out)
+	}
+	if !strings.Contains(out, "ghost") || !strings.Contains(out, "typo") {
+		t.Errorf("warning does not name the unknown keys:\n%s", out)
+	}
+	b.bridge(wireTDefs("a", "b", "typo")) // the set changes to [ghost]
+	if n := strings.Count(logs.String(), "does not offer"); n != 2 {
+		t.Errorf("a changed set should warn again; warned %d times", n)
+	}
+}
+
+func TestBridge_SchemaNormalizedAndLoggedOnce(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{})
+	defs := []toolDefinition{{Name: "loose", InputSchema: map[string]any{"properties": map[string]any{"x": map[string]any{"type": "string"}}}}}
+	for range 3 {
+		p := b.bridge(defs)[0].tool.Parameters
+		if p["type"] != "object" {
+			t.Fatalf("root type = %v", p["type"])
+		}
+	}
+	if _, ok := defs[0].InputSchema["type"]; ok {
+		t.Fatal("the server's schema was mutated")
+	}
+	if n := strings.Count(logs.String(), "level=INFO msg=\"mcp: adjusted a tool's input schema"); n != 1 {
+		t.Errorf("schema change logged at INFO %d times, want once:\n%s", n, logs.String())
+	}
+}
+
+func TestBridge_SkipsToolWithOversizedSchema(t *testing.T) {
+	t.Parallel()
+	b, logs := wireTBridge(t, ServerConfig{})
+	defs := wireTDefs("huge", "small")
+	defs[0].InputSchema = map[string]any{"type": "object", "properties": map[string]any{
+		"q": map[string]any{"type": "string", "description": strings.Repeat("x", maxToolSchemaBytes)},
+	}}
+	for range 2 {
+		if got := wireTRawNames(b.bridge(defs)); !slices.Equal(got, []string{"small"}) {
+			t.Fatalf("bridged = %v, want [small]", got)
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN msg=\"mcp: tool input schema too large"); n != 1 {
+		t.Errorf("oversized schema warned %d times, want once:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "tool=huge") {
+		t.Errorf("warning does not name the tool:\n%s", logs.String())
+	}
+}
+
+func TestBridge_HandlerRoutesThroughClient(t *testing.T) {
+	t.Parallel()
+	srv := &clientTFakeServer{}
+	routes := clientTLegacyRoutes("", clientTTool("echo"), clientTTool("fail"), clientTTool("silent"))
+	routes[methodToolsCall] = clientTLegacyGuard(func(ctx2 context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
+		if strings.Contains(string(req.Params), `"fail"`) {
+			return clientTOK(`{"content":[{"type":"text","text":"bad input: use a number"}],"isError":true}`), nil
+		}
+		if strings.Contains(string(req.Params), `"silent"`) {
+			return clientTOK(`{"content":[],"isError":true}`), nil
+		}
+		return clientTEcho(ctx2, tr, req, info)
+	})
+	srv.handle = routes.handler()
+	c := clientTNew(t, srv, clientTConfig(transportStdio, protocolLegacy))
+	b := newServerBridge(ServerConfig{Name: "fake"}, c, coreTLogger(t))
+
+	// Not connected yet: unavailable, not an illegal-tool error.
+	bts := b.bridge(wireTDefs("echo", "fail", "silent"))
+	_, err := bts[0].tool.Handler(t.Context(), map[string]any{"text": "hi"})
+	var unavailable tools.ErrUnavailable
+	if !errors.As(err, &unavailable) || unavailable.Tool != "mcp_fake_echo" {
+		t.Fatalf("handler before connect = %v, want tools.ErrUnavailable", err)
 	}
 
-	tool := registry.Get("mcp_github_create_pull_request")
-	if tool == nil {
-		t.Fatal("expected mcp_github_create_pull_request")
+	clientTStart(t, c)
+	clientTReadyConn(t, c)
+	out, err := bts[0].tool.Handler(t.Context(), map[string]any{"text": "hi"})
+	if err != nil || !strings.Contains(out, `echo echo {"text":"hi"}`) {
+		t.Fatalf("echo = %q, %v", out, err)
 	}
-	if tool.Description != "Open a pull request in GitHub" {
-		t.Fatalf("Description = %q", tool.Description)
+	_, err = bts[1].tool.Handler(t.Context(), nil)
+	var mf *promptfmt.ModelFacingError
+	if !errors.As(err, &mf) || !strings.Contains(mf.Text, "bad input: use a number") || !strings.Contains(mf.Text, leadToolError) {
+		t.Fatalf("isError result = %v, want a model-facing tool error quoting the server", err)
 	}
-	if tool.Source != "mcp" {
-		t.Fatalf("Source = %q, want mcp", tool.Source)
+	_, err = bts[2].tool.Handler(t.Context(), nil)
+	if !errors.As(err, &mf) || mf.Text != textToolErrorNoMessage {
+		t.Fatalf("isError result without content = %v, want textToolErrorNoMessage", err)
 	}
-	if tool.CanonicalID != "mcp:github/create_pull_request" {
-		t.Fatalf("CanonicalID = %q", tool.CanonicalID)
+}
+
+// TestBridge_SanitizeParityWithConfig keeps config's copy of sanitize
+// (used to reject server names) in step with the bridge's.
+func TestBridge_SanitizeParityWithConfig(t *testing.T) {
+	t.Parallel()
+	names := []string{"github", "home-assistant", "Home_Assistant", "a--b", "a_b", "x!", "x", "ünïcode", "n-code", "--", "MY SERVER", "my.server"}
+	validate := func(servers ...string) error {
+		cfg := config.Default()
+		for _, n := range servers {
+			cfg.MCP.Servers = append(cfg.MCP.Servers, config.MCPServerConfig{Name: n, Transport: "stdio", Command: "/bin/true"})
+		}
+		return cfg.Validate()
 	}
-	if len(tool.Tags) != 2 || tool.Tags[0] != "forge" || tool.Tags[1] != "publish" {
-		t.Fatalf("Tags = %#v", tool.Tags)
+	for _, n := range names {
+		err := validate(n)
+		if wantEmpty := sanitize(n) == ""; wantEmpty != (err != nil) {
+			t.Errorf("name %q: sanitize = %q, config.Validate = %v", n, sanitize(n), err)
+		}
 	}
-	if registry.Get("mcp_github_delete_branch") != nil {
-		t.Fatal("delete_branch should be disabled by override")
+	for i, a := range names {
+		for _, b := range names[i+1:] {
+			if sanitize(a) == "" || sanitize(b) == "" {
+				continue
+			}
+			err := validate(a, b)
+			if collide := sanitize(a) == sanitize(b); collide != (err != nil) {
+				t.Errorf("names %q, %q: sanitize %q/%q, config.Validate = %v", a, b, sanitize(a), sanitize(b), err)
+			}
+		}
 	}
 }

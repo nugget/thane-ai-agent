@@ -2,239 +2,476 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/nugget/thane-ai-agent/internal/platform/buildinfo"
+	"time"
 )
 
-// protocolVersion is the MCP protocol version we advertise during initialization.
-const protocolVersion = "2024-11-05"
+// Values of clientConfig.protocol.
+const (
+	protocolAuto   = "auto"
+	protocolModern = "modern"
+	protocolLegacy = "legacy"
+)
 
-// ToolDefinition is an MCP tool as returned by tools/list.
-type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+// Client defaults. Zero clientConfig durations mean these.
+const (
+	defaultConnectTimeout   = 30 * time.Second
+	defaultCallTimeout      = 2 * time.Minute
+	defaultProbeTimeout     = 10 * time.Second
+	defaultBackoffMin       = 2 * time.Second
+	defaultBackoffMax       = 60 * time.Second
+	defaultListRefreshFloor = 60 * time.Second
+	defaultStableAfter      = 60 * time.Second
+
+	// refreshDebounce coalesces bursts of list_changed notifications and
+	// stale-list accesses into one tools/list run.
+	refreshDebounce = 250 * time.Millisecond
+
+	// transportCloseTimeout bounds closing a transport the supervisor
+	// abandons (failed attempt, lost or expired connection, shutdown).
+	transportCloseTimeout = 5 * time.Second
+)
+
+// errClientClosed is the last error of a client after close.
+var errClientClosed = fmt.Errorf("%w: client closed", errNotReady)
+
+// errCallCutOff wraps the error of a tools/call that was in flight when
+// the client closed. Whatever the server or transport reported (stdio's
+// -32000 "Connection closed", a lost HTTP connection), the shutdown ended
+// the call, and its outcome is unknown.
+var errCallCutOff = fmt.Errorf("%w during the call", errClientClosed)
+
+// clientConfig configures one serverClient. Zero durations mean defaults.
+type clientConfig struct {
+	name      string // configured server name (logs only)
+	transport string // "stdio" | "http" (selects S-rules vs H-rules)
+	protocol  string // "auto" | "modern" | "legacy"; "" = "auto"
+
+	connectTimeout   time.Duration // one whole connect attempt incl. tools/list (30s)
+	callTimeout      time.Duration // per tools/call when ctx has no earlier deadline (2m)
+	probeTimeout     time.Duration // the server/discover era probe (10s)
+	backoffMin       time.Duration // supervisor reconnect backoff start (2s)
+	backoffMax       time.Duration // supervisor reconnect backoff cap (60s)
+	listRefreshFloor time.Duration // modern ttl refresh floor (60s)
+	stableAfter      time.Duration // a connection that lived this long ends a run of failures (60s)
+
+	// onToolsChanged fires after any successful listing whose result
+	// differs from the previous one (including the first). It is called
+	// from the supervisor goroutine with no client lock held.
+	onToolsChanged func()
+
+	logger *slog.Logger
 }
 
-// ContentBlock is a single content item in a tools/call response.
-type ContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-// callToolResult is the result payload of a tools/call response.
-type callToolResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"isError,omitempty"`
-}
-
-// toolsListResult is the result payload of a tools/list response.
-type toolsListResult struct {
-	Tools []ToolDefinition `json:"tools"`
-}
-
-// serverInfo is returned in the initialize response.
-type serverInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// serverCapabilities describes what an MCP server supports.
-type serverCapabilities struct {
-	Tools *struct{} `json:"tools,omitempty"`
-}
-
-// initializeResult is the full initialize response result.
-type initializeResult struct {
-	ProtocolVersion string             `json:"protocolVersion"`
-	ServerInfo      serverInfo         `json:"serverInfo"`
-	Capabilities    serverCapabilities `json:"capabilities"`
-}
-
-// Client connects to a single MCP server and provides typed access to
-// the MCP protocol operations (initialize, tools/list, tools/call).
-type Client struct {
-	name      string
-	transport Transport
-	logger    *slog.Logger
-	nextID    atomic.Int64
-
-	mu          sync.RWMutex
-	initialized bool
-	serverName  string
-	serverVer   string
-	tools       []ToolDefinition
-}
-
-// NewClient creates an MCP client for the given server. The transport
-// determines how messages are delivered (stdio or HTTP).
-func NewClient(name string, transport Transport, logger *slog.Logger) *Client {
-	if logger == nil {
-		logger = slog.Default()
+// withDefaults returns cfg with every zero value replaced by its default.
+func (cfg clientConfig) withDefaults() clientConfig {
+	cfg.connectTimeout = durationOr(cfg.connectTimeout, defaultConnectTimeout)
+	cfg.callTimeout = durationOr(cfg.callTimeout, defaultCallTimeout)
+	cfg.probeTimeout = durationOr(cfg.probeTimeout, defaultProbeTimeout)
+	cfg.backoffMin = durationOr(cfg.backoffMin, defaultBackoffMin)
+	cfg.backoffMax = durationOr(cfg.backoffMax, defaultBackoffMax)
+	cfg.listRefreshFloor = durationOr(cfg.listRefreshFloor, defaultListRefreshFloor)
+	cfg.stableAfter = durationOr(cfg.stableAfter, defaultStableAfter)
+	if cfg.backoffMax < cfg.backoffMin {
+		cfg.backoffMax = cfg.backoffMin
 	}
-	c := &Client{
-		name:      name,
-		transport: transport,
-		logger:    logger.With("mcp_server", name),
+	if cfg.logger == nil {
+		cfg.logger = slog.Default()
 	}
-	c.nextID.Store(0)
-	return c
+	return cfg
 }
 
-// Name returns the server name this client is connected to.
-func (c *Client) Name() string {
-	return c.name
+// durationOr returns d, or def when d is not positive: an unset or
+// negative duration setting means "use the default".
+func durationOr(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
-// Initialize performs the MCP handshake: sends an initialize request
-// and then the notifications/initialized notification.
-func (c *Client) Initialize(ctx context.Context) error {
-	params := map[string]any{
-		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
-		"clientInfo": map[string]any{
-			"name":    "thane",
-			"version": buildinfo.Version,
-		},
-	}
+// toolResult is a rendered complete tools/call result. IsError=true is a
+// tool-reported failure (the server's isError), not a transport error.
+type toolResult struct {
+	Text    string
+	IsError bool
+}
 
-	resp, err := c.send(ctx, "initialize", params)
-	if err != nil {
-		return fmt.Errorf("initialize: %w", err)
-	}
+// connState is the supervisor's view of one server.
+type connState int
 
-	var result initializeResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return fmt.Errorf("unmarshal initialize result: %w", err)
-	}
+const (
+	stateDisconnected connState = iota
+	stateConnecting
+	stateReady
+)
 
+// serverClient supervises one configured MCP server: it connects,
+// negotiates the era, lists tools, reconnects with backoff, and serves
+// tool calls through the current Transport.
+type serverClient struct {
+	cfg     clientConfig
+	factory transportFactory
+	logger  *slog.Logger
+
+	lifeCtx context.Context
+	cancel  context.CancelFunc
+
+	firstDone chan struct{} // closed after the first connect attempt
+	exited    chan struct{} // closed when the supervisor returns
+	startOnce sync.Once
+
+	refreshCh   chan struct{} // cap 1: re-list requested (list_changed, stale ttl)
+	reconnectCh chan struct{} // cap 1: session expired (see reconnectFor)
+	notifyCh    chan struct{} // cap 1: a synchronous re-list changed the tools
+	listSem     chan struct{} // cap 1: one tools/list run at a time
+
+	debounce time.Duration                     // refresh debounce; tests shorten it
+	jitter   func(time.Duration) time.Duration // spreads reconnect waits; tests make it exact
+
+	// thaneBugLogged gates the "needs a Thane fix" ERROR to once per run
+	// of failed attempts; a successful connect re-arms it.
+	thaneBugLogged atomic.Bool
+
+	// exitWarned gates the stdio exit WARN across this server's
+	// processes (transportHooks.exitWarned); run re-arms it at a connect
+	// logged at INFO, and serve once a connection has lived stableAfter.
+	exitWarned atomic.Bool
+
+	retiring sync.WaitGroup // retireConn goroutines; run waits for them
+
+	mu           sync.Mutex
+	state        connState
+	stateCh      chan struct{} // closed and replaced on every state change
+	conn         *clientConn   // non-nil only while ready
+	lastErr      error         // last connect failure or loss
+	lastEra      era           // era of the last successful negotiation
+	reconnectFor *clientConn   // the connection a reconnect request targets
+	tl           *toolSet      // nil until the first successful listing
+	listGen      uint64        // bumped when the published list changes
+	listedAt     time.Time     // last successful listing
+	refreshBase  time.Time     // staleness base for noteAccess
+
+	notifiedGen uint64 // supervisor goroutine only
+
+	warnings logDeduper // warnOnce
+}
+
+// clientConn is one negotiated connection: a transport plus what the
+// negotiation learned. Fields other than eraState are written before
+// the connection is published (under serverClient.mu) and read-only
+// afterwards.
+type clientConn struct {
+	tr           Transport
+	eraState     atomic.Int32 // era; read by the inbound hooks
+	version      string
+	server       implementation
+	instructions string
+}
+
+// currentEra returns the negotiated era (eraUnknown during negotiation).
+func (cc *clientConn) currentEra() era { return era(cc.eraState.Load()) }
+
+// newServerClient builds the client. Cancelling ctx stops the client
+// like close does; the Manager passes a ctx that is never cancelled, so
+// only close ends it. No I/O, no goroutines.
+func newServerClient(ctx context.Context, cfg clientConfig, f transportFactory) *serverClient {
+	cfg = cfg.withDefaults()
+	logger := cfg.logger.With("mcp_server", cfg.name)
+	switch cfg.protocol {
+	case protocolAuto, protocolModern, protocolLegacy:
+	case "":
+		cfg.protocol = protocolAuto
+	default:
+		logger.Warn("mcp: unknown protocol setting; using auto", "protocol", logText(cfg.protocol))
+		cfg.protocol = protocolAuto
+	}
+	lifeCtx, cancel := context.WithCancel(ctx)
+	return &serverClient{
+		cfg:         cfg,
+		factory:     f,
+		logger:      logger,
+		lifeCtx:     lifeCtx,
+		cancel:      cancel,
+		firstDone:   make(chan struct{}),
+		exited:      make(chan struct{}),
+		refreshCh:   make(chan struct{}, 1),
+		reconnectCh: make(chan struct{}, 1),
+		notifyCh:    make(chan struct{}, 1),
+		listSem:     make(chan struct{}, 1),
+		debounce:    refreshDebounce,
+		jitter:      jitterDuration,
+		stateCh:     make(chan struct{}),
+		warnings:    logDeduper{max: maxWarnKeys},
+	}
+}
+
+// start launches the supervisor goroutine. Call exactly once; later
+// calls, and calls after close, do nothing.
+func (c *serverClient) start() {
+	c.startOnce.Do(func() { go c.run() })
+}
+
+// firstAttempt is closed when the first connect attempt has finished,
+// successfully or not.
+func (c *serverClient) firstAttempt() <-chan struct{} { return c.firstDone }
+
+// close stops the supervisor, closes the current transport bounded by
+// ctx, and waits (bounded by ctx) for the supervisor to exit. Idempotent.
+func (c *serverClient) close(ctx context.Context) error {
+	c.cancel()
+	// A client that was never started has no supervisor to wait for.
+	c.startOnce.Do(func() {
+		c.setDisconnected(errClientClosed)
+		close(c.firstDone)
+		close(c.exited)
+	})
 	c.mu.Lock()
-	c.initialized = true
-	c.serverName = result.ServerInfo.Name
-	c.serverVer = result.ServerInfo.Version
+	conn := c.conn
 	c.mu.Unlock()
-
-	c.logger.Info("MCP server initialized",
-		"server_name", result.ServerInfo.Name,
-		"server_version", result.ServerInfo.Version,
-		"protocol_version", result.ProtocolVersion,
-	)
-
-	// Send the initialized notification to complete the handshake.
-	if err := c.transport.Notify(ctx, NewNotification("notifications/initialized", nil)); err != nil {
-		return fmt.Errorf("send initialized notification: %w", err)
-	}
-
-	return nil
-}
-
-// ListTools calls tools/list and returns the available tool definitions.
-// Results are cached; subsequent calls return the cached list.
-func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
-	c.mu.RLock()
-	if c.tools != nil {
-		defer c.mu.RUnlock()
-		return c.tools, nil
-	}
-	c.mu.RUnlock()
-
-	resp, err := c.send(ctx, "tools/list", nil)
-	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
-	}
-
-	var result toolsListResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal tools/list result: %w", err)
-	}
-
-	c.mu.Lock()
-	c.tools = result.Tools
-	c.mu.Unlock()
-
-	c.logger.Info("discovered MCP tools", "count", len(result.Tools))
-	return result.Tools, nil
-}
-
-// CallTool invokes a tool by name with the given arguments. The result
-// is extracted from the response content blocks as a single string.
-// Non-text content blocks are described inline (e.g., "[image]").
-func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
-	params := map[string]any{
-		"name":      name,
-		"arguments": args,
-	}
-
-	resp, err := c.send(ctx, "tools/call", params)
-	if err != nil {
-		return "", fmt.Errorf("tools/call %s: %w", name, err)
-	}
-
-	var result callToolResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return "", fmt.Errorf("unmarshal tools/call result: %w", err)
-	}
-
-	text := extractText(result.Content)
-
-	if result.IsError {
-		return "", fmt.Errorf("MCP tool %s returned error: %s", name, text)
-	}
-
-	return text, nil
-}
-
-// Ping checks whether the MCP server is responsive. Used by connwatch
-// for health monitoring.
-func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.send(ctx, "ping", nil)
-	return err
-}
-
-// Close shuts down the client and its transport.
-func (c *Client) Close() error {
-	c.logger.Info("closing MCP client")
-	return c.transport.Close()
-}
-
-// send issues a JSON-RPC request and checks for protocol-level errors.
-func (c *Client) send(ctx context.Context, method string, params any) (*Response, error) {
-	id := c.nextID.Add(1)
-	req := NewRequest(id, method, params)
-
-	resp, err := c.transport.Send(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.Error != nil {
-		return nil, resp.Error
-	}
-
-	return resp, nil
-}
-
-// extractText joins all text content blocks into a single string.
-// Non-text blocks are represented as inline markers.
-func extractText(blocks []ContentBlock) string {
-	var parts []string
-	for _, b := range blocks {
-		switch b.Type {
-		case "text":
-			parts = append(parts, b.Text)
-		case "image":
-			parts = append(parts, "[image]")
-		case "resource":
-			parts = append(parts, "[resource]")
-		default:
-			parts = append(parts, fmt.Sprintf("[%s]", b.Type))
+	if conn != nil {
+		if err := conn.tr.Close(ctx); err != nil {
+			c.logger.Debug("mcp: closing transport failed", "error", err)
 		}
 	}
-	return strings.Join(parts, "\n")
+	select {
+	case <-c.exited:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("mcp: close server %s: %w", c.cfg.name, ctx.Err())
+	}
+}
+
+// serveEnd says why serve returned.
+type serveEnd int
+
+const (
+	serveStop      serveEnd = iota // lifetime ctx done
+	serveLost                      // the transport died
+	serveReconnect                 // session expired: reconnect at once
+)
+
+// run is the supervisor loop. It is the only place that connects,
+// reconnects and calls onToolsChanged.
+//
+// A failed attempt, or a connection lost before stableAfter, is a
+// failure: the next attempt waits backoff, which doubles up to
+// backoffMax, so a server that crashes right after connecting is not
+// respawned at a fixed short interval. A connection that lived
+// stableAfter ends the run of failures: backoff returns to backoffMin.
+// Every wait is jittered.
+//
+// Logging follows the run. A connect logs at INFO, and the loss of a
+// connection logged at INFO, or of one that proved stable, at WARN.
+// Once a connection of the run was lost before stableAfter (flapping),
+// later connects and quick losses log at Debug. A failed attempt logs
+// at WARN only as the run's first failure. The stdio exit WARN is
+// re-armed when a run starts and at each connect logged at INFO, so a
+// run of start-up failures shows its stderr once, and the crash of a
+// connection logged at INFO shows its own.
+func (c *serverClient) run() {
+	first := true
+	finishFirst := func() {
+		if first {
+			first = false
+			close(c.firstDone)
+		}
+	}
+	defer close(c.exited)
+	defer c.retiring.Wait()
+	defer finishFirst()
+	defer c.setDisconnected(errClientClosed)
+
+	backoff := c.cfg.backoffMin
+	failures := 0     // failed attempts and quick losses in this run
+	flapping := false // this run includes a connection lost before stableAfter
+	for c.lifeCtx.Err() == nil {
+		c.setConnecting()
+		conn, set, err := c.connectAttempt()
+		if err != nil {
+			c.setDisconnected(err)
+			finishFirst()
+			if c.lifeCtx.Err() != nil {
+				return
+			}
+			failures++
+			wait := c.jitter(backoff)
+			c.logAttemptFailure(failures, err, wait)
+			if !c.sleep(wait) {
+				return
+			}
+			backoff = min(2*backoff, c.cfg.backoffMax)
+			continue
+		}
+		c.setReady(conn, set)
+		c.thaneBugLogged.Store(false)
+		if !flapping {
+			c.rearmExitWarn(conn)
+		}
+		c.logReady(conn, set, flapping)
+		finishFirst()
+		c.fireToolsChanged()
+		end, stable := c.serve(conn, flapping)
+		if end == serveStop {
+			c.closeConn(conn)
+			return
+		}
+		if stable {
+			failures, backoff, flapping = 0, c.cfg.backoffMin, false
+		}
+		if end == serveReconnect {
+			continue // the session expired: reconnect at once
+		}
+		wait := c.jitter(backoff)
+		c.logLost(conn, flapping, wait)
+		if !c.sleep(wait) {
+			return
+		}
+		if !stable {
+			failures++
+			flapping = true
+			backoff = min(2*backoff, c.cfg.backoffMax)
+		}
+	}
+}
+
+// connectAttempt runs one bounded attempt: factory, negotiation (with
+// any respawn), legacy notifications/initialized, and a full tools/list.
+// Every transport the attempt created is closed when it fails.
+func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
+	ctx, cancel := context.WithTimeout(c.lifeCtx, c.cfg.connectTimeout)
+	defer cancel()
+	conn, err := c.negotiate(ctx)
+	if err != nil {
+		if conn != nil {
+			c.closeConn(conn)
+		}
+		return nil, nil, err
+	}
+	set, err := c.fetchTools(ctx, conn)
+	if err != nil {
+		c.closeConn(conn)
+		return nil, nil, fmt.Errorf("%s: %w", methodToolsList, err)
+	}
+	return conn, set, nil
+}
+
+// serve waits on a ready connection until it is lost, expires, or the
+// client stops, handling list refreshes in between, and reports whether
+// the connection lived stableAfter, which ends the run of failures. A
+// stable connection re-arms the stdio exit WARN and, while flapping,
+// logs that it is stable again, because its connect was logged only at
+// Debug.
+//
+// The re-arm runs on its own timer, so it happens at stableAfter even
+// while serve is busy in an inline refresh, before the process can exit
+// and claim the gate. The rest is serve's: a refresh can outlast
+// stableAfter, and when the connection then ends, the fired timer and
+// the end are both ready and the select picks one at random. So how
+// long the connection lived decides, and serve applies a fired timer's
+// effects before it returns.
+func (c *serverClient) serve(conn *clientConn, flapping bool) (serveEnd, bool) {
+	readyAt := time.Now()
+	rearm := time.AfterFunc(c.cfg.stableAfter, func() { c.rearmExitWarn(conn) })
+	defer rearm.Stop()
+	timer := time.NewTimer(c.cfg.stableAfter)
+	defer timer.Stop()
+	stable := false
+	markStable := func() {
+		if stable {
+			return
+		}
+		stable = true
+		if flapping {
+			c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
+		}
+	}
+	end := c.await(conn, timer.C, markStable)
+	select {
+	case <-timer.C:
+		markStable()
+	default:
+	}
+	if time.Since(readyAt) >= c.cfg.stableAfter {
+		markStable()
+	}
+	switch end {
+	case serveLost:
+		c.setDisconnected(fmt.Errorf("%w: the server connection closed", errConnectionLost))
+		c.closeConn(conn)
+	case serveReconnect:
+		c.logger.Info("mcp: server session expired; reconnecting")
+		c.retireConn(conn)
+	}
+	return end, stable
+}
+
+// await is serve's loop: it returns how the connection ended, and calls
+// markStable when the stable timer fires.
+func (c *serverClient) await(conn *clientConn, stableTimer <-chan time.Time, markStable func()) serveEnd {
+	for {
+		select {
+		case <-c.lifeCtx.Done():
+			return serveStop
+		case <-conn.tr.Done():
+			if c.lifeCtx.Err() != nil {
+				return serveStop
+			}
+			return serveLost
+		case <-c.reconnectCh:
+			if c.takeReconnect(conn) {
+				return serveReconnect
+			}
+		case <-c.refreshCh:
+			if c.refresh(conn) {
+				return serveReconnect
+			}
+		case <-c.notifyCh:
+			c.fireToolsChanged()
+		case <-stableTimer:
+			markStable()
+		}
+	}
+}
+
+// refresh re-lists tools after the debounce. It reports true when the
+// session expired and the supervisor must reconnect.
+func (c *serverClient) refresh(conn *clientConn) bool {
+	t := time.NewTimer(c.debounce)
+	select {
+	case <-t.C:
+	case <-c.lifeCtx.Done():
+		t.Stop()
+		return false
+	case <-conn.tr.Done():
+		t.Stop()
+		return false // serve sees Done next
+	}
+	select {
+	case <-c.refreshCh: // coalesce requests made during the debounce
+	default:
+	}
+	ctx, cancel := context.WithTimeout(c.lifeCtx, c.cfg.connectTimeout)
+	defer cancel()
+	err := c.relist(ctx, conn)
+	switch {
+	case err == nil:
+		c.fireToolsChanged()
+	case errors.Is(err, errSessionExpired):
+		return true
+	default:
+		select {
+		case <-conn.tr.Done(): // serve reports the loss
+		default:
+			if c.lifeCtx.Err() == nil {
+				c.logger.Warn("mcp: refreshing the tool list failed; keeping the previous list",
+					append([]any{"error", err}, httpStatusLogArgs(err)...)...)
+			}
+		}
+	}
+	return false
 }

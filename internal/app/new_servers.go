@@ -275,6 +275,7 @@ func (a *App) initServers(s *newState) error {
 		a.companionDevices,
 		logger,
 	))
+	var registrar *tools.CompanionRegistrar
 	if cfg.Companion.Configured() {
 		a.companionRegistry = companion.NewRegistry(logger)
 
@@ -301,8 +302,7 @@ func (a *App) initServers(s *newState) error {
 		// whenever a companion connects, re-registers, or drops — so a
 		// laptop popping on/off line surfaces and retracts its tools
 		// mid-session. A Mac-authored tool shadows the legacy floor by name.
-		registrar := tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
-		a.loop.SetDynamicToolSource(registrar)
+		registrar = tools.NewCompanionRegistrar(a.companionRegistry, companionHome, logger)
 
 		// The mechanical calendar block (#1432): an in-memory snapshot of
 		// every connected account's near-term calendar, refreshed on the
@@ -400,6 +400,15 @@ func (a *App) initServers(s *newState) error {
 		// device went to sleep. Reachability now lives per-device in the
 		// durable inventory and the joined context view above.
 		logger.Info("companion app endpoint enabled")
+	}
+
+	// --- Dynamic tool overlay ---
+	// The loop has one dynamic tool slot. It carries both the MCP
+	// overlay (tools of servers that came up after boot, and tools added
+	// or changed later) and the companion registrar, merged per run.
+	// Installed whenever either exists, so MCP works without companion.
+	if a.mcpManager != nil || registrar != nil {
+		a.loop.SetDynamicToolSource(newDynamicToolSources(cfg, a.mcpManager, registrar))
 	}
 
 	// Counterparty enrichment of channel context (#1450): the contact

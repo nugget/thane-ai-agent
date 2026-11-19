@@ -1,320 +1,374 @@
 package mcp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
-// StdioConfig configures a stdio MCP transport that communicates with
-// a subprocess over stdin/stdout using newline-delimited JSON-RPC.
-type StdioConfig struct {
-	// Command is the executable to run.
-	Command string
+// stdioConfig configures one stdio server process.
+type stdioConfig struct {
+	command string
+	args    []string
+	env     []string // appended to os.Environ(); entries already KEY=VALUE
+	dir     string   // absolute; "" = inherit Thane's working directory
+	logger  *slog.Logger
 
-	// Args are command-line arguments passed to the executable.
-	Args []string
-
-	// Env are additional environment variables for the subprocess
-	// (format: "KEY=VALUE"). These are appended to the current
-	// process environment.
-	Env []string
-
-	// Logger is the structured logger for transport diagnostics.
-	Logger *slog.Logger
+	// Timing knobs; zero means the default. Tests shorten them.
+	closeStdinWait  time.Duration // after closing stdin, before SIGTERM (2s)
+	termWait        time.Duration // after SIGTERM, before SIGKILL (3s)
+	exitDrainWait   time.Duration // after Wait returns, stdout drain grace (2s)
+	frameFinishWait time.Duration // to finish a line its caller's ctx cut short (2m)
 }
 
-// StdioTransport communicates with an MCP server running as a
-// subprocess. JSON-RPC messages are newline-delimited on stdin/stdout.
-// Access is serialized by a channel-based semaphore so that callers
-// whose context expires while waiting do not kill the subprocess.
-type StdioTransport struct {
-	config StdioConfig
+const (
+	stdioDefaultCloseStdinWait  = 2 * time.Second
+	stdioDefaultTermWait        = 3 * time.Second
+	stdioDefaultExitDrainWait   = 2 * time.Second
+	stdioDefaultFrameFinishWait = 2 * time.Minute
+)
+
+// stdioTransport implements Transport over a child process's
+// stdin/stdout (newline-delimited JSON-RPC).
+//
+// The child runs in its own process group with all three standard
+// streams on os.Pipe pairs, so writes honour deadlines and the parent's
+// read ends can be closed to unblock the readers. One long-lived
+// goroutine reads stdout and routes responses to pending calls by
+// integer id; another drains stderr forever; a third waits for the
+// process. Calls are unlimited and concurrent. A call whose ctx ends
+// is abandoned (and, when cancellable, cancelled with
+// notifications/cancelled); it never kills the process, even when the
+// ctx ends halfway through writing the request (see writeFrame). Only
+// Close, a process exit, or a fatal framing failure ends the process.
+type stdioTransport struct {
 	logger *slog.Logger
+	hooks  transportHooks // hooks.inbound is this transport's own gate
+	cmd    *exec.Cmd
+	pid    int
 
-	sem     chan struct{} // capacity-1 semaphore; replaces sync.Mutex
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	reader  *bufio.Reader
-	closing atomic.Bool
+	stdin  *os.File // parent's write end of the child's stdin
+	stdout *os.File // parent's read end of the child's stdout
+	stderr *os.File // parent's read end of the child's stderr
+
+	closeStdinWait  time.Duration
+	termWait        time.Duration
+	exitDrainWait   time.Duration
+	frameFinishWait time.Duration
+
+	nextID   atomic.Int64
+	writeSem chan struct{} // capacity 1: one message on stdin at a time
+
+	mu             sync.Mutex
+	pending        map[int64]chan *Response // nil once finished
+	finished       bool                     // Done is closed (or closing)
+	doneCause      error                    // why the transport finished
+	closeRequested bool                     // Close was called while the transport was live
+
+	done       chan struct{}
+	doneOnce   sync.Once
+	lifeCtx    context.Context // handed to the hooks; cancelled when Done closes
+	lifeCancel context.CancelFunc
+
+	exited     chan struct{} // closed once cmd.Wait has returned
+	exitErr    error         // cmd.Wait's result; read only after exited is closed
+	readerDone chan struct{} // closed when the stdout reader returns
+	stderrDone chan struct{} // closed when the stderr drain returns
+
+	stdinOnce    sync.Once
+	shutdownOnce sync.Once
+	fatal        atomic.Bool // torn down by a framing or write failure
+	sawMessage   atomic.Bool // the server wrote at least one valid JSON-RPC message
+	nullIDWarned atomic.Bool
+	stderrTail   stdioRing
 }
 
-// NewStdioTransport creates a stdio transport for the given config.
-// The subprocess is not started until the first Send or Notify call.
-func NewStdioTransport(cfg StdioConfig) *StdioTransport {
-	logger := cfg.Logger
+var _ Transport = (*stdioTransport)(nil)
+
+// newStdioTransport spawns the process immediately (exec.Command, never
+// CommandContext; own process group). ctx bounds the spawn only and is
+// never retained for the process lifetime: the hooks get
+// context.WithoutCancel(ctx) plus the transport's own cancel. On error
+// nothing is left running and the error wraps errUnreachable.
+func newStdioTransport(ctx context.Context, cfg stdioConfig, hooks transportHooks) (*stdioTransport, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: start %s: %w", errUnreachable, cfg.command, err)
+	}
+	if cfg.command == "" {
+		return nil, fmt.Errorf("%w: no command configured", errUnreachable)
+	}
+	logger := cfg.logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &StdioTransport{
-		config: cfg,
-		logger: logger,
-		sem:    make(chan struct{}, 1),
-	}
-}
 
-// start launches the subprocess if it is not already running. The
-// subprocess lifecycle is independent of call contexts — it survives
-// individual request timeouts and is only terminated by explicit
-// cleanup() or stop() calls. Caller must hold the semaphore.
-func (t *StdioTransport) start(_ context.Context) error {
-	if t.cmd != nil && t.cmd.ProcessState == nil {
-		// Process is still running.
-		return nil
-	}
-	t.closing.Store(false)
-
-	t.logger.Info("starting MCP subprocess",
-		"command", t.config.Command,
-		"args", t.config.Args,
-	)
-
-	cmd := exec.Command(t.config.Command, t.config.Args...)
-	cmd.Env = append(os.Environ(), t.config.Env...)
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("create stdin pipe: %w", err)
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		stdin.Close()
-		return fmt.Errorf("create stdout pipe: %w", err)
-	}
-
-	// Capture stderr for logging — not part of the protocol.
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		stdin.Close()
-		stdout.Close()
-		return fmt.Errorf("create stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		stderrPipe.Close()
-		stdout.Close()
-		stdin.Close()
-		return fmt.Errorf("start subprocess %s: %w", t.config.Command, err)
-	}
-
-	t.cmd = cmd
-	t.stdin = stdin
-	t.reader = bufio.NewReaderSize(stdout, 1<<20) // 1 MiB buffer for large responses
-
-	// Drain stderr in the background.
-	go t.drainStderr(stderrPipe)
-
-	t.logger.Info("MCP subprocess started", "pid", cmd.Process.Pid)
-	return nil
-}
-
-// drainStderr reads stderr lines and logs them at debug level.
-func (t *StdioTransport) drainStderr(r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
-	for scanner.Scan() {
-		t.logger.Debug("MCP subprocess stderr", "line", scanner.Text())
-	}
-}
-
-// readResult is the outcome of a single line read from stdout.
-type readResult struct {
-	line []byte
-	err  error
-}
-
-// acquire attempts to take the transport semaphore, respecting context
-// cancellation. Returns nil on success or ctx.Err() if the context
-// expired before the semaphore became available. Unlike a sync.Mutex,
-// this prevents a timed-out caller from killing a subprocess that is
-// busy serving another request.
-func (t *StdioTransport) acquire(ctx context.Context) error {
-	select {
-	case t.sem <- struct{}{}:
-		// Double-check: if the context expired at the same instant the
-		// semaphore became available, select may have chosen the send.
-		// Release and bail so the caller never enters Send/Notify with
-		// a dead context.
-		if err := ctx.Err(); err != nil {
-			t.release()
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// release returns the semaphore token. Must be called exactly once
-// after a successful acquire.
-func (t *StdioTransport) release() {
-	<-t.sem
-}
-
-// Send sends a JSON-RPC request over stdin and reads the response from
-// stdout. The semaphore serializes access since stdio is inherently
-// sequential. If the caller's context expires while waiting for the
-// semaphore, Send returns immediately without touching the subprocess.
-// The read is performed in a goroutine so that context cancellation can
-// interrupt a blocking read.
-func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, error) {
-	if err := t.acquire(ctx); err != nil {
-		return nil, err
-	}
-	defer t.release()
-
-	if err := t.start(ctx); err != nil {
-		return nil, err
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	// Write request + newline delimiter.
-	if _, err := t.stdin.Write(append(data, '\n')); err != nil {
-		t.cleanup()
-		return nil, fmt.Errorf("write to subprocess stdin: %w", err)
-	}
-
-	// Read response lines. The subprocess may emit notifications before
-	// the actual response, so we loop until we find a matching ID.
-	// Reads are performed in a goroutine so context cancellation works.
-	for {
-		ch := make(chan readResult, 1)
-		go func() {
-			line, readErr := t.reader.ReadBytes('\n')
-			ch <- readResult{line: line, err: readErr}
-		}()
-
-		select {
-		case <-ctx.Done():
-			// Context cancelled or timed out. Kill the subprocess so
-			// the blocked read unblocks, then clean up.
-			t.cleanup()
-			return nil, ctx.Err()
-		case res := <-ch:
-			if res.err != nil {
-				t.cleanup()
-				return nil, fmt.Errorf("read from subprocess stdout: %w", res.err)
-			}
-
-			// Try to parse as a response (has "id" field).
-			var resp Response
-			if err := json.Unmarshal(res.line, &resp); err != nil {
-				t.logger.Debug("skipping non-JSON line from MCP subprocess",
-					"line", string(res.line),
-				)
-				continue
-			}
-
-			// Skip notifications (id == 0 and no result/error could be a
-			// notification). We match on the request ID.
-			if resp.ID == req.ID {
-				return &resp, nil
-			}
-
-			// Log unexpected messages.
-			t.logger.Debug("skipping unmatched MCP message", "id", resp.ID)
-		}
-	}
-}
-
-// Notify sends a JSON-RPC notification over stdin. No response is expected.
-func (t *StdioTransport) Notify(ctx context.Context, notif *Notification) error {
-	if err := t.acquire(ctx); err != nil {
-		return err
-	}
-	defer t.release()
-
-	if err := t.start(ctx); err != nil {
-		return err
-	}
-
-	data, err := json.Marshal(notif)
-	if err != nil {
-		return fmt.Errorf("marshal notification: %w", err)
-	}
-
-	if _, err := t.stdin.Write(append(data, '\n')); err != nil {
-		t.cleanup()
-		return fmt.Errorf("write notification to subprocess stdin: %w", err)
-	}
-
-	return nil
-}
-
-// Close terminates the subprocess and releases resources. It blocks
-// until the semaphore is available (matching the previous mutex
-// behavior) because shutdown must wait for in-flight operations.
-func (t *StdioTransport) Close() error {
-	t.sem <- struct{}{}
-	defer t.release()
-
-	return t.stop()
-}
-
-// stop terminates the subprocess. Caller must hold the semaphore.
-func (t *StdioTransport) stop() error {
-	if t.cmd == nil || t.cmd.Process == nil {
-		return nil
-	}
-	t.closing.Store(true)
-
-	t.logger.Info("stopping MCP subprocess", "pid", t.cmd.Process.Pid)
-
-	// Close stdin to signal the subprocess to exit.
-	if t.stdin != nil {
-		t.stdin.Close()
-	}
-
-	// Wait briefly for graceful exit, then force kill.
-	done := make(chan error, 1)
-	go func() { done <- t.cmd.Wait() }()
-
-	select {
-	case err := <-done:
-		t.cmd = nil
-		t.stdin = nil
-		t.reader = nil
+	// Every stream is an os.Pipe so the parent ends are pollable: stdin
+	// writes honour deadlines, and closing a read end unblocks its
+	// reader even when a grandchild still holds the write end open.
+	// Index 0 is stdin (the child reads), 1 stdout and 2 stderr (the
+	// child writes).
+	var child, parent [3]*os.File
+	for i := range child {
+		r, w, err := os.Pipe()
 		if err != nil {
-			t.logger.Debug("MCP subprocess exited during shutdown", "error", err)
+			stdioCloseFiles(child[:], parent[:])
+			return nil, fmt.Errorf("%w: start %s: create pipes: %w", errUnreachable, cfg.command, err)
 		}
-		return nil
-	case <-time.After(5 * time.Second):
-		t.logger.Warn("MCP subprocess did not exit gracefully, killing",
-			"pid", t.cmd.Process.Pid,
-		)
-		_ = t.cmd.Process.Kill()
-		if err := <-done; err != nil {
-			t.logger.Debug("MCP subprocess exited after forced shutdown", "error", err)
+		if i == 0 {
+			child[i], parent[i] = r, w
+		} else {
+			child[i], parent[i] = w, r
 		}
-		t.cmd = nil
-		t.stdin = nil
-		t.reader = nil
-		return nil
+	}
+
+	cmd := exec.Command(cfg.command, cfg.args...)
+	cmd.Env = append(os.Environ(), cfg.env...)
+	cmd.Dir = cfg.dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = child[0], child[1], child[2]
+	err := cmd.Start()
+	stdioCloseFiles(child[:]) // the child has its own copies now
+	if err != nil {
+		stdioCloseFiles(parent[:])
+		return nil, fmt.Errorf("%w: start %s: %w", errUnreachable, cfg.command, err)
+	}
+
+	lifeCtx, lifeCancel := context.WithCancel(context.WithoutCancel(ctx))
+	hooks.inbound = newInboundGate()
+	t := &stdioTransport{
+		logger:          logger,
+		hooks:           hooks,
+		cmd:             cmd,
+		pid:             cmd.Process.Pid,
+		stdin:           parent[0],
+		stdout:          parent[1],
+		stderr:          parent[2],
+		closeStdinWait:  durationOr(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
+		termWait:        durationOr(cfg.termWait, stdioDefaultTermWait),
+		exitDrainWait:   durationOr(cfg.exitDrainWait, stdioDefaultExitDrainWait),
+		frameFinishWait: durationOr(cfg.frameFinishWait, stdioDefaultFrameFinishWait),
+		writeSem:        make(chan struct{}, 1),
+		pending:         make(map[int64]chan *Response),
+		done:            make(chan struct{}),
+		lifeCtx:         lifeCtx,
+		lifeCancel:      lifeCancel,
+		exited:          make(chan struct{}),
+		readerDone:      make(chan struct{}),
+		stderrDone:      make(chan struct{}),
+	}
+	go t.waitProcess()
+	go t.readStdout()
+	go t.drainStderr()
+	logger.Debug("mcp: stdio server started", "command", cfg.command, "pid", t.pid)
+	return t, nil
+}
+
+// stdioCloseFiles closes every non-nil file in each set.
+func stdioCloseFiles(sets ...[]*os.File) {
+	for _, set := range sets {
+		for _, f := range set {
+			if f != nil {
+				_ = f.Close()
+			}
+		}
 	}
 }
 
-// cleanup resets the process state after a failure. Caller must hold the semaphore.
-func (t *StdioTransport) cleanup() {
-	if t.stdin != nil {
-		t.stdin.Close()
+// Call sends req with a fresh integer id and waits for its response. A
+// JSON-RPC error response is returned as (resp, nil). When ctx ends
+// first the call is abandoned (a late response is dropped) and, if
+// info.cancellable, the server is sent notifications/cancelled; the
+// process keeps running.
+func (t *stdioTransport) Call(ctx context.Context, req *Request, info callInfo) (*Response, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("stdio: %w", err)
 	}
-	if t.cmd != nil && t.cmd.Process != nil {
-		_ = t.cmd.Process.Kill()
-		_ = t.cmd.Wait()
+	n := t.nextID.Add(1)
+	out := *req
+	out.JSONRPC = jsonrpcVersion
+	out.ID = intID(n)
+
+	ch := make(chan *Response, 1)
+	if !t.register(n, ch) {
+		return nil, fmt.Errorf("%w: stdio: %w", errUnreachable, t.cause())
 	}
-	t.cmd = nil
-	t.stdin = nil
-	t.reader = nil
+	var cancelID json.RawMessage // cancelled after a cut-short write
+	if info.cancellable {
+		cancelID = out.ID
+	}
+	if err := t.writeFrame(ctx, &out, cancelID); err != nil {
+		t.unregister(n)
+		return nil, fmt.Errorf("stdio: %w", err)
+	}
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("%w: stdio: %w", errConnectionLost, t.cause())
+		}
+		return resp, nil
+	case <-ctx.Done():
+		return t.abandon(ctx, n, ch, out.Method, info)
+	}
+}
+
+// abandon gives up on call n after its ctx ended. If the response (or
+// the connection loss) won the race it is returned instead.
+func (t *stdioTransport) abandon(ctx context.Context, n int64, ch chan *Response, method string, info callInfo) (*Response, error) {
+	if !t.unregister(n) {
+		// The reader or finish already took the entry; its send or
+		// close is imminent.
+		if resp, ok := <-ch; ok {
+			return resp, nil
+		}
+		return nil, fmt.Errorf("%w: stdio: %w", errConnectionLost, t.cause())
+	}
+	if info.cancellable {
+		nctx, cancel := cancelNotifyContext(ctx)
+		err := t.write(nctx, cancelledNotification(intID(n), stdioCancelReason(ctx.Err())))
+		cancel()
+		if err != nil {
+			t.logger.Debug("mcp: sending notifications/cancelled failed", "method", method, "id", n, "error", err)
+		}
+	}
+	return nil, fmt.Errorf("stdio: %w", ctx.Err())
+}
+
+// Notify writes n and returns once the line is on stdin.
+func (t *stdioTransport) Notify(ctx context.Context, n *Notification, _ callInfo) error {
+	out := *n
+	out.JSONRPC = jsonrpcVersion
+	if err := t.write(ctx, &out); err != nil {
+		return fmt.Errorf("stdio: %w", err)
+	}
+	return nil
+}
+
+// Done is closed when the process exits, stdout ends, a fatal framing
+// or write failure tears the transport down, or Close finishes.
+func (t *stdioTransport) Done() <-chan struct{} { return t.done }
+
+// reply writes a response to a server-initiated request.
+func (t *stdioTransport) reply(ctx context.Context, resp *Response) error {
+	return t.write(ctx, resp)
+}
+
+// stdioCancelReason is the notifications/cancelled reason for a call
+// whose ctx ended with err.
+func stdioCancelReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "cancelled"
+}
+
+// register adds a pending call; false once the transport finished.
+func (t *stdioTransport) register(id int64, ch chan *Response) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.finished {
+		return false
+	}
+	t.pending[id] = ch
+	return true
+}
+
+// unregister removes a pending call and reports whether it was still
+// pending (false: a response or finish already claimed it).
+func (t *stdioTransport) unregister(id int64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.pending[id]; !ok {
+		return false
+	}
+	delete(t.pending, id)
+	return true
+}
+
+// route hands a response to its pending call, or drops it.
+func (t *stdioTransport) route(resp *Response) {
+	id, ok := idInt(resp.ID)
+	if !ok {
+		if !hasID(resp.ID) && resp.Error != nil {
+			if t.nullIDWarned.CompareAndSwap(false, true) {
+				t.logger.Warn("mcp: stdio server sent an error response with no id; dropping it",
+					"pid", t.pid, "code", resp.Error.Code, "message", truncateUTF8(resp.Error.Message, stdioPreviewBytes))
+			}
+			return
+		}
+		t.logger.Debug("mcp: dropping response with an unknown id", "id", stdioPreview(resp.ID))
+		return
+	}
+	t.mu.Lock()
+	ch, ok := t.pending[id]
+	if ok {
+		delete(t.pending, id)
+	}
+	t.mu.Unlock()
+	if !ok {
+		t.logger.Debug("mcp: dropping late or unknown response", "id", id)
+		return
+	}
+	ch <- resp // capacity 1 and claimed exactly once: never blocks
+}
+
+// cause returns why the transport finished, for wrapping into errors
+// returned after Done.
+func (t *stdioTransport) cause() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.doneCause == nil {
+		return errStdioClosed
+	}
+	return t.doneCause
+}
+
+// errStdioClosed is why a transport that Close stopped finished.
+var errStdioClosed = errors.New("transport closed")
+
+// finish closes Done exactly once: it fails every pending call with
+// errConnectionLost (by closing its channel), records cause, and
+// cancels the lifetime ctx handed to the hooks. Once Close was asked
+// for, the cause is errStdioClosed whoever notices the end first (the
+// stdout reader, waitProcess, a failed write): Close caused it.
+func (t *stdioTransport) finish(cause error) {
+	t.doneOnce.Do(func() {
+		t.mu.Lock()
+		t.finished = true
+		t.doneCause = cause
+		if t.closeRequested {
+			t.doneCause = errStdioClosed
+		}
+		pending := t.pending
+		t.pending = nil
+		t.mu.Unlock()
+		for _, ch := range pending {
+			close(ch)
+		}
+		t.lifeCancel()
+		close(t.done)
+	})
+}
+
+// lost finishes the transport because the server went away (stdout
+// ended, stdin broke) and stops whatever is left of the process in the
+// background. Its exit is still reported as unexpected.
+func (t *stdioTransport) lost(cause error) {
+	t.finish(cause)
+	t.beginShutdown()
+}
+
+// fail tears the transport down after a framing failure (an oversize
+// message or a partial write), which Thane has already logged at WARN,
+// and stops the process in the background.
+func (t *stdioTransport) fail(cause error) {
+	t.fatal.Store(true)
+	t.lost(cause)
 }

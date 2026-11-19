@@ -1134,22 +1134,203 @@ can be piped through `grep` or `jq`.
 
 ## MCP Servers
 
+Optional. Connects Thane to external
+[Model Context Protocol](https://modelcontextprotocol.io) servers and
+bridges their tools into the registry as `mcp_{server}_{tool}`. Thane is
+only ever the client.
+
 ```yaml
 mcp:
   servers:
-    - name: github
+    # A local subprocess speaking MCP over stdin/stdout.
+    - name: files
       transport: stdio
-      command: docker
-      args: ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/thane/shared"]
+      cwd: ~/thane            # optional; root prefixes and ~/ expand, result must be absolute
       env:
-        - "GITHUB_PERSONAL_ACCESS_TOKEN=your_token"
-      include_tools:
-        - search_code
-        - issue_read
+        - "LOG_LEVEL=warn"    # KEY=VALUE, added to Thane's own environment
+      tags: [files]
+
+    # A server already listening on this machine (Streamable HTTP).
+    - name: game
+      transport: http
+      url: http://localhost:11212/mcp
+      protocol: legacy        # skip the server/discover probe
+      tags: [game]
+
+    # A hosted server with a static token.
+    - name: github
+      transport: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+      include_tools: [search_code, issue_read]
+      connect_timeout: 30s
+      call_timeout: 5m
+      tags: [forge]
+      tools:
+        issue_read:
+          description: "Read one GitHub issue with its comments."
 ```
 
-Optional. Extends Thane's capabilities via the Model Context Protocol.
-See [Delegation & MCP](../understanding/delegation.md).
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `name` | required | Short identifier. It prefixes tool names after sanitizing (lowercase, other characters become `_`), so two names that sanitize alike, or one that sanitizes to nothing, are rejected. |
+| `transport` | required | `stdio` (spawn `command` with `args`) or `http` (Streamable HTTP at `url`, `http` or `https`). |
+| `protocol` | `auto` | `auto` probes with `server/discover` and falls back to the `initialize` handshake; `modern` requires a stateless 2026-07-28 server; `legacy` runs `initialize` directly (2024-11-05 through 2025-11-25). Use `legacy` for older servers that answer the probe slowly. On stdio the probe waits up to 10s for a reply, and never more than half of `connect_timeout`, before falling back, so a legacy server still has time for `initialize`. |
+| `connect_timeout` | `30s` | One connection attempt: start or reach the server, negotiate, list tools. Failed attempts retry in the background with backoff from 2s up to 60s (see **Reconnects** below). |
+| `call_timeout` | `2m` | One tool call, unless the caller already has an earlier deadline. `0` means the default, not unlimited. |
+| `cwd` | Thane's | stdio working directory. Root prefixes such as `kb:` and a leading `~/` expand; a value that does not end up absolute is rejected when the config loads. |
+| `env` | none | stdio extra environment, `KEY=VALUE`. The subprocess also inherits Thane's environment. Entries without `=` are dropped with a warning. |
+| `headers` | none | http headers sent on every request. Protocol headers (`Accept`, `Content-Type`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*`, `Last-Event-ID`) belong to Thane and are dropped with a warning. |
+| `include_tools` / `exclude_tools` | all tools | Raw MCP tool names to bridge or skip (not both). Names the server never reports are logged as a warning. |
+| `tags` | none | Capability tags for every tool of this server. |
+| `tools` | none | Per raw tool name: `enabled` (`true` bridges it even when the include/exclude lists would not, `false` never bridges it), `tags` (replaces the server tags), `description` (replaces the server's). |
+
+**Tags are required for visibility.** A tool with no capability tag is
+never offered in a run scoped by capability tags, so give every server
+`tags:` (or tag its tools under `tools:`). Thane warns at startup about
+a server whose tools have no tag.
+
+The model also has to find the tag. The `tag_activate` menu and the
+capability manifest in the prompt list only the broad menu tags; each
+menu tag's trailhead talent names narrower tags in its `next_tags`. A
+built-in tag that a shipped trailhead already names, such as `files`,
+`forge` or `web`, needs nothing more. A new tag such as `game` stays
+out of sight until one of these leads to it:
+
+- a trailhead talent whose `next_tags` lists it (see
+  [Authoring Talents](../talent-authoring.md));
+- `capability_tags: {game: {core: true}}`, which loads it in every run;
+- `channel_tags` or a loop's `tags`, which activate it for that source
+  or loop.
+
+`tag_inspect` knows a server's tags even while the server is down.
+`capability_tags.<tag>.exclude` keeps a tool out of that tag, including
+tools that first appear after startup.
+
+**Authentication** is static headers only, typically
+`Authorization: Bearer …`. Config expands `${VAR}` anywhere in the file,
+and an unset variable expands to an empty string, so a missing token
+shows up as the server refusing Thane's credentials rather than as a
+config error. OAuth sign-in is not supported.
+
+**Availability.** Servers connect in parallel at startup; Thane waits up
+to 30 seconds for them. Tools of servers that are ready by then are
+registered like native tools. A server that is down at startup keeps
+reconnecting in the background. One that crashes or restarts later
+reconnects too, and meanwhile its tools stay declared and answer that
+the server is not reachable right now. Tools that first appear after
+startup (a late server, or a server that changes its tool list), and
+new definitions of tools whose description or schema changed, reach
+every run: the main loop, and any delegate whose tag scope covers them,
+since delegates run through the same agent loop. Only the delegate's
+model routing (it counts tools) and the capability views (`tag_inspect`
+and the manifest's tool counts) reflect the tools registered at
+startup. Tool names longer than 64 characters are shortened with a
+short stable hash suffix. If two tools map to the same name, the first
+one (servers in config order, then raw tool names sorted) wins and the
+other is skipped with a warning. A tool whose input schema is larger
+than 64 KiB is not offered to the model at all; Thane logs
+`mcp: tool input schema too large to offer to the model; tool skipped`
+at WARN once for each such tool (see
+[MCP tools](../reference/tools.md#mcp-tools) for how schemas are
+adjusted first).
+
+**Reconnects.** After a failed connection attempt Thane waits before
+the next one: 2s at first, doubling with each further failure up to
+60s. A connection lost within 60s of connecting counts as a failure
+too, so a server that crashes right after it starts is not respawned
+every 2s; a connection that stays up 60s resets the wait to 2s. Every
+wait is moved at random by up to 20% either way, so servers that failed
+together do not reconnect in lockstep. When an HTTP server reports that
+Thane's session expired, Thane reconnects at once, without a wait.
+
+The log follows the same runs. A run starts when Thane starts the
+server and again each time a connection stays up 60s. Within a run:
+
+- `mcp: server connected` is INFO until a connection of the run is
+  lost within 60s of connecting. Further connects in the run are Debug.
+- `mcp: server connection lost; reconnecting` is WARN for a connection
+  Thane logged at INFO or one that stayed up 60s, and Debug otherwise.
+- `mcp: connecting to the server failed; retrying in the background`
+  is WARN when it is the run's first failure. Once the run has a failed
+  attempt or a connection lost within 60s, further failed attempts log
+  `mcp: connecting to the server failed again` at Debug.
+- For stdio, `mcp: stdio server exited unexpectedly` and
+  `mcp: stdio server was closed before it sent any JSON-RPC message`
+  (Thane stopped a server that never answered) carry the server's last
+  stderr lines. Either is WARN only as the first such line of the run
+  or the first since a connect Thane logged at INFO; the rest are Debug.
+- When a run with quick losses reaches a connection that stays up 60s,
+  Thane logs `mcp: server connection is stable again` at INFO. A new run
+  starts there, so the next failure is a WARN again.
+
+So a stdio server that fails at start-up on every attempt shows its
+stderr at WARN once. If it then connects and crashes within 60s, the
+loss and the crash's stderr are WARN lines too, and the crashes that
+follow stay at Debug until a connection stays up 60s.
+
+**Health.** Every configured server is a health dependency named
+`mcp-<name>`. While a server is down or not yet connected, `/health`
+reports `status: degraded` and `system_health` shows
+`conn:mcp-<name>` as failed. Expect that for a server that only runs
+some of the time, such as a game that exposes MCP only while it is open.
+
+While a server is connected, the health check is a `ping` (or
+`server/discover` for a stateless 2026-07-28 server). A JSON-RPC answer
+on stdio, or in a successful HTTP response, counts as healthy, even
+when it is a JSON-RPC error. An HTTP error status counts as a failure,
+even when its body carries a JSON-RPC error. A failed check never drops
+the connection, except that an expired HTTP session makes Thane
+reconnect at once; that check reports `mcp: not connected`.
+The error that `/health` and `system_health` show is one of a fixed set,
+never a host, URL or server text; the full error is logged at Debug as
+`mcp: health check failed`.
+
+| Error | Meaning |
+|-------|---------|
+| `mcp: not connected: unreachable` | Thane cannot reach the server, or the connection broke. |
+| `mcp: not connected: credentials refused` | The server refused Thane's credentials (HTTP 401 or 403). |
+| `mcp: not connected: protocol incompatible` | The server and Thane share no protocol version, or the server broke the protocol while connecting. |
+| `mcp: health check timed out` | A connected server did not answer the health check in time. |
+| `mcp: health check failed: server error` | A connected server answered the health check with an HTTP error status. |
+| `mcp: health check failed: unusable reply` | A connected server answered the health check with a reply Thane could not use. |
+| `mcp: not connected` | Not connected for another reason, for example while the first attempt is still running. |
+
+**Upgrading:** these change the behaviour of an existing `mcp:` config.
+
+- Calls from the main loop used to have no time limit. Every call now
+  stops at `call_timeout` (default `2m`), and the model is told the
+  outcome is unknown. Raise it (for example `30m`) for servers with
+  long-running tools; `0` means the default, not unlimited.
+- stdio servers run in their own process group, so Ctrl-C in Thane's
+  terminal no longer reaches them directly. Thane stops them on
+  shutdown: it closes stdin, then sends SIGTERM and finally SIGKILL to
+  the group. If Thane exits without a clean shutdown (a second Ctrl-C,
+  SIGKILL), each server has to exit by itself when its stdin closes.
+- When two tools map to the same name, the first one now wins, and a
+  native tool always wins over an MCP tool; the last one registered
+  used to.
+- `tools.<name>.enabled: true` now bridges a tool even when
+  `include_tools` or `exclude_tools` would leave it out.
+- Tool names longer than 64 characters change: they are shortened with
+  a hash suffix, so references to the old long names stop matching.
+- Protocol headers set under `headers:` (listed above) are dropped with
+  a warning.
+- `protocol: auto`, the default, sends `server/discover` before
+  `initialize`. Set `protocol: legacy` for an older server that
+  answers the probe slowly or badly.
+
+**Arguments** go through Thane's usual `temp:`/`kb:` prefix expansion,
+so file content referenced that way is sent to the MCP server.
+
+**Not supported yet:** OAuth, the legacy HTTP notification stream (GET)
+and stream resumption, the deprecated 2024-11-05 HTTP+SSE transport,
+resources, prompts, completion, tasks, and server instructions in
+prompts. Image and audio results are summarized as text, not shown to
+the model. See [Delegation & MCP](../understanding/delegation.md).
 
 ## Delegation
 
