@@ -250,6 +250,31 @@ func TestManager_RawNameCollisionNeverReplacesAStaticTool(t *testing.T) {
 	}
 }
 
+// TestManager_StaticToolDriftWinsOverARawNameNewcomer: when a static
+// tool's definition changes while another raw name mapping to the same
+// Thane name is listed too (and sorts first), the static tool's new
+// definition reaches the overlay; the newcomer is the one skipped.
+func TestManager_StaticToolDriftWinsOverARawNameNewcomer(t *testing.T) {
+	t.Parallel()
+	srv := wireTNewServer(wireTToolWithSchema("foo_bar", `{"type":"object","properties":{}}`))
+	m := wireTManager(t, []ServerConfig{wireTLegacy("s", "t")}, map[string]*wireTServer{"s": srv})
+	reg := tools.NewEmptyRegistry()
+	m.Start(t.Context(), reg)
+
+	srv.setTools(clientTTool("foo-bar"),
+		wireTToolWithSchema("foo_bar", `{"type":"object","properties":{"n":{"type":"integer"}}}`))
+	clientTEventually(t, "the drifted static tool in the overlay", func() bool {
+		return slices.Equal(wireTSnapshotNames(m), []string{"mcp_s_foo_bar"})
+	})
+	snap, _ := m.Snapshot()
+	if snap[0].CanonicalID != "mcp:s/foo_bar" {
+		t.Errorf("overlay mcp_s_foo_bar calls %q, want the static owner mcp:s/foo_bar", snap[0].CanonicalID)
+	}
+	if props, _ := snap[0].Parameters["properties"].(map[string]any); props["n"] == nil {
+		t.Errorf("overlay mcp_s_foo_bar keeps the old schema: %v", snap[0].Parameters)
+	}
+}
+
 func TestManager_ProbeAndClose(t *testing.T) {
 	t.Parallel()
 	srv := wireTNewServer(clientTTool("echo"))

@@ -145,10 +145,28 @@ func (b *serverBridge) included(raw string) bool {
 // first in that order; the other is skipped with a WARN. Deterministic
 // for a given list.
 func (b *serverBridge) bridge(defs []toolDefinition) []bridgedTool {
+	return b.bridgeOwned(defs, nil)
+}
+
+// bridgeOwned is bridge, except that owners (Thane name to raw name: the
+// tools registered at Start) decide a collision first: the raw tool that
+// owns a Thane name keeps it even when another raw name sorts earlier,
+// so its changed definition is not dropped in favour of a newcomer the
+// overlay would refuse anyway.
+func (b *serverBridge) bridgeOwned(defs []toolDefinition, owners map[string]string) []bridgedTool {
 	b.warnUnknownKeys(defs)
 	sorted := make([]toolDefinition, len(defs))
 	copy(sorted, defs)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	owned := func(def toolDefinition) bool {
+		raw, ok := owners[thaneToolName(b.server, def.Name)]
+		return ok && raw == def.Name
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if oi, oj := owned(sorted[i]), owned(sorted[j]); oi != oj {
+			return oi
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 
 	out := make([]bridgedTool, 0, len(sorted))
 	taken := make(map[string]string, len(sorted))

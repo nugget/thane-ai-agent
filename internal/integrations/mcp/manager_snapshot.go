@@ -67,7 +67,7 @@ func (m *Manager) rebuildLocked() {
 		if defs == nil {
 			continue
 		}
-		for _, bt := range s.bridge.bridge(defs) {
+		for _, bt := range s.bridge.bridgeOwned(defs, m.staticOwners(s)) {
 			name := bt.tool.Name
 			if st, ok := m.static[name]; ok {
 				// Only the tool registered under this name may replace its
@@ -111,6 +111,22 @@ func (m *Manager) rebuildLocked() {
 		tagAdds = nil
 	}
 	m.snapshot, m.tagAdds = out, tagAdds
+}
+
+// staticOwners maps each Thane name s registered at Start to its raw
+// tool name. m.mu must be held.
+func (m *Manager) staticOwners(s *managedServer) map[string]string {
+	var owners map[string]string
+	for name, st := range m.static {
+		if st.server != s {
+			continue
+		}
+		if owners == nil {
+			owners = make(map[string]string)
+		}
+		owners[name] = st.raw
+	}
+	return owners
 }
 
 // fingerprintKey shortens a definition fingerprint for log dedupe keys.
