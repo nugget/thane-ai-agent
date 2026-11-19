@@ -338,9 +338,13 @@ func (c *serverClient) callTool(ctx context.Context, name string, args map[strin
 // input_required continuations, up to maxInputRequiredRounds re-sends.
 // started reports whether the server answered a round, so the call ran
 // there at least in part and must not be re-issued or reported as never
-// started.
+// started. A continuation the server rejects with -32020 HeaderMismatch
+// was not processed, so it is re-sent once, with the same state, after a
+// re-list refreshes the Mcp-Param-* headers (callTool handles a -32020
+// on the first round).
 func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name string, args map[string]any) (toolResult, bool, error) {
 	var state *string
+	resent := false
 	for round := 0; ; round++ {
 		started := round > 0
 		fields := map[string]any{"name": name, "arguments": args}
@@ -353,16 +357,21 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 				return toolResult{}, started, c.callRPCError(ctx, conn, name, rpcErr, err)
 			}
 			if started && (errors.Is(err, errUnreachable) || errors.Is(err, errSessionExpired)) {
-				// Only the continuation went undelivered; the server already
-				// ran the first round, so the outcome is unknown. %v keeps
-				// errUnreachable and errSessionExpired out of the chain: they
-				// would read as "never ran" and trigger a retry.
-				return toolResult{}, started, fmt.Errorf("%w: %s %s: continuation not delivered: %v",
-					errConnectionLost, methodToolsCall, logText(name), err)
+				return toolResult{}, started, c.continuationLost(conn, name, err)
+			}
+			if started && !resent && isHeaderMismatch(err) && c.relist(ctx, conn) == nil && c.offers(name) {
+				resent = true
+				round--
+				continue
 			}
 			return toolResult{}, started, fmt.Errorf("%s %s: %w", methodToolsCall, logText(name), err)
 		}
 		if resp.Error != nil {
+			if started && !resent && isHeaderMismatch(resp.Error) && c.relist(ctx, conn) == nil && c.offers(name) {
+				resent = true
+				round--
+				continue
+			}
 			return toolResult{}, started, c.callRPCError(ctx, conn, name, resp.Error, resp.Error)
 		}
 		var r callToolResult
@@ -390,6 +399,19 @@ func (c *serverClient) callRounds(ctx context.Context, conn *clientConn, name st
 			return toolResult{}, true, fmt.Errorf("%w: unsupported tools/call resultType %q", errProtocol, logText(r.ResultType))
 		}
 	}
+}
+
+// continuationLost reports a continuation that never left Thane. The
+// server already ran the first round, so the outcome is unknown: the
+// error wraps errConnectionLost, and keeps errUnreachable and
+// errSessionExpired out of the chain (%v), because they would read as
+// "never ran" and trigger a retry from the first round. An expired
+// session is still reconnected at once.
+func (c *serverClient) continuationLost(conn *clientConn, name string, err error) error {
+	if errors.Is(err, errSessionExpired) {
+		c.requestReconnect(conn)
+	}
+	return fmt.Errorf("%w: %s %s: continuation not delivered: %v", errConnectionLost, methodToolsCall, logText(name), err)
 }
 
 // statusCarriedRPC returns the -32601 or -32602 that a non-2xx HTTP

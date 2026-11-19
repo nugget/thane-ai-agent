@@ -361,9 +361,7 @@ func TestClient_CallToolResults(t *testing.T) {
 		{name: "undelivered continuation is an unknown outcome", modern: true,
 			call:    clientTSeq(state("s1"), clientTReply(nil, fmt.Errorf("%w: http: dial refused", errUnreachable))),
 			wantErr: errConnectionLost, wantModel: textConnLost, calls: 2},
-		{name: "expired session on a continuation is not re-issued", modern: true,
-			call:    clientTSeq(state("s1"), clientTReply(nil, fmt.Errorf("%w: http status 404", errSessionExpired))),
-			wantErr: errConnectionLost, wantModel: textConnLost, calls: 2},
+
 		{name: "input_required with neither field is invalid", modern: true, call: ok(`{"resultType":"input_required"}`),
 			wantErr: errProtocol, calls: 1},
 		{name: "task result is never an empty success", modern: true,
@@ -668,6 +666,22 @@ func TestClient_CallCutOffByShutdown(t *testing.T) {
 	})
 }
 
+// TestClient_CallToolContinuationSessionExpired: an HTTP session that
+// expires on a continuation is reconnected at once, as on any other
+// request, but the call is not re-issued: its first round already ran,
+// so the outcome is unknown.
+func TestClient_CallToolContinuationSessionExpired(t *testing.T) {
+	srv := clientTRunCall(t, clientTCallCase{modern: true,
+		call: clientTSeq(
+			clientTReply(clientTOK(`{"resultType":"input_required","requestState":"s1"}`), nil),
+			clientTReply(nil, fmt.Errorf("%w: http status 404", errSessionExpired))),
+		wantErr: errConnectionLost, wantModel: textConnLost, calls: 2})
+	clientTEventually(t, "the reconnect", func() bool { return srv.spawns() >= 2 })
+	if got := srv.count(methodToolsCall); got != 2 {
+		t.Errorf("tools/call sent %d times, want 2 (the call is not re-issued after reconnecting)", got)
+	}
+}
+
 func TestClient_CallToolRequestStateIsSentBack(t *testing.T) {
 	var seen []string
 	var n atomic.Int64
@@ -714,6 +728,8 @@ func TestClient_CallToolSendsAnObject(t *testing.T) {
 
 func TestClient_CallToolRelists(t *testing.T) {
 	gone := clientTReply(clientTToolsPage(nil, clientTTool("other")), nil)
+	continued := clientTReply(clientTOK(`{"resultType":"input_required","requestState":"s1"}`), nil)
+	mismatch := clientTReply(nil, clientTStatus(400, clientTRPC(codeHeaderMismatch, "")))
 	cases := []clientTCallCase{
 		{name: "-32602 with the tool still listed returns the server error",
 			call: clientTReply(clientTRPCErr(codeInvalidParams, ""), nil), wantErr: &RPCError{}, wantCode: codeInvalidParams,
@@ -732,6 +748,14 @@ func TestClient_CallToolRelists(t *testing.T) {
 		{name: "HeaderMismatch twice fails", modern: true,
 			call:    clientTReply(nil, clientTStatus(400, clientTRPC(codeHeaderMismatch, ""))),
 			wantErr: &RPCError{}, wantCode: codeHeaderMismatch, calls: 2, lists: 2},
+		// A rejected continuation was not processed, but its first round
+		// was: the round is re-sent with fresh headers, never the call.
+		{name: "HeaderMismatch on a continuation re-sends that round once", modern: true,
+			call:     clientTSeq(continued, mismatch, clientTReply(clientTOK(`{"content":[{"type":"text","text":"done"}]}`), nil)),
+			wantText: "done", calls: 3, lists: 2},
+		{name: "HeaderMismatch twice on a continuation is not re-issued from the first round", modern: true,
+			call:    clientTSeq(continued, mismatch),
+			wantErr: &RPCError{}, wantCode: codeHeaderMismatch, calls: 3, lists: 2},
 		{name: "HeaderMismatch for a tool that disappeared is tool gone", modern: true,
 			call:    clientTReply(nil, clientTStatus(400, clientTRPC(codeHeaderMismatch, ""))),
 			list:    clientTSeq(clientTReply(clientTToolsPage(nil, clientTTool("echo")), nil), gone),
