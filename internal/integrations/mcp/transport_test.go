@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -334,6 +336,86 @@ func TestTransport_DispatchInboundRequestRunsConcurrently(t *testing.T) {
 		}
 	}
 	close(release)
+}
+
+// A flood of server requests runs at most inboundConcurrency hooks at
+// once; the rest are dropped at Debug without blocking the reader, and
+// freed slots are reused.
+func TestTransport_DispatchInboundIsBounded(t *testing.T) {
+	const flood = 10_000
+	var logs coreTLogBuffer
+	var started, replied atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	free := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(free) // a failed assertion must not leave hooks blocked
+	hooks := transportHooks{onRequest: func(context.Context, *Request) *Response {
+		started.Add(1)
+		<-release
+		return &Response{Result: json.RawMessage(`{}`)}
+	}}
+	reply := func(context.Context, *Response) error {
+		replied.Add(1)
+		return nil
+	}
+	gate := newInboundGate()
+	hooks.inbound = gate
+	m := coreTDecodeOne(t, `{"jsonrpc":"2.0","id":1,"method":"ping"}`)
+	before := runtime.NumGoroutine()
+	for range flood {
+		dispatchInbound(t.Context(), hooks, m, reply, logs.logger())
+	}
+	if grew := runtime.NumGoroutine() - before; grew > inboundConcurrency+32 {
+		t.Errorf("%d dispatches started %d goroutines, want at most about %d", flood, grew, inboundConcurrency)
+	}
+	coreTEventually(t, "every slot's hook running", func() bool { return started.Load() == inboundConcurrency })
+	if n := strings.Count(logs.String(), "too many in progress"); n != flood-inboundConcurrency {
+		t.Errorf("logged %d drops, want %d", n, flood-inboundConcurrency)
+	}
+	if !strings.Contains(logs.String(), "level=DEBUG") || strings.Contains(logs.String(), "level=WARN") {
+		t.Error("drops are not logged at Debug only")
+	}
+
+	free()
+	coreTEventually(t, "replies sent", func() bool { return replied.Load() == inboundConcurrency })
+	coreTEventually(t, "slots freed", func() bool { return len(gate.slots) == 0 })
+	dispatchInbound(t.Context(), hooks, m, reply, logs.logger())
+	coreTEventually(t, "a later request answered", func() bool { return replied.Load() == inboundConcurrency+1 })
+	if n := started.Load(); n != inboundConcurrency+1 {
+		t.Errorf("hooks ran %d times, want %d", n, inboundConcurrency+1)
+	}
+}
+
+// coreTEventually polls cond for up to 10s.
+func coreTEventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestTransport_InboundBatchLimit(t *testing.T) {
+	var logs coreTLogBuffer
+	gate := newInboundGate()
+	if gate.batchTooLong(maxInboundBatch, logs.logger()) {
+		t.Fatalf("a batch of %d was refused", maxInboundBatch)
+	}
+	for range 2 {
+		if !gate.batchTooLong(maxInboundBatch+1, logs.logger(), "pid", 7) {
+			t.Fatalf("a batch of %d was accepted", maxInboundBatch+1)
+		}
+	}
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || strings.Count(out, "level=DEBUG") != 1 || !strings.Contains(out, "pid=7") {
+		t.Errorf("want one WARN then Debug, with the source: %s", out)
+	}
+	if !newInboundGate().batchTooLong(maxInboundBatch+1, logs.logger()) || strings.Count(logs.String(), "level=WARN") != 2 {
+		t.Error("the WARN is not per transport")
+	}
 }
 
 func TestTransport_DispatchInboundReplyErrorIsLogged(t *testing.T) {

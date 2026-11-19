@@ -8,6 +8,7 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -175,7 +176,10 @@ func (m *Manager) factoryFor(cfg ServerConfig, logger *slog.Logger) transportFac
 			return t, nil
 		}
 	}
-	sc := stdioConfig{command: cfg.Command, args: cfg.Args, env: cfg.Env, dir: cfg.Dir, logger: logger}
+	// One exitWarned for all of this server's processes: a server that
+	// keeps failing at start-up logs its exit at WARN once per run.
+	sc := stdioConfig{command: cfg.Command, args: cfg.Args, env: cfg.Env, dir: cfg.Dir, logger: logger,
+		exitWarned: new(atomic.Bool)}
 	return func(ctx context.Context, hooks transportHooks) (Transport, error) {
 		t, err := newStdioTransport(ctx, sc, hooks)
 		if err != nil {

@@ -22,16 +22,25 @@ type stdioConfig struct {
 	dir     string   // absolute; "" = inherit Thane's working directory
 	logger  *slog.Logger
 
+	// exitWarned is shared by every transport of one server, so a
+	// server that keeps failing at start-up logs its exit (with the
+	// stderr tail) at WARN once per run of failures, and at Debug after
+	// that. A process that sends a valid message re-arms it. nil warns
+	// on every exit.
+	exitWarned *atomic.Bool
+
 	// Timing knobs; zero means the default. Tests shorten them.
-	closeStdinWait time.Duration // after closing stdin, before SIGTERM (2s)
-	termWait       time.Duration // after SIGTERM, before SIGKILL (3s)
-	exitDrainWait  time.Duration // after Wait returns, stdout drain grace (2s)
+	closeStdinWait  time.Duration // after closing stdin, before SIGTERM (2s)
+	termWait        time.Duration // after SIGTERM, before SIGKILL (3s)
+	exitDrainWait   time.Duration // after Wait returns, stdout drain grace (2s)
+	frameFinishWait time.Duration // to finish a line its caller's ctx cut short (2m)
 }
 
 const (
-	stdioDefaultCloseStdinWait = 2 * time.Second
-	stdioDefaultTermWait       = 3 * time.Second
-	stdioDefaultExitDrainWait  = 2 * time.Second
+	stdioDefaultCloseStdinWait  = 2 * time.Second
+	stdioDefaultTermWait        = 3 * time.Second
+	stdioDefaultExitDrainWait   = 2 * time.Second
+	stdioDefaultFrameFinishWait = 2 * time.Minute
 )
 
 // stdioTransport implements Transport over a child process's
@@ -44,11 +53,12 @@ const (
 // integer id; another drains stderr forever; a third waits for the
 // process. Calls are unlimited and concurrent. A call whose ctx ends
 // is abandoned (and, when cancellable, cancelled with
-// notifications/cancelled); it never kills the process. Only Close, a
-// process exit, or a fatal framing failure ends the process.
+// notifications/cancelled); it never kills the process, even when the
+// ctx ends halfway through writing the request (see writeFrame). Only
+// Close, a process exit, or a fatal framing failure ends the process.
 type stdioTransport struct {
 	logger *slog.Logger
-	hooks  transportHooks
+	hooks  transportHooks // hooks.inbound is this transport's own gate
 	cmd    *exec.Cmd
 	pid    int
 
@@ -56,9 +66,12 @@ type stdioTransport struct {
 	stdout *os.File // parent's read end of the child's stdout
 	stderr *os.File // parent's read end of the child's stderr
 
-	closeStdinWait time.Duration
-	termWait       time.Duration
-	exitDrainWait  time.Duration
+	exitWarned *atomic.Bool // see stdioConfig.exitWarned
+
+	closeStdinWait  time.Duration
+	termWait        time.Duration
+	exitDrainWait   time.Duration
+	frameFinishWait time.Duration
 
 	nextID   atomic.Int64
 	writeSem chan struct{} // capacity 1: one message on stdin at a time
@@ -138,25 +151,28 @@ func newStdioTransport(ctx context.Context, cfg stdioConfig, hooks transportHook
 	}
 
 	lifeCtx, lifeCancel := context.WithCancel(context.WithoutCancel(ctx))
+	hooks.inbound = newInboundGate()
 	t := &stdioTransport{
-		logger:         logger,
-		hooks:          hooks,
-		cmd:            cmd,
-		pid:            cmd.Process.Pid,
-		stdin:          parent[0],
-		stdout:         parent[1],
-		stderr:         parent[2],
-		closeStdinWait: stdioDuration(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
-		termWait:       stdioDuration(cfg.termWait, stdioDefaultTermWait),
-		exitDrainWait:  stdioDuration(cfg.exitDrainWait, stdioDefaultExitDrainWait),
-		writeSem:       make(chan struct{}, 1),
-		pending:        make(map[int64]chan *Response),
-		done:           make(chan struct{}),
-		lifeCtx:        lifeCtx,
-		lifeCancel:     lifeCancel,
-		exited:         make(chan struct{}),
-		readerDone:     make(chan struct{}),
-		stderrDone:     make(chan struct{}),
+		logger:          logger,
+		hooks:           hooks,
+		cmd:             cmd,
+		pid:             cmd.Process.Pid,
+		stdin:           parent[0],
+		stdout:          parent[1],
+		stderr:          parent[2],
+		exitWarned:      cfg.exitWarned,
+		closeStdinWait:  stdioDuration(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
+		termWait:        stdioDuration(cfg.termWait, stdioDefaultTermWait),
+		exitDrainWait:   stdioDuration(cfg.exitDrainWait, stdioDefaultExitDrainWait),
+		frameFinishWait: stdioDuration(cfg.frameFinishWait, stdioDefaultFrameFinishWait),
+		writeSem:        make(chan struct{}, 1),
+		pending:         make(map[int64]chan *Response),
+		done:            make(chan struct{}),
+		lifeCtx:         lifeCtx,
+		lifeCancel:      lifeCancel,
+		exited:          make(chan struct{}),
+		readerDone:      make(chan struct{}),
+		stderrDone:      make(chan struct{}),
 	}
 	go t.waitProcess()
 	go t.readStdout()
@@ -202,7 +218,11 @@ func (t *stdioTransport) Call(ctx context.Context, req *Request, info callInfo) 
 	if !t.register(n, ch) {
 		return nil, fmt.Errorf("%w: %s: %w", errUnreachable, out.Method, t.cause())
 	}
-	if err := t.write(ctx, &out); err != nil {
+	var cancelID json.RawMessage // cancelled after a cut-short write
+	if info.cancellable {
+		cancelID = out.ID
+	}
+	if err := t.writeFrame(ctx, &out, cancelID); err != nil {
 		t.unregister(n)
 		return nil, fmt.Errorf("mcp: %s: %w", out.Method, err)
 	}
@@ -229,12 +249,8 @@ func (t *stdioTransport) abandon(ctx context.Context, n int64, ch chan *Response
 		return nil, fmt.Errorf("%w: %s: %w", errConnectionLost, method, t.cause())
 	}
 	if info.cancellable {
-		reason := "cancelled"
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			reason = "timeout"
-		}
 		nctx, cancel := cancelNotifyContext(ctx)
-		err := t.write(nctx, cancelledNotification(intID(n), reason))
+		err := t.write(nctx, cancelledNotification(intID(n), stdioCancelReason(ctx.Err())))
 		cancel()
 		if err != nil {
 			t.logger.Debug("mcp: sending notifications/cancelled failed", "method", method, "id", n, "error", err)
@@ -262,91 +278,13 @@ func (t *stdioTransport) reply(ctx context.Context, resp *Response) error {
 	return t.write(ctx, resp)
 }
 
-// write sends one message as a single compact JSON line. Writes are
-// serialised; the stdin write deadline follows ctx (deadline and
-// cancellation). Errors:
-//   - ctx ended before any byte was written: ctx.Err();
-//   - transport finished, stdin closed, or the process gone with nothing
-//     written: errUnreachable (the message was not delivered);
-//   - a partial write: errConnectionLost, and the transport is torn
-//     down because the stream framing is broken.
-func (t *stdioTransport) write(ctx context.Context, msg any) error {
-	b, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("%w: encode message: %w", errProtocol, err)
+// stdioCancelReason is the notifications/cancelled reason for a call
+// whose ctx ended with err.
+func stdioCancelReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
 	}
-	b = append(b, '\n')
-
-	select {
-	case t.writeSem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.done:
-		return fmt.Errorf("%w: %w", errUnreachable, t.cause())
-	}
-	defer func() { <-t.writeSem }()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	select {
-	case <-t.done:
-		return fmt.Errorf("%w: %w", errUnreachable, t.cause())
-	default:
-	}
-
-	if dl, ok := ctx.Deadline(); ok {
-		_ = t.stdin.SetWriteDeadline(dl)
-	}
-	fired := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		_ = t.stdin.SetWriteDeadline(time.Now())
-		close(fired)
-	})
-	n, err := t.stdin.Write(b)
-	if !stop() {
-		<-fired
-	}
-	_ = t.stdin.SetWriteDeadline(time.Time{})
-
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, os.ErrClosed):
-		// The stop sequence closed stdin; Done follows the exit.
-		if n > 0 {
-			return fmt.Errorf("%w: server stdin closed mid-message: %w", errConnectionLost, err)
-		}
-		return fmt.Errorf("%w: server stdin closed: %w", errUnreachable, err)
-	case n > 0:
-		cause := fmt.Errorf("partial write to server stdin (%d of %d bytes): %w", n, len(b), err)
-		t.logger.Warn("mcp: stdio write was cut short; closing the connection", "pid", t.pid, "error", err)
-		t.fail(cause)
-		return fmt.Errorf("%w: %w", errConnectionLost, cause)
-	case ctx.Err() != nil || errors.Is(err, os.ErrDeadlineExceeded):
-		return stdioCtxErr(ctx)
-	default:
-		// EPIPE and the like: the server is gone or stopped reading.
-		cause := fmt.Errorf("write to server stdin: %w", err)
-		t.lost(cause)
-		return fmt.Errorf("%w: %w", errUnreachable, cause)
-	}
-}
-
-// stdioCtxErr returns ctx's error after a write deadline (which only
-// ever comes from ctx) fired, allowing for ctx's own timer to lag the
-// file deadline by a moment.
-func stdioCtxErr(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return context.DeadlineExceeded
-	}
+	return "cancelled"
 }
 
 // register adds a pending call; false once the transport finished.

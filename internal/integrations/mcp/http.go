@@ -77,7 +77,7 @@ type httpTransport struct {
 	headers []httpHeader // validated, sorted; never a name the transport frames
 	client  *http.Client
 	logger  *slog.Logger
-	hooks   transportHooks
+	hooks   transportHooks // hooks.inbound is this transport's own gate
 
 	// maxMessage bounds one JSON body or SSE event (maxMessageBytes;
 	// tests lower it).
@@ -133,6 +133,7 @@ func newHTTPTransport(ctx context.Context, cfg httpConfig, hooks transportHooks)
 		client = newHTTPClient()
 	}
 	lifeCtx, lifeCancel := context.WithCancel(context.WithoutCancel(ctx))
+	hooks.inbound = newInboundGate()
 	return &httpTransport{
 		url:        cfg.url,
 		headers:    httpOperatorHeaders(cfg.headers, logger),

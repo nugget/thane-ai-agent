@@ -22,9 +22,10 @@ const (
 // readStdout is the single long-lived stdout reader. It decodes each
 // line (one message or a batch), routes responses to pending calls and
 // hands requests and notifications to dispatchInbound. Blank lines are
-// skipped, unparseable lines are logged at Debug and skipped, and a line
-// over maxMessageBytes tears the transport down with errProtocol. EOF or
-// a read error finishes the transport with the connection lost.
+// skipped, unparseable lines and batches over maxInboundBatch are
+// logged and skipped, and a line over maxMessageBytes tears the
+// transport down with errProtocol. EOF or a read error finishes the
+// transport with the connection lost.
 func (t *stdioTransport) readStdout() {
 	defer close(t.readerDone)
 	br := bufio.NewReaderSize(t.stdout, stdioReadBufferBytes)
@@ -96,14 +97,17 @@ func (t *stdioTransport) handleLine(line []byte) {
 			"pid", t.pid, "bytes", len(line), "preview", stdioPreview(line), "error", err)
 		return
 	}
+	if t.hooks.inbound.batchTooLong(len(msgs), t.logger, "pid", t.pid) {
+		return
+	}
 	for i := range msgs {
 		m := &msgs[i]
 		switch m.kind() {
 		case kindResponse:
-			t.sawMessage.Store(true)
+			t.markLive()
 			t.route(m.response())
 		case kindRequest, kindNotification:
-			t.sawMessage.Store(true)
+			t.markLive()
 			dispatchInbound(t.lifeCtx, t.hooks, m, t.reply, t.logger)
 		default:
 			t.logger.Debug("mcp: skipping invalid JSON-RPC message from stdio server", "pid", t.pid, "preview", stdioPreview(line))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"syscall"
 	"time"
 )
@@ -128,7 +129,10 @@ func (t *stdioTransport) waitProcess() {
 
 // logExit reports the exit once: Debug for an exit Close asked for, WARN
 // with the stderr tail when the process exited on its own or was closed
-// before it ever spoke JSON-RPC (usually a start-up failure).
+// before it ever spoke JSON-RPC (usually a start-up failure). With a
+// shared exitWarned, only the first such exit of a run of failures is a
+// WARN; the supervisor retries a broken server every backoff, and the
+// same stderr tail at WARN each time would only bury it.
 func (t *stdioTransport) logExit(err error) {
 	t.mu.Lock()
 	requested := t.closeRequested
@@ -138,13 +142,31 @@ func (t *stdioTransport) logExit(err error) {
 	case requested && t.sawMessage.Load():
 		t.logger.Debug("mcp: stdio server exited", "pid", t.pid, "exit", status)
 	case requested:
-		t.logger.Warn("mcp: stdio server was closed before it sent any JSON-RPC message",
-			"pid", t.pid, "exit", status, "stderr_tail", t.stderrTail.String())
+		t.warnExit("mcp: stdio server was closed before it sent any JSON-RPC message", status)
 	case t.fatal.Load():
 		t.logger.Debug("mcp: stdio server stopped after a transport failure", "pid", t.pid, "exit", status)
 	default:
-		t.logger.Warn("mcp: stdio server exited unexpectedly",
-			"pid", t.pid, "exit", status, "stderr_tail", t.stderrTail.String())
+		t.warnExit("mcp: stdio server exited unexpectedly", status)
+	}
+}
+
+// warnExit logs an exit the operator should see, with the stderr tail:
+// at WARN unless an earlier transport of this server already warned in
+// the current run of failures, then at Debug.
+func (t *stdioTransport) warnExit(msg, status string) {
+	level := slog.LevelDebug
+	if t.exitWarned == nil || t.exitWarned.CompareAndSwap(false, true) {
+		level = slog.LevelWarn
+	}
+	t.logger.Log(context.Background(), level, msg, "pid", t.pid, "exit", status, "stderr_tail", t.stderrTail.String())
+}
+
+// markLive records that the server sent a valid JSON-RPC message. The
+// first one re-arms the shared exit WARN: this process came up, so its
+// exit starts a new run of failures.
+func (t *stdioTransport) markLive() {
+	if !t.sawMessage.Swap(true) && t.exitWarned != nil {
+		t.exitWarned.Store(false)
 	}
 }
 

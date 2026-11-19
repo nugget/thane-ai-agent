@@ -19,6 +19,10 @@ import (
 // re-executed as an MCP stdio server.
 const stdioTHelperEnv = "MCP_TEST_HELPER"
 
+// stdioTGateEnv names the file "stdio-gate" waits for before it reads
+// stdin.
+const stdioTGateEnv = "MCP_TEST_GATE"
+
 // TestMain is the package's only TestMain. With MCP_TEST_HELPER=<mode>
 // set, the test binary runs as a fake stdio MCP server instead of the
 // tests (the helper-process pattern), so stdio tests talk to a real
@@ -87,6 +91,13 @@ func stdioTRunHelper(mode string) int {
 		return 0
 	case "stdio-stubborn": // ignores stdin EOF and SIGTERM
 		signal.Ignore(syscall.SIGTERM)
+	case "stdio-gate": // reads nothing until the gate file exists, then serves the script
+		for {
+			if _, err := os.Stat(os.Getenv(stdioTGateEnv)); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 	if strings.HasPrefix(mode, e2eTModePrefix) {
 		e2eTStartDelay()
@@ -117,6 +128,7 @@ type stdioTServer struct {
 	waiting     map[string]chan json.RawMessage // server request id → reply
 	replies     map[string]json.RawMessage      // every reply the client sent
 	held        []json.RawMessage               // ids of "hold" requests
+	received    []string                        // "request <id>" and "cancelled <id>", in stdin order
 	floodDone   chan struct{}                   // closed when "flood" ends
 	e2e         e2eTServerState                 // e2e-* modes only
 }
@@ -168,6 +180,7 @@ func (s *stdioTServer) handle(m *wireMessage) {
 			_ = json.Unmarshal(m.Params, &c)
 			s.mu.Lock()
 			s.cancelled = append(s.cancelled, c)
+			s.received = append(s.received, "cancelled "+stdioTKey(c.RequestID))
 			if ch, ok := s.inflight[stdioTKey(c.RequestID)]; ok {
 				close(ch)
 				delete(s.inflight, stdioTKey(c.RequestID))
@@ -180,6 +193,9 @@ func (s *stdioTServer) handle(m *wireMessage) {
 		}
 	case kindRequest:
 		req := m.request()
+		s.mu.Lock()
+		s.received = append(s.received, "request "+stdioTKey(req.ID))
+		s.mu.Unlock()
 		switch {
 		case s.mode == "mcp-legacy", s.mode == "mcp-modern":
 			go s.answerMCP(req, s.mode == "mcp-modern")

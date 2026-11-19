@@ -17,6 +17,7 @@ type stdioTScriptParams struct {
 	Late     bool   `json:"late"`
 	Name     string `json:"name"`
 	Bytes    int    `json:"bytes"`
+	Count    int    `json:"count"`
 	Requests []struct {
 		ID     json.RawMessage `json:"id"`
 		Self   bool            `json:"self"`
@@ -32,6 +33,7 @@ type stdioTStats struct {
 	Held        int                        `json:"held"`
 	Replies     map[string]json.RawMessage `json:"replies"`
 	Initialized bool                       `json:"initialized"`
+	Received    []string                   `json:"received"`
 }
 
 // stdioTAsked is one server-initiated request and the reply it got
@@ -69,7 +71,8 @@ func (s *stdioTServer) answerScript(req *Request) {
 		s.mu.Unlock()
 	case "stats":
 		s.mu.Lock()
-		st := stdioTStats{Cancelled: s.cancelled, Slept: s.slept, Held: len(s.held), Replies: s.replies, Initialized: s.initialized}
+		st := stdioTStats{Cancelled: s.cancelled, Slept: s.slept, Held: len(s.held), Replies: s.replies, Initialized: s.initialized,
+			Received: s.received}
 		raw, _ := json.Marshal(st)
 		s.mu.Unlock()
 		s.result(req.ID, json.RawMessage(raw))
@@ -83,6 +86,13 @@ func (s *stdioTServer) answerScript(req *Request) {
 		s.writeLine([]byte(fmt.Sprintf(`[{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"in a batch"}},`+
 			`{"jsonrpc":"2.0","id":"b1","method":"ping"},`+
 			`{"jsonrpc":"2.0","id":%s,"result":{"batched":true}}]`, req.ID)))
+	case "bigbatch": // a batch of count notifications, then the result
+		parts := make([]string, p.Count)
+		for i := range parts {
+			parts[i] = `{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"debug","data":"n"}}`
+		}
+		s.writeLine([]byte("[" + strings.Join(parts, ",") + "]"))
+		s.result(req.ID, map[string]any{})
 	case "hold":
 		s.mu.Lock()
 		s.held = append(s.held, req.ID)

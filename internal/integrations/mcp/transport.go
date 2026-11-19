@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,10 +61,12 @@ type callInfo struct {
 	cancellable bool
 }
 
-// transportHooks deliver server-initiated messages. Both may be nil.
+// transportHooks deliver server-initiated messages. Either hook may be
+// nil.
 type transportHooks struct {
-	// onRequest runs in its own goroutine per inbound request. A nil
-	// return means "send no reply". Otherwise the transport stamps
+	// onRequest runs in its own goroutine per inbound request, at most
+	// inboundConcurrency at once per transport (see dispatchInbound). A
+	// nil return means "send no reply". Otherwise the transport stamps
 	// JSONRPC="2.0" and ID=req.ID (verbatim) and writes/POSTs it with a
 	// replyTimeout-bounded ctx derived from the lifetime ctx.
 	onRequest func(ctx context.Context, req *Request) *Response
@@ -71,6 +74,11 @@ type transportHooks struct {
 	// onNotification runs synchronously on the reader goroutine. It must
 	// not block and must not call the Transport.
 	onNotification func(ctx context.Context, n *Notification)
+
+	// inbound bounds this transport's handling of server messages. Each
+	// transport installs its own gate in its copy of the hooks when it is
+	// built; factories' callers leave it nil. nil is unbounded.
+	inbound *inboundGate
 }
 
 // transportFactory builds a new Transport. ctx bounds construction only;
@@ -86,7 +94,46 @@ const (
 
 	// replyTimeout bounds writing/POSTing a reply to a server request.
 	replyTimeout = 5 * time.Second
+
+	// inboundConcurrency bounds the server requests one transport
+	// handles at once, reply included. Thane answers only ping and
+	// declines the rest, so a legitimate server never comes close.
+	inboundConcurrency = 16
+
+	// maxInboundBatch bounds the elements of one inbound JSON-RPC batch.
+	// Servers send batches rarely and short; a longer one is refused so
+	// a single line or body cannot start thousands of handlers.
+	maxInboundBatch = 128
 )
+
+// inboundGate bounds one transport's handling of server-initiated
+// messages: the request slots dispatchInbound takes, and whether the
+// batch-length WARN was logged. It lives in transportHooks.inbound.
+type inboundGate struct {
+	slots       chan struct{}
+	batchWarned atomic.Bool
+}
+
+func newInboundGate() *inboundGate {
+	return &inboundGate{slots: make(chan struct{}, inboundConcurrency)}
+}
+
+// batchTooLong reports whether n decoded messages exceed maxInboundBatch.
+// The caller then skips the whole line or body as a protocol violation;
+// the connection stays up. The first refusal per transport logs a WARN,
+// later ones Debug. attrs identify the source (pid, method).
+func (g *inboundGate) batchTooLong(n int, logger *slog.Logger, attrs ...any) bool {
+	if n <= maxInboundBatch {
+		return false
+	}
+	level := slog.LevelDebug
+	if g.batchWarned.CompareAndSwap(false, true) {
+		level = slog.LevelWarn
+	}
+	logger.Log(context.Background(), level, "mcp: skipping a JSON-RPC batch from the server that is over the length limit",
+		append([]any{"elements", n, "limit", maxInboundBatch}, attrs...)...)
+	return true
+}
 
 // cancelNotifyContext returns the ctx for sending notifications/cancelled
 // after callCtx ended: it keeps callCtx's values (logger) but not its
@@ -114,11 +161,15 @@ func cancelledNotification(id json.RawMessage, reason string) *Notification {
 // dispatchInbound handles one inbound request or notification for both
 // transports. Responses are routed by the caller and never passed here.
 //
-// Requests: hooks.onRequest(lifeCtx, req) runs in its own goroutine; a
-// non-nil reply is stamped with JSONRPC and the request's ID (verbatim)
-// and handed to reply with a replyTimeout ctx derived from lifeCtx.
+// Requests: hooks.onRequest(lifeCtx, req) runs in its own goroutine,
+// holding one of hooks.inbound's inboundConcurrency slots until its
+// reply is sent; a non-nil reply is stamped with JSONRPC and the
+// request's ID (verbatim) and handed to reply with a replyTimeout ctx
+// derived from lifeCtx.
 // Reply errors are logged at Debug. A request is dropped (Debug) when
-// there is no onRequest hook or lifeCtx is already done.
+// there is no onRequest hook, lifeCtx is already done, or every slot is
+// taken. Dropping never blocks the reader, and a server that gets no
+// answer to a ping retries or gives up on its own.
 //
 // Notifications: hooks.onNotification(lifeCtx, n) runs synchronously.
 //
@@ -135,7 +186,21 @@ func dispatchInbound(lifeCtx context.Context, hooks transportHooks, m *wireMessa
 			logger.Debug("mcp: dropping server request", "method", req.Method)
 			return
 		}
-		go answerInbound(lifeCtx, hooks.onRequest, req, reply, logger)
+		gate := hooks.inbound
+		if gate == nil {
+			go answerInbound(lifeCtx, hooks.onRequest, req, reply, logger)
+			return
+		}
+		select {
+		case gate.slots <- struct{}{}:
+		default:
+			logger.Debug("mcp: dropping server request; too many in progress", "method", req.Method, "limit", inboundConcurrency)
+			return
+		}
+		go func() {
+			defer func() { <-gate.slots }()
+			answerInbound(lifeCtx, hooks.onRequest, req, reply, logger)
+		}()
 	case kindNotification:
 		if hooks.onNotification != nil {
 			hooks.onNotification(lifeCtx, m.notification())
