@@ -202,10 +202,13 @@ func e2eTHasEnvelope(params json.RawMessage) bool {
 	return ok
 }
 
-// e2eTSpawner counts the stdio transports a factory started.
+// e2eTSpawner counts and keeps the stdio transports a factory started.
 type e2eTSpawner struct {
 	cfg    stdioConfig
 	spawns atomic.Int32
+
+	mu  sync.Mutex
+	trs []*stdioTransport
 }
 
 func (s *e2eTSpawner) factory() transportFactory {
@@ -214,9 +217,22 @@ func (s *e2eTSpawner) factory() transportFactory {
 		if err != nil {
 			return nil, err
 		}
+		s.mu.Lock()
+		s.trs = append(s.trs, t)
+		s.mu.Unlock()
 		s.spawns.Add(1)
 		return t, nil
 	}
+}
+
+// last returns the most recently started transport, or nil.
+func (s *e2eTSpawner) last() *stdioTransport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.trs) == 0 {
+		return nil
+	}
+	return s.trs[len(s.trs)-1]
 }
 
 // e2eTStdio builds (not starts) a client for helper mode, with an
@@ -510,7 +526,8 @@ func TestE2E_StdioCancellationKeepsProcess(t *testing.T) {
 			c, sp := e2eTStdio(t, mode, protocolAuto, 0, nil)
 			e2eTStart(t, c)
 			conn := e2eTReady(t, c)
-			pid := e2eTStatsOf(t, c).PID
+			st0 := e2eTStatsOf(t, c)
+			pid, before := st0.PID, st0.Seen[methodToolsCall]
 
 			ctx, cancel := context.WithCancel(t.Context())
 			var wg sync.WaitGroup
@@ -520,6 +537,14 @@ func TestE2E_StdioCancellationKeepsProcess(t *testing.T) {
 				defer wg.Done()
 				_, sleepErr = c.callTool(ctx, "sleep", map[string]any{"ms": 60_000})
 			}()
+			// The helper counts requests on its stdin reader and answers
+			// e2e/stats there too, so a count that includes the sleep
+			// proves the server holds it. Cancelling earlier could stop
+			// the call before it is written, and then no cancellation is
+			// owed.
+			e2eTEventually(t, "server holding the sleep call", func() bool {
+				return e2eTStatsOf(t, c).Seen[methodToolsCall] > before
+			})
 			e2eTEcho(t, c, "not blocked by the long call")
 			cancel()
 			wg.Wait()
@@ -530,11 +555,16 @@ func TestE2E_StdioCancellationKeepsProcess(t *testing.T) {
 				t.Errorf("model text = %q", got)
 			}
 
-			dctx, dcancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			dctx, dcancel := context.WithTimeout(t.Context(), time.Second)
 			_, err := c.callTool(dctx, "sleep", map[string]any{"ms": 60_000})
 			dcancel()
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("timed-out call error = %v, want context.DeadlineExceeded", err)
+			}
+			// sleep, echo, sleep: a missing one means a call never reached
+			// the server, so no cancellation for it is owed.
+			if got := e2eTStatsOf(t, c).Seen[methodToolsCall]; got != before+3 {
+				t.Fatalf("server saw %d tools/call, want %d", got, before+3)
 			}
 
 			var st e2eTStats
@@ -653,4 +683,12 @@ func TestE2E_StdioCloseDuringConnect(t *testing.T) {
 	if n := sp.spawns.Load(); n != 1 {
 		t.Errorf("spawned %d processes, want 1", n)
 	}
+	tr := sp.last()
+	if tr == nil {
+		t.Fatal("no transport recorded")
+	}
+	if !stdioTIsDone(tr.Done()) {
+		t.Error("the attempt's transport is still open after close")
+	}
+	e2eTEventually(t, "server process stopped by close", func() bool { return !stdioTAlive(tr.pid) })
 }
