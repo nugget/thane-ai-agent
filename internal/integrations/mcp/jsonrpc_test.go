@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -147,6 +149,39 @@ func TestJSONRPC_Conversions(t *testing.T) {
 	errResp := msgs[3].response()
 	if errResp.Error == nil || errResp.Error.Code != codeInvalidParams || errResp.Error.Message != "bad" || string(errResp.Error.Data) != `{"x":[1]}` {
 		t.Errorf("error response() = %+v", errResp)
+	}
+}
+
+// TestJSONRPC_DecodeStopsPastTheBatchLimit: a batch far over
+// maxInboundBatch is decoded only one element past the limit, so a
+// server cannot make Thane allocate per element of a huge array before
+// the batch is refused.
+func TestJSONRPC_DecodeStopsPastTheBatchLimit(t *testing.T) {
+	const elements = 1 << 20
+	in := append(bytes.Repeat([]byte(`0,`), elements-1), '0')
+	in = append(append([]byte{'['}, in...), ']')
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	msgs, err := decodeMessages(in)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatalf("decodeMessages: %v", err)
+	}
+	if len(msgs) != maxInboundBatch+1 {
+		t.Errorf("decoded %d elements of a %d-element batch, want %d (one past the limit)", len(msgs), elements, maxInboundBatch+1)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > 1<<20 {
+		t.Errorf("decoding a %d-element batch allocated %d bytes, want under 1 MiB", elements, got)
+	}
+
+	// At the limit every element is decoded and the array checked to its end.
+	atLimit := "[" + strings.TrimSuffix(strings.Repeat(`{"jsonrpc":"2.0","method":"notifications/progress"},`, maxInboundBatch), ",") + "]"
+	if msgs, err := decodeMessages([]byte(atLimit)); err != nil || len(msgs) != maxInboundBatch {
+		t.Errorf("batch at the limit: %d messages, %v; want %d", len(msgs), err, maxInboundBatch)
+	}
+	if _, err := decodeMessages([]byte(`[{"jsonrpc":"2.0","method":"x"}] [1]`)); err == nil {
+		t.Error("trailing data after a batch was accepted")
 	}
 }
 

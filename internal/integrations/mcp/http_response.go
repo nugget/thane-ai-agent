@@ -112,7 +112,7 @@ func (t *httpTransport) readJSON(ctx context.Context, hresp *http.Response, meth
 		return nil, fmt.Errorf("%w: http: malformed JSON response: %w", errProtocol, err)
 	}
 	if t.hooks.inbound.batchTooLong(len(msgs), t.logger, "method", method) {
-		return nil, httpBatchError(len(msgs))
+		return nil, httpBatchError()
 	}
 	responses := 0
 	for i := range msgs {
@@ -177,7 +177,7 @@ func (t *httpTransport) readSSE(ctx context.Context, hresp *http.Response, cance
 			return nil, fmt.Errorf("%w: http: malformed SSE message: %w", errProtocol, err)
 		}
 		if t.hooks.inbound.batchTooLong(len(msgs), t.logger, "method", method) {
-			return nil, httpBatchError(len(msgs))
+			return nil, httpBatchError()
 		}
 		if match := t.matchSSE(msgs, method, id, rf); match != nil {
 			httpSSETail(hresp.Body, cancel)
@@ -236,8 +236,8 @@ func (t *httpTransport) dispatch(m *wireMessage, rf httpFrame) {
 // httpBatchError fails a request whose JSON body or SSE event was a
 // batch over maxInboundBatch. Like a malformed body, it fails only that
 // request.
-func httpBatchError(n int) error {
-	return fmt.Errorf("%w: http: the server sent a batch of %d messages (limit %d)", errProtocol, n, maxInboundBatch)
+func httpBatchError() error {
+	return fmt.Errorf("%w: http: the server sent a batch of more than %d messages", errProtocol, maxInboundBatch)
 }
 
 // httpAnswers reports whether m answers request id: its id is that

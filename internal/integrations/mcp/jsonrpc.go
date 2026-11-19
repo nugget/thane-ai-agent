@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 )
 
@@ -143,6 +144,11 @@ var errNotJSONRPC = errors.New("payload is not a JSON-RPC object or batch")
 // A batch element that is not a well-formed message object is kept as a
 // zero wireMessage, which classifies as kindInvalid, so one bad element
 // never hides the valid ones next to it.
+//
+// A batch is decoded element by element and decoding stops after
+// maxInboundBatch+1 elements, so the result is never longer than that:
+// callers refuse it with batchTooLong without having paid for the rest.
+// A 32 MiB array of tiny elements would otherwise cost gigabytes.
 func decodeMessages(b []byte) ([]wireMessage, error) {
 	b = bytes.TrimSpace(b)
 	if len(b) == 0 {
@@ -156,27 +162,46 @@ func decodeMessages(b []byte) ([]wireMessage, error) {
 		}
 		return []wireMessage{m}, nil
 	case '[':
-		var raws []json.RawMessage
-		if err := json.Unmarshal(b, &raws); err != nil {
-			return nil, fmt.Errorf("decode batch: %w", err)
-		}
-		if len(raws) == 0 {
-			return nil, fmt.Errorf("%w: empty batch", errNotJSONRPC)
-		}
-		out := make([]wireMessage, len(raws))
-		for i, raw := range raws {
-			raw = bytes.TrimSpace(raw)
-			if len(raw) == 0 || raw[0] != '{' {
-				continue
-			}
-			if err := json.Unmarshal(raw, &out[i]); err != nil {
-				out[i] = wireMessage{}
-			}
-		}
-		return out, nil
+		return decodeBatch(b)
 	default:
 		return nil, errNotJSONRPC
 	}
+}
+
+// decodeBatch decodes the JSON array b, stopping after
+// maxInboundBatch+1 elements (see decodeMessages).
+func decodeBatch(b []byte) ([]wireMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if _, err := dec.Token(); err != nil { // the opening '['
+		return nil, fmt.Errorf("decode batch: %w", err)
+	}
+	var out []wireMessage
+	for dec.More() {
+		if len(out) > maxInboundBatch {
+			return out, nil // over the limit: the caller refuses it
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, fmt.Errorf("decode batch: %w", err)
+		}
+		var m wireMessage
+		if raw = bytes.TrimSpace(raw); len(raw) > 0 && raw[0] == '{' {
+			if err := json.Unmarshal(raw, &m); err != nil {
+				m = wireMessage{}
+			}
+		}
+		out = append(out, m)
+	}
+	if _, err := dec.Token(); err != nil { // the closing ']'
+		return nil, fmt.Errorf("decode batch: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("decode batch: trailing data after the array")
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: empty batch", errNotJSONRPC)
+	}
+	return out, nil
 }
 
 // hasID reports whether raw is a present, non-null id.

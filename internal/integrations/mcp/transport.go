@@ -132,9 +132,11 @@ func newInboundGate() *inboundGate {
 }
 
 // batchTooLong reports whether n decoded messages exceed maxInboundBatch.
-// The caller then skips the whole line or body as a protocol violation;
-// the connection stays up. The first refusal per transport logs a WARN,
-// later ones Debug. attrs identify the source (pid, method).
+// decodeMessages stops one element past the limit, so n is then not the
+// batch's real length and is not logged. The caller skips the whole line
+// or body as a protocol violation; the connection stays up. The first
+// refusal per transport logs a WARN, later ones Debug. attrs identify
+// the source (pid, method).
 func (g *inboundGate) batchTooLong(n int, logger *slog.Logger, attrs ...any) bool {
 	if n <= maxInboundBatch {
 		return false
@@ -144,7 +146,7 @@ func (g *inboundGate) batchTooLong(n int, logger *slog.Logger, attrs ...any) boo
 		level = slog.LevelWarn
 	}
 	logger.Log(context.Background(), level, "mcp: skipping a JSON-RPC batch from the server that is over the length limit",
-		append([]any{"elements", n, "limit", maxInboundBatch}, attrs...)...)
+		append([]any{"limit", maxInboundBatch}, attrs...)...)
 	return true
 }
 
