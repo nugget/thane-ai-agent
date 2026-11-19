@@ -44,7 +44,8 @@ func TestMain(m *testing.M) {
 //     -32602, another version -> -32022); server/discover; initialize ->
 //     -32022; ping -> -32601; the same tools and pages, with resultType.
 //
-// The stdio tests use further "stdio-*" modes. The waits are shortened
+// The stdio tests use further "stdio-*" modes, and the end-to-end tests
+// "e2e-*" modes (e2e_stdio_test.go). The waits are shortened
 // so a stuck helper costs at most a few seconds; callers may override.
 // Under -race the helper's race runtime would sleep 1s at exit
 // (atexit_sleep_ms), which makes a clean stdin-EOF exit look like a
@@ -87,6 +88,9 @@ func stdioTRunHelper(mode string) int {
 	case "stdio-stubborn": // ignores stdin EOF and SIGTERM
 		signal.Ignore(syscall.SIGTERM)
 	}
+	if strings.HasPrefix(mode, e2eTModePrefix) {
+		e2eTStartDelay()
+	}
 	s := &stdioTServer{
 		mode:     mode,
 		inflight: make(map[string]chan struct{}),
@@ -114,6 +118,7 @@ type stdioTServer struct {
 	replies     map[string]json.RawMessage      // every reply the client sent
 	held        []json.RawMessage               // ids of "hold" requests
 	floodDone   chan struct{}                   // closed when "flood" ends
+	e2e         e2eTServerState                 // e2e-* modes only
 }
 
 // stdioTCancel is one notifications/cancelled the fake server saw.
@@ -175,9 +180,11 @@ func (s *stdioTServer) handle(m *wireMessage) {
 		}
 	case kindRequest:
 		req := m.request()
-		switch s.mode {
-		case "mcp-legacy", "mcp-modern":
-			go s.answerMCP(req)
+		switch {
+		case s.mode == "mcp-legacy", s.mode == "mcp-modern":
+			go s.answerMCP(req, s.mode == "mcp-modern")
+		case strings.HasPrefix(s.mode, e2eTModePrefix):
+			s.answerE2E(req) // decides the era lock on the reader goroutine
 		default:
 			go s.answerScript(req)
 		}
@@ -268,13 +275,14 @@ type stdioTMCPParams struct {
 	} `json:"arguments"`
 }
 
-func (s *stdioTServer) answerMCP(req *Request) {
+// answerMCP answers one request as a legacy (modern=false) or modern
+// MCP server.
+func (s *stdioTServer) answerMCP(req *Request, modern bool) {
 	var p stdioTMCPParams
 	if len(req.Params) > 0 && json.Unmarshal(req.Params, &p) != nil {
 		s.fail(req.ID, codeInvalidParams, "params must be an object", nil)
 		return
 	}
-	modern := s.mode == "mcp-modern"
 	known := req.Method == methodToolsList || req.Method == methodToolsCall
 	if modern {
 		known = known || req.Method == methodDiscover || req.Method == methodInitialize
@@ -362,7 +370,11 @@ func (s *stdioTServer) toolsList(id json.RawMessage, cursor *string, modern bool
 		s.fail(id, codeInvalidParams, "invalid cursor", nil)
 		return
 	}
-	res := map[string]any{"tools": []json.RawMessage{json.RawMessage(stdioTTools[page])}}
+	tools := []json.RawMessage{json.RawMessage(stdioTTools[page])}
+	if page == 1 && strings.HasPrefix(s.mode, e2eTModePrefix) {
+		tools = append(tools, s.e2eTools()...)
+	}
+	res := map[string]any{"tools": tools}
 	if page == 0 {
 		res["nextCursor"] = "page-2"
 	}
@@ -383,8 +395,11 @@ func (s *stdioTServer) toolsCall(id json.RawMessage, p *stdioTMCPParams, modern 
 		}
 		text = fmt.Sprintf("slept %dms", p.Arguments.MS)
 	default:
-		s.fail(id, codeInvalidParams, "Unknown tool: "+p.Name, nil)
-		return
+		var ok bool
+		if text, ok = s.e2eTool(p.Name); !ok {
+			s.fail(id, codeInvalidParams, "Unknown tool: "+p.Name, nil)
+			return
+		}
 	}
 	res := map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}
 	if modern {
