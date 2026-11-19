@@ -138,8 +138,8 @@ type serverClient struct {
 	thaneBugLogged atomic.Bool
 
 	// exitWarned gates the stdio exit WARN across this server's
-	// processes (transportHooks.exitWarned); serve re-arms it once a
-	// connection has lived stableAfter.
+	// processes (transportHooks.exitWarned); run re-arms it at a connect
+	// logged at INFO, and serve once a connection has lived stableAfter.
 	exitWarned atomic.Bool
 
 	retiring sync.WaitGroup // retireConn goroutines; run waits for them
@@ -263,9 +263,16 @@ const (
 // backoffMax, so a server that crashes right after connecting is not
 // respawned at a fixed short interval. A connection that lived
 // stableAfter ends the run of failures: backoff returns to backoffMin.
-// Every wait is jittered. Within a run of failures the first failed
-// attempt, the first lost connection and the first stdio process exit
-// log at WARN, repeats at Debug.
+// Every wait is jittered.
+//
+// Logging follows the run. A connect logs at INFO, and the loss of a
+// connection logged at INFO, or of one that proved stable, at WARN.
+// Once a connection of the run was lost before stableAfter (flapping),
+// later connects and quick losses log at Debug. A failed attempt logs
+// at WARN only as the run's first failure. The stdio exit WARN is
+// re-armed when a run starts and at each connect logged at INFO, so a
+// run of start-up failures shows its stderr once, and the crash of a
+// connection logged at INFO shows its own.
 func (c *serverClient) run() {
 	first := true
 	finishFirst := func() {
@@ -302,6 +309,9 @@ func (c *serverClient) run() {
 		}
 		c.setReady(conn, set)
 		c.thaneBugLogged.Store(false)
+		if !flapping {
+			c.rearmExitWarn(conn)
+		}
 		c.logReady(conn, set, flapping)
 		finishFirst()
 		c.fireToolsChanged()

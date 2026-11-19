@@ -1247,14 +1247,30 @@ wait is moved at random by up to 20% either way, so servers that failed
 together do not reconnect in lockstep. When an HTTP server reports that
 Thane's session expired, Thane reconnects at once, without a wait.
 
-The log follows the same runs of failures. Each of
-`mcp: connecting to the server failed; retrying in the background`,
-`mcp: server connection lost; reconnecting` and, for stdio,
-`mcp: stdio server exited unexpectedly` is a WARN line at most once
-per run; repeats in the same run are Debug. A connection that stays up
-60s ends the run, so the next failure is a WARN again. After a run that
-included quick losses, Thane also logs
-`mcp: server connection is stable again` at INFO at that point.
+The log follows the same runs. A run starts when Thane starts the
+server and again each time a connection stays up 60s. Within a run:
+
+- `mcp: server connected` is INFO until a connection of the run is
+  lost within 60s of connecting. Further connects in the run are Debug.
+- `mcp: server connection lost; reconnecting` is WARN for a connection
+  Thane logged at INFO or one that stayed up 60s, and Debug otherwise.
+- `mcp: connecting to the server failed; retrying in the background`
+  is WARN when it is the run's first failure. Once the run has a failed
+  attempt or a connection lost within 60s, further failed attempts log
+  `mcp: connecting to the server failed again` at Debug.
+- For stdio, `mcp: stdio server exited unexpectedly` and
+  `mcp: stdio server was closed before it sent any JSON-RPC message`
+  (Thane stopped a server that never answered) carry the server's last
+  stderr lines. Either is WARN only as the first such line of the run
+  or the first since a connect Thane logged at INFO; the rest are Debug.
+- When a run with quick losses reaches a connection that stays up 60s,
+  Thane logs `mcp: server connection is stable again` at INFO. A new run
+  starts there, so the next failure is a WARN again.
+
+So a stdio server that fails at start-up on every attempt shows its
+stderr at WARN once. If it then connects and crashes within 60s, the
+loss and the crash's stderr are WARN lines too, and the crashes that
+follow stay at Debug until a connection stays up 60s.
 
 **Health.** Every configured server is a health dependency named
 `mcp-<name>`. While a server is down or not yet connected, `/health`

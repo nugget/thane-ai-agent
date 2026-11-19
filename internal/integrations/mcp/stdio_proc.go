@@ -130,9 +130,10 @@ func (t *stdioTransport) waitProcess() {
 // logExit reports the exit once: Debug for an exit Close asked for, WARN
 // with the stderr tail when the process exited on its own or was closed
 // before it ever spoke JSON-RPC (usually a start-up failure). With a
-// shared hooks.exitWarned, only the first such exit of a run of failures
-// is a WARN; the supervisor retries a broken server every backoff, and
-// the same stderr tail at WARN each time would only bury it.
+// shared hooks.exitWarned, only the first such exit since the client
+// last cleared it is a WARN; the supervisor retries a broken server
+// every backoff, and the same stderr tail at WARN each time would only
+// bury it.
 func (t *stdioTransport) logExit(err error) {
 	t.mu.Lock()
 	requested := t.closeRequested
@@ -151,8 +152,8 @@ func (t *stdioTransport) logExit(err error) {
 }
 
 // warnExit logs an exit the operator should see, with the stderr tail:
-// at WARN unless an earlier transport of this server already warned in
-// the current run of failures, then at Debug.
+// at WARN unless an earlier transport of this server already warned
+// since the client last cleared hooks.exitWarned, then at Debug.
 func (t *stdioTransport) warnExit(msg, status string) {
 	level := slog.LevelDebug
 	if gate := t.hooks.exitWarned; gate == nil || gate.CompareAndSwap(false, true) {
@@ -163,8 +164,9 @@ func (t *stdioTransport) warnExit(msg, status string) {
 
 // markLive records that the server sent a valid JSON-RPC message. It
 // does not re-arm the shared exit WARN: a server that answers the
-// handshake and then crashes is still failing, and only the client knows
-// when a connection has lasted long enough to end the run of failures.
+// handshake and then crashes may still be failing, and only the client
+// knows whether it logged the connect at INFO or the connection lasted
+// long enough to end the run of failures.
 func (t *stdioTransport) markLive() {
 	t.sawMessage.Store(true)
 }

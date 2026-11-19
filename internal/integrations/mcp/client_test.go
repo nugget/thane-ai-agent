@@ -655,6 +655,39 @@ func TestClient_StableThroughABlockedRefresh(t *testing.T) {
 	}
 }
 
+// TestClient_RearmExitWarnAtInfoConnect: a connect logged at INFO
+// re-arms the stdio exit WARN, so that connection's crash warns even
+// after a start-up failure took the WARN. If the transport already
+// ended, its exit may have been logged before the re-arm, so the gate
+// stays set rather than pass the WARN to a later quick crash.
+func TestClient_RearmExitWarnAtInfoConnect(t *testing.T) {
+	srv := &clientTFakeServer{handle: clientTLegacyRoutes("").handler()}
+	for _, tc := range []struct {
+		name      string
+		ended     bool
+		wantArmed bool
+	}{
+		{name: "live transport", ended: false, wantArmed: true},
+		{name: "transport already ended", ended: true, wantArmed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := clientTNew(t, srv, clientTConfig(transportStdio, protocolLegacy))
+			tr, err := srv.factory()(t.Context(), transportHooks{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.ended {
+				tr.(*clientTFakeTransport).lose()
+			}
+			c.exitWarned.Store(true)
+			c.rearmExitWarn(&clientConn{tr: tr})
+			if armed := !c.exitWarned.Load(); armed != tc.wantArmed {
+				t.Errorf("exit WARN armed = %v, want %v", armed, tc.wantArmed)
+			}
+		})
+	}
+}
+
 // clientTSentCount counts the requests for method sent on tr.
 func clientTSentCount(tr *clientTFakeTransport, method string) int {
 	n := 0

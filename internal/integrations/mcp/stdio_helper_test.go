@@ -49,7 +49,8 @@ func TestMain(m *testing.M) {
 //     -32022; ping -> -32601; the same tools and pages, with resultType.
 //   - "stdio-flap": "mcp-legacy" that exits 1 once it has served the
 //     last tools/list page, at once or after stdioTFlapAfterEnv
-//     milliseconds (stdio_exit_test.go).
+//     milliseconds; with stdioTFlapStartupEnv set, its first starts
+//     fail at start-up instead (stdio_exit_test.go).
 //
 // The stdio tests use further "stdio-*" modes, and the end-to-end tests
 // "e2e-*" modes (e2e_stdio_test.go). The waits are shortened
@@ -85,6 +86,11 @@ func stdioTRunHelper(mode string) int {
 	case "stdio-silent-exit": // fails at start-up, only stderr
 		fmt.Fprintln(os.Stderr, "fatal: missing API token")
 		return 1
+	case stdioTModeFlap:
+		if stdioTFlapFailsAtStartup() {
+			fmt.Fprintln(os.Stderr, stdioTFlapStartupStderr)
+			return 1
+		}
 	case "stdio-hold": // a grandchild that holds inherited pipes open
 		time.Sleep(30 * time.Second)
 		return 0

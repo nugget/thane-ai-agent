@@ -86,10 +86,11 @@ type transportHooks struct {
 	// exitWarned is shared by every transport of one serverClient. A
 	// stdio process exit the operator should see logs its stderr tail
 	// at WARN only while exitWarned is false, and sets it; later exits
-	// log at Debug. The client clears it once a connection has lived
-	// stableAfter, so a server that keeps failing, at start-up or soon
-	// after it connects, warns once per run of failures. nil warns on
-	// every exit. HTTP ignores it.
+	// log at Debug. The client clears it at a connect it logs at INFO
+	// and once a connection has lived stableAfter, so a server that keeps
+	// failing at start-up warns once, a connection logged at INFO warns
+	// when it crashes, and the quick crashes after it do not. nil warns
+	// on every exit. HTTP ignores it.
 	exitWarned *atomic.Bool
 }
 

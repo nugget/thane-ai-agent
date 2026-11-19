@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -26,8 +27,9 @@ func stdioTExitWarns(out string) int {
 // Transports sharing exitWarned log a run of failures at WARN once and
 // the repeats at Debug, whether a process died at start-up or after it
 // spoke JSON-RPC: a server that answers and then crashes is still
-// failing. Only clearing exitWarned, which the client does once a
-// connection has lived stableAfter, starts a new run.
+// failing. Only clearing exitWarned, which the client does at a connect
+// it logs at INFO and once a connection has lived stableAfter, starts a
+// new run.
 func TestStdio_ExitWarnsOncePerRun(t *testing.T) {
 	var warned atomic.Bool
 	logs := &coreTLogBuffer{}
@@ -56,7 +58,7 @@ func TestStdio_ExitWarnsOncePerRun(t *testing.T) {
 	if n := stdioTExitWarns(logs.String()); n != 1 {
 		t.Fatalf("a crash right after the server spoke logged %d exit WARNs in all, want 1 (same run of failures):\n%s", n, logs.String())
 	}
-	warned.Store(false) // the client's stableAfter point
+	warned.Store(false) // the client's INFO connect or stableAfter point
 	run("stdio-script", true)
 	if n := stdioTExitWarns(logs.String()); n != 2 {
 		t.Fatalf("a crash after the run was re-armed logged %d exit WARNs in all, want 2:\n%s", n, logs.String())
@@ -112,7 +114,32 @@ const (
 	stdioTFlapAfterEnv = "MCP_TEST_FLAP_AFTER_MS"
 	// stdioTFlapStderr is what a "stdio-flap" helper says as it exits.
 	stdioTFlapStderr = "flap: crashing after serving tools/list"
+	// stdioTFlapStartupEnv makes the first this-many "stdio-flap" starts
+	// fail at start-up, saying stdioTFlapStartupStderr. The starts are
+	// counted in the file stdioTFlapStartsEnv names.
+	stdioTFlapStartupEnv    = "MCP_TEST_FLAP_STARTUP_FAILS"
+	stdioTFlapStartsEnv     = "MCP_TEST_FLAP_STARTS_FILE"
+	stdioTFlapStartupStderr = "flap: failing at start-up"
 )
+
+// stdioTFlapFailsAtStartup counts this "stdio-flap" start and reports
+// whether it is one of the first stdioTFlapStartupEnv starts.
+func stdioTFlapFailsAtStartup() bool {
+	fails, err := strconv.Atoi(os.Getenv(stdioTFlapStartupEnv))
+	if err != nil || fails <= 0 {
+		return false
+	}
+	f, err := os.OpenFile(os.Getenv(stdioTFlapStartsEnv), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte{'.'}); err != nil {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Size() <= int64(fails)
+}
 
 // stdioTFlapExit ends a "stdio-flap" helper as a crashing server would.
 func stdioTFlapExit() {
@@ -124,14 +151,18 @@ func stdioTFlapExit() {
 }
 
 // stdioTFlapRun runs a client through the Manager's stdio factory on a
-// legacy "stdio-flap" server that crashes afterMS after serving its tool
-// list, until the server has connected and crashed cycles times. It
-// closes the client and returns the logs.
-func stdioTFlapRun(t *testing.T, afterMS int, stableAfter time.Duration, cycles int) string {
+// legacy "stdio-flap" server that fails its first startupFails starts
+// and then crashes afterMS after serving its tool list, until the server
+// has connected and crashed cycles times. It closes the client and
+// returns the logs.
+func stdioTFlapRun(t *testing.T, startupFails, afterMS int, stableAfter time.Duration, cycles int) string {
 	t.Helper()
 	h := stdioTHelper(t, stdioTModeFlap)
+	env := append(h.env, stdioTFlapAfterEnv+"="+strconv.Itoa(afterMS),
+		stdioTFlapStartupEnv+"="+strconv.Itoa(startupFails),
+		stdioTFlapStartsEnv+"="+filepath.Join(t.TempDir(), "starts"))
 	srv := ServerConfig{Name: "flap", Transport: transportStdio, Protocol: protocolLegacy,
-		Command: h.command, Args: h.args, Env: append(h.env, stdioTFlapAfterEnv+"="+strconv.Itoa(afterMS))}
+		Command: h.command, Args: h.args, Env: env}
 	logs := &coreTLogBuffer{}
 	m := NewManager(nil, logs.logger())
 	cfg := clientTConfig(transportStdio, protocolLegacy)
@@ -143,7 +174,7 @@ func stdioTFlapRun(t *testing.T, afterMS int, stableAfter time.Duration, cycles 
 	e2eTEventually(t, fmt.Sprintf("%d connects and crashes", cycles), func() bool {
 		out := logs.String()
 		return strings.Count(out, `msg="mcp: server connected"`) >= cycles &&
-			strings.Count(out, "exited unexpectedly") >= cycles
+			len(stdioTExitLinesWith(out, stdioTFlapStderr)) >= cycles
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), e2eTWait)
 	defer cancel()
@@ -160,7 +191,7 @@ func stdioTFlapRun(t *testing.T, afterMS int, stableAfter time.Duration, cycles 
 // before the crash ends the run, so that crash warns again.
 func TestStdio_FlappingServerExitWarnsOncePerRun(t *testing.T) {
 	t.Run("never stable", func(t *testing.T) {
-		out := stdioTFlapRun(t, 0, time.Hour, 5)
+		out := stdioTFlapRun(t, 0, 0, time.Hour, 5)
 		if n := stdioTExitWarns(out); n != 1 {
 			t.Fatalf("logged %d exit WARNs over 5 connect-and-crash cycles, want 1:\n%s", n, out)
 		}
@@ -174,7 +205,7 @@ func TestStdio_FlappingServerExitWarnsOncePerRun(t *testing.T) {
 		}
 	})
 	t.Run("stable between crashes", func(t *testing.T) {
-		out := stdioTFlapRun(t, 400, 50*time.Millisecond, 3)
+		out := stdioTFlapRun(t, 0, 400, 50*time.Millisecond, 3)
 		crashes := strings.Count(out, "exited unexpectedly")
 		if n := stdioTExitWarns(out); n != crashes {
 			t.Fatalf("logged %d exit WARNs for %d crashes after a stable stretch, want one each:\n%s", n, crashes, out)
@@ -185,4 +216,51 @@ func TestStdio_FlappingServerExitWarnsOncePerRun(t *testing.T) {
 			t.Errorf("logged %d connection-lost WARNs, want one per crash (at least 3):\n%s", n, out)
 		}
 	})
+}
+
+// stdioTExitLinesWith returns the "exited unexpectedly" lines whose
+// stderr tail contains tail, in log order.
+func stdioTExitLinesWith(out, tail string) []string {
+	var lines []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(line, "exited unexpectedly") && strings.Contains(line, tail) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// A server that fails at start-up for a while and then connects and
+// crashes soon after, again and again, logs each cause at WARN once:
+// the start-up failure with its stderr tail, then, because Thane logged
+// the connect at INFO, the crash of that connection with its own tail.
+// The connects and crashes after it are one run of quick losses and
+// stay at Debug.
+func TestStdio_StartupFailuresThenFlapWarnEachCause(t *testing.T) {
+	out := stdioTFlapRun(t, 3, 100, time.Hour, 4)
+	startup := stdioTExitLinesWith(out, stdioTFlapStartupStderr)
+	crashes := stdioTExitLinesWith(out, stdioTFlapStderr)
+	if len(startup) < 3 || len(crashes) < 4 {
+		t.Fatalf("got %d start-up exits and %d crashes, want at least 3 and 4:\n%s", len(startup), len(crashes), out)
+	}
+	if n := stdioTExitWarns(strings.Join(startup, "\n")); n != 1 || stdioTExitWarns(startup[0]) != 1 {
+		t.Errorf("start-up exit WARNs = %d, want 1, the first:\n%s", n, out)
+	}
+	if stdioTExitWarns(crashes[0]) != 1 {
+		t.Errorf("the crash of the connection logged at INFO is not a WARN: %s", crashes[0])
+	}
+	for _, line := range crashes[1:] {
+		if stdioTExitWarns(line) != 0 {
+			t.Errorf("a later quick crash logged at WARN: %s", line)
+		}
+	}
+	if n := strings.Count(out, `level=INFO msg="mcp: server connected"`); n != 1 {
+		t.Errorf("INFO connected lines = %d, want 1", n)
+	}
+	if n := strings.Count(out, `level=WARN msg="mcp: server connection lost; reconnecting"`); n != 1 {
+		t.Errorf("connection-lost WARNs = %d, want 1", n)
+	}
+	if n := strings.Count(out, `level=WARN msg="mcp: connecting to the server failed; retrying in the background"`); n != 1 {
+		t.Errorf("connect-failure WARNs = %d, want 1", n)
+	}
 }
