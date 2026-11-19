@@ -63,8 +63,9 @@ type callInfo struct {
 	cancellable bool
 }
 
-// transportHooks deliver server-initiated messages. Either hook may be
-// nil.
+// transportHooks carry what a transport takes from its client: the
+// hooks that deliver server-initiated messages (either may be nil) and
+// the exit WARN gate the client's transports share.
 type transportHooks struct {
 	// onRequest runs in its own goroutine per inbound request, at most
 	// inboundConcurrency at once per transport (see dispatchInbound). A
@@ -81,6 +82,15 @@ type transportHooks struct {
 	// transport installs its own gate in its copy of the hooks when it is
 	// built; factories' callers leave it nil. nil is unbounded.
 	inbound *inboundGate
+
+	// exitWarned is shared by every transport of one serverClient. A
+	// stdio process exit the operator should see logs its stderr tail
+	// at WARN only while exitWarned is false, and sets it; later exits
+	// log at Debug. The client clears it once a connection has lived
+	// stableAfter, so a server that keeps failing, at start-up or soon
+	// after it connects, warns once per run of failures. nil warns on
+	// every exit. HTTP ignores it.
+	exitWarned *atomic.Bool
 }
 
 // transportFactory builds a new Transport. ctx bounds construction only;

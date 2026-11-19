@@ -47,6 +47,9 @@ func TestMain(m *testing.M) {
 //     with the modern protocolVersion and clientCapabilities (missing ->
 //     -32602, another version -> -32022); server/discover; initialize ->
 //     -32022; ping -> -32601; the same tools and pages, with resultType.
+//   - "stdio-flap": "mcp-legacy" that exits 1 once it has served the
+//     last tools/list page, at once or after stdioTFlapAfterEnv
+//     milliseconds (stdio_exit_test.go).
 //
 // The stdio tests use further "stdio-*" modes, and the end-to-end tests
 // "e2e-*" modes (e2e_stdio_test.go). The waits are shortened
@@ -197,7 +200,7 @@ func (s *stdioTServer) handle(m *wireMessage) {
 		s.received = append(s.received, "request "+stdioTKey(req.ID))
 		s.mu.Unlock()
 		switch {
-		case s.mode == "mcp-legacy", s.mode == "mcp-modern":
+		case s.mode == "mcp-legacy", s.mode == "mcp-modern", s.mode == stdioTModeFlap:
 			go s.answerMCP(req, s.mode == "mcp-modern")
 		case strings.HasPrefix(s.mode, e2eTModePrefix):
 			s.answerE2E(req) // decides the era lock on the reader goroutine
@@ -398,6 +401,9 @@ func (s *stdioTServer) toolsList(id json.RawMessage, cursor *string, modern bool
 		res["resultType"] = resultTypeComplete
 	}
 	s.result(id, res)
+	if page == 1 && s.mode == stdioTModeFlap {
+		stdioTFlapExit()
+	}
 }
 
 func (s *stdioTServer) toolsCall(id json.RawMessage, p *stdioTMCPParams, modern bool) {

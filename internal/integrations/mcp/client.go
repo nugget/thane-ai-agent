@@ -131,6 +131,11 @@ type serverClient struct {
 	// of failed attempts; a successful connect re-arms it.
 	thaneBugLogged atomic.Bool
 
+	// exitWarned gates the stdio exit WARN across this server's
+	// processes (transportHooks.exitWarned); serve re-arms it once a
+	// connection has lived stableAfter.
+	exitWarned atomic.Bool
+
 	retiring sync.WaitGroup // retireConn goroutines; run waits for them
 
 	mu           sync.Mutex
@@ -253,7 +258,8 @@ const (
 // respawned at a fixed short interval. A connection that lived
 // stableAfter ends the run of failures: backoff returns to backoffMin.
 // Every wait is jittered. Within a run of failures the first failed
-// attempt and the first lost connection log at WARN, repeats at Debug.
+// attempt, the first lost connection and the first stdio process exit
+// log at WARN, repeats at Debug.
 func (c *serverClient) run() {
 	first := true
 	finishFirst := func() {
@@ -289,18 +295,16 @@ func (c *serverClient) run() {
 			continue
 		}
 		c.setReady(conn, set)
-		readyAt := time.Now()
 		c.thaneBugLogged.Store(false)
 		c.logReady(conn, set, flapping)
 		finishFirst()
 		c.fireToolsChanged()
-		end := c.serve(conn, flapping)
+		end, stable := c.serve(conn, flapping)
 		if end == serveStop {
 			c.closeConn(conn)
 			return
 		}
-		quick := time.Since(readyAt) < c.cfg.stableAfter
-		if !quick {
+		if stable {
 			failures, backoff, flapping = 0, c.cfg.backoffMin, false
 		}
 		if end == serveReconnect {
@@ -311,7 +315,7 @@ func (c *serverClient) run() {
 		if !c.sleep(wait) {
 			return
 		}
-		if quick {
+		if !stable {
 			failures++
 			flapping = true
 			backoff = min(2*backoff, c.cfg.backoffMax)
@@ -341,45 +345,46 @@ func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
 }
 
 // serve waits on a ready connection until it is lost, expires, or the
-// client stops, handling list refreshes in between. While flapping, it
-// logs once the connection has lived stableAfter, because the reconnect
-// itself was logged only at Debug.
-func (c *serverClient) serve(conn *clientConn, flapping bool) serveEnd {
-	var stable <-chan time.Time
-	if flapping {
-		t := time.NewTimer(c.cfg.stableAfter)
-		defer t.Stop()
-		stable = t.C
-	}
+// client stops, handling list refreshes in between. It also reports
+// whether the connection lived stableAfter, which ends the run of
+// failures. At that moment it re-arms the stdio exit WARN, before the
+// process can exit, and, while flapping, logs that the connection is
+// stable, because the reconnect itself was logged only at Debug.
+func (c *serverClient) serve(conn *clientConn, flapping bool) (end serveEnd, stable bool) {
+	timer := time.NewTimer(c.cfg.stableAfter)
+	defer timer.Stop()
 	for {
 		select {
 		case <-c.lifeCtx.Done():
-			return serveStop
+			return serveStop, stable
 		case <-conn.tr.Done():
 			if c.lifeCtx.Err() != nil {
-				return serveStop
+				return serveStop, stable
 			}
 			c.setDisconnected(fmt.Errorf("%w: the server connection closed", errConnectionLost))
 			c.closeConn(conn)
-			return serveLost
+			return serveLost, stable
 		case <-c.reconnectCh:
 			if !c.takeReconnect(conn) {
 				continue
 			}
 			c.logger.Info("mcp: server session expired; reconnecting")
 			c.retireConn(conn)
-			return serveReconnect
+			return serveReconnect, stable
 		case <-c.refreshCh:
 			if c.refresh(conn) {
 				c.logger.Info("mcp: server session expired; reconnecting")
 				c.retireConn(conn)
-				return serveReconnect
+				return serveReconnect, stable
 			}
 		case <-c.notifyCh:
 			c.fireToolsChanged()
-		case <-stable:
-			stable = nil
-			c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
+		case <-timer.C:
+			stable = true
+			c.exitWarned.Store(false)
+			if flapping {
+				c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
+			}
 		}
 	}
 }

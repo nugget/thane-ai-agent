@@ -119,3 +119,48 @@ func TestStdio_CutShortWriteNeverFinishedTearsDown(t *testing.T) {
 		return strings.Contains(logs.String(), `level=WARN msg="mcp: stdio write was cut short; closing the connection"`)
 	})
 }
+
+// Close while a cut-short line is still being finished: closing stdin
+// makes the pending write fail with os.ErrClosed, which is the stop
+// sequence at work, not a broken stream. The transport finishes with
+// Close's cause, Close returns once the process is gone, and writeSem
+// is free again.
+func TestStdio_CloseDuringFinishFrameKeepsCloseCause(t *testing.T) {
+	cfg := stdioTHelper(t, "stdio-noread")
+	cfg.closeStdinWait = 100 * time.Millisecond
+	cfg.termWait = 100 * time.Millisecond
+	cfg.frameFinishWait = time.Minute
+	tr := stdioTStart(t, cfg, transportHooks{})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err := tr.Call(ctx, &Request{Method: "hold", Params: stdioTBigParams()}, callInfo{cancellable: true})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if stdioTIsDone(tr.Done()) {
+		t.Fatal("the transport finished before Close")
+	}
+
+	cctx, ccancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer ccancel()
+	start := time.Now()
+	if err := tr.Close(cctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("Close took %v, want it back once the process is gone", took)
+	}
+	if cause := tr.cause(); !errors.Is(cause, errStdioClosed) {
+		t.Errorf("cause = %q, want Close's %q", cause, errStdioClosed)
+	}
+	stdioTEventually(t, "writeSem free", func() bool {
+		select {
+		case tr.writeSem <- struct{}{}:
+			<-tr.writeSem
+			return true
+		default:
+			return false
+		}
+	})
+}

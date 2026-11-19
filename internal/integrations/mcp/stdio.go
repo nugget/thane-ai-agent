@@ -22,13 +22,6 @@ type stdioConfig struct {
 	dir     string   // absolute; "" = inherit Thane's working directory
 	logger  *slog.Logger
 
-	// exitWarned is shared by every transport of one server, so a
-	// server that keeps failing at start-up logs its exit (with the
-	// stderr tail) at WARN once per run of failures, and at Debug after
-	// that. A process that sends a valid message re-arms it. nil warns
-	// on every exit.
-	exitWarned *atomic.Bool
-
 	// Timing knobs; zero means the default. Tests shorten them.
 	closeStdinWait  time.Duration // after closing stdin, before SIGTERM (2s)
 	termWait        time.Duration // after SIGTERM, before SIGKILL (3s)
@@ -65,8 +58,6 @@ type stdioTransport struct {
 	stdin  *os.File // parent's write end of the child's stdin
 	stdout *os.File // parent's read end of the child's stdout
 	stderr *os.File // parent's read end of the child's stderr
-
-	exitWarned *atomic.Bool // see stdioConfig.exitWarned
 
 	closeStdinWait  time.Duration
 	termWait        time.Duration
@@ -160,7 +151,6 @@ func newStdioTransport(ctx context.Context, cfg stdioConfig, hooks transportHook
 		stdin:           parent[0],
 		stdout:          parent[1],
 		stderr:          parent[2],
-		exitWarned:      cfg.exitWarned,
 		closeStdinWait:  durationOr(cfg.closeStdinWait, stdioDefaultCloseStdinWait),
 		termWait:        durationOr(cfg.termWait, stdioDefaultTermWait),
 		exitDrainWait:   durationOr(cfg.exitDrainWait, stdioDefaultExitDrainWait),
@@ -335,19 +325,27 @@ func (t *stdioTransport) cause() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.doneCause == nil {
-		return errors.New("transport closed")
+		return errStdioClosed
 	}
 	return t.doneCause
 }
 
+// errStdioClosed is why a transport that Close stopped finished.
+var errStdioClosed = errors.New("transport closed")
+
 // finish closes Done exactly once: it fails every pending call with
 // errConnectionLost (by closing its channel), records cause, and
-// cancels the lifetime ctx handed to the hooks.
+// cancels the lifetime ctx handed to the hooks. Once Close was asked
+// for, the cause is errStdioClosed whoever notices the end first (the
+// stdout reader, waitProcess, a failed write): Close caused it.
 func (t *stdioTransport) finish(cause error) {
 	t.doneOnce.Do(func() {
 		t.mu.Lock()
 		t.finished = true
 		t.doneCause = cause
+		if t.closeRequested {
+			t.doneCause = errStdioClosed
+		}
 		pending := t.pending
 		t.pending = nil
 		t.mu.Unlock()

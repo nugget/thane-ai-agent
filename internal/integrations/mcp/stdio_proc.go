@@ -33,7 +33,7 @@ func (t *stdioTransport) Close(ctx context.Context) error {
 	case <-t.done:
 	case <-ctx.Done():
 	}
-	t.finish(errors.New("transport closed"))
+	t.finish(errStdioClosed)
 	return nil
 }
 
@@ -130,9 +130,9 @@ func (t *stdioTransport) waitProcess() {
 // logExit reports the exit once: Debug for an exit Close asked for, WARN
 // with the stderr tail when the process exited on its own or was closed
 // before it ever spoke JSON-RPC (usually a start-up failure). With a
-// shared exitWarned, only the first such exit of a run of failures is a
-// WARN; the supervisor retries a broken server every backoff, and the
-// same stderr tail at WARN each time would only bury it.
+// shared hooks.exitWarned, only the first such exit of a run of failures
+// is a WARN; the supervisor retries a broken server every backoff, and
+// the same stderr tail at WARN each time would only bury it.
 func (t *stdioTransport) logExit(err error) {
 	t.mu.Lock()
 	requested := t.closeRequested
@@ -155,19 +155,18 @@ func (t *stdioTransport) logExit(err error) {
 // the current run of failures, then at Debug.
 func (t *stdioTransport) warnExit(msg, status string) {
 	level := slog.LevelDebug
-	if t.exitWarned == nil || t.exitWarned.CompareAndSwap(false, true) {
+	if gate := t.hooks.exitWarned; gate == nil || gate.CompareAndSwap(false, true) {
 		level = slog.LevelWarn
 	}
 	t.logger.Log(context.Background(), level, msg, "pid", t.pid, "exit", status, "stderr_tail", t.stderrTail.String())
 }
 
-// markLive records that the server sent a valid JSON-RPC message. The
-// first one re-arms the shared exit WARN: this process came up, so its
-// exit starts a new run of failures.
+// markLive records that the server sent a valid JSON-RPC message. It
+// does not re-arm the shared exit WARN: a server that answers the
+// handshake and then crashes is still failing, and only the client knows
+// when a connection has lasted long enough to end the run of failures.
 func (t *stdioTransport) markLive() {
-	if !t.sawMessage.Swap(true) && t.exitWarned != nil {
-		t.exitWarned.Store(false)
-	}
+	t.sawMessage.Store(true)
 }
 
 // stdioExitText describes cmd.Wait's result for logs: "exit status 0",

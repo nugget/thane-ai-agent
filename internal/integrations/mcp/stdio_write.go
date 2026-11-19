@@ -124,9 +124,10 @@ func (t *stdioTransport) cancelLine(id json.RawMessage, err error) []byte {
 // gets cancelNotifyTimeout. Failing to finish the line breaks the
 // stream's framing and tears the transport down: a server that stays
 // blocked that long is logged at WARN; a server that went away (EPIPE)
-// has its exit logged; a closed stdin means the stop sequence is already
-// under way. A follow-up that cannot be written only logs at Debug: the
-// line ended cleanly, so the stream is still framed.
+// has its exit logged. A closed stdin means the stop sequence is already
+// under way and finishes the transport with its own cause, so it is only
+// logged at Debug. A follow-up that cannot be written only logs at
+// Debug: the line ended cleanly, so the stream is still framed.
 func (t *stdioTransport) finishFrame(b []byte, sent int, follow []byte) {
 	defer func() { <-t.writeSem }()
 	defer func() { _ = t.stdin.SetWriteDeadline(time.Time{}) }()
@@ -137,8 +138,10 @@ func (t *stdioTransport) finishFrame(b []byte, sent int, follow []byte) {
 		cause := fmt.Errorf("partial write to server stdin (%d of %d bytes): %w", sent+n, len(b), err)
 		switch {
 		case errors.Is(err, os.ErrClosed):
-			t.logger.Debug("mcp: stdin closed while finishing a stdio write", "pid", t.pid)
-			t.lost(cause)
+			// Only the stop sequence (Close, lost, fail) or waitProcess
+			// after the exit closes stdin, and each finishes the
+			// transport with its own cause; this write is a casualty.
+			t.logger.Debug("mcp: stdin closed while finishing a stdio write", "pid", t.pid, "error", cause)
 		case errors.Is(err, os.ErrDeadlineExceeded):
 			t.logger.Warn("mcp: stdio write was cut short; closing the connection",
 				"pid", t.pid, "error", err, "waited", t.frameFinishWait)

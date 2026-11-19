@@ -39,9 +39,11 @@ const serverLogCapBytes = 2048
 
 // hooksFor binds the inbound hooks of one transport to conn, so the
 // replies follow that connection's era, not whatever era a later
-// connection settles on.
+// connection settles on. Every transport shares the client's exit WARN
+// gate.
 func (c *serverClient) hooksFor(conn *clientConn) transportHooks {
 	return transportHooks{
+		exitWarned: &c.exitWarned,
 		onRequest: func(ctx context.Context, req *Request) *Response {
 			return c.handleRequest(ctx, conn, req)
 		},
