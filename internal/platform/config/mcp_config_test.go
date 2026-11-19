@@ -102,6 +102,24 @@ func TestValidateMCP(t *testing.T) {
 	}
 }
 
+// TestValidateMCP_URLParseErrorHidesCredentials: an unparseable url is
+// reported by its reason only, never with the userinfo or query it may
+// carry (url.Parse's own error repeats the whole URL).
+func TestValidateMCP_URLParseErrorHidesCredentials(t *testing.T) {
+	c := &Config{MCP: MCPConfig{Servers: []MCPServerConfig{{
+		Name: "x", Transport: "http", URL: "https://user:hunter2@host:bad/mcp?api_key=SECRET123",
+	}}}}
+	err := c.validateMCP()
+	if err == nil || !strings.Contains(err.Error(), "does not parse") {
+		t.Fatalf("validateMCP() = %v, want a does-not-parse error", err)
+	}
+	for _, leak := range []string{"hunter2", "SECRET123", "user:", "api_key"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("validateMCP() = %q leaks %q", err, leak)
+		}
+	}
+}
+
 func TestSanitizeMCPName(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -61,6 +62,12 @@ func (c *Config) validateMCP() error {
 			}
 			u, err := url.Parse(srv.URL)
 			if err != nil {
+				// *url.Error repeats the whole URL, userinfo and query
+				// included; report only the reason.
+				var urlErr *url.Error
+				if errors.As(err, &urlErr) {
+					err = urlErr.Err
+				}
 				return fmt.Errorf("mcp.servers[%d] (%s): url does not parse: %w", i, srv.Name, err)
 			}
 			if u.Scheme != "http" && u.Scheme != "https" {
