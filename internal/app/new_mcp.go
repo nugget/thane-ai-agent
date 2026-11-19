@@ -19,10 +19,14 @@ const mcpCloseTimeout = 10 * time.Second
 // initMCP starts the configured MCP servers. It runs inside
 // initChannels, before delegate creation and long before
 // finalizeCapabilityTags, so the tools of servers that are ready at
-// boot land on the shared registry where delegates and the
-// capability-tag snapshot see them. Servers that are down keep
-// reconnecting in the background; their tools reach the main loop
-// through the dynamic tool overlay installed in initServers.
+// boot land on the shared registry that capability-tag resolution,
+// tag_inspect, the manifest tool counts and delegate model routing
+// read. Servers that are down keep reconnecting in the background.
+// Tools that first appear later, and changed definitions of boot-time
+// tools, reach runs through the dynamic tool overlay installed in
+// initServers. Every run goes through the agent loop, which applies the
+// overlay, so they reach the main loop and any delegate whose tag scope
+// covers them.
 func (a *App) initMCP(s *newState) error {
 	if len(a.cfg.MCP.Servers) == 0 {
 		return nil
@@ -42,7 +46,9 @@ func (a *App) initMCP(s *newState) error {
 	})
 
 	// Health only: each server's own supervisor reconnects, so the
-	// watcher reports status and never acts on it.
+	// watcher reports status and never acts on it. Every configured
+	// server is a dependency: while one is down or not yet connected,
+	// /health reports degraded and system_health shows it as failed.
 	for _, srv := range servers {
 		name := srv.Name
 		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
@@ -107,9 +113,13 @@ func mcpToolOverrides(cfg map[string]config.MCPToolConfig) map[string]mcp.ToolOv
 
 // mcpCapabilityTagOverrides returns a new map: a copy of the configured
 // capability tags plus an empty entry for every tag an MCP server or
-// tool override names. Resolution keeps tags that have no tools, so a
-// server that is down at boot still has its tags in the tag_activate
-// manifest and tag_inspect. cfg is never mutated.
+// tool override names. Resolution keeps tags that have no tools, so the
+// tags of a server that is down at boot are still known to tag
+// resolution and tag_inspect. That does not make a tag discoverable:
+// the tag_activate menu and the manifest talent list only menu
+// (trailhead) and protected tags, so a new leaf tag such as "game" is
+// reached through a trailhead's next_tags, core: true, or channel and
+// loop tags. cfg is never mutated.
 func mcpCapabilityTagOverrides(cfg *config.Config) map[string]config.CapabilityTagConfig {
 	out := make(map[string]config.CapabilityTagConfig, len(cfg.CapabilityTags))
 	for tag, tagCfg := range cfg.CapabilityTags {

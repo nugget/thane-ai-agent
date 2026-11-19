@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/model/llm"
+	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -87,5 +89,72 @@ func TestApplyDynamicTools_LayersAndTagGates(t *testing.T) {
 	// Source registry untouched.
 	if contains(reg.AllToolNames(), "macos_search_contacts") {
 		t.Error("overlay leaked into the shared registry")
+	}
+}
+
+// TestRun_DelegateShapedRequestSeesDynamicTools pins the documented
+// contract for tools that reach runs through the dynamic overlay (MCP
+// tools that appear after startup, and changed definitions of startup
+// tools): delegates run through Loop.Run like the main loop, so a
+// delegate whose tag scope covers such a tool is offered it, with the
+// current definition, while tools outside its scope stay hidden. The
+// request mirrors the delegate executor's loop launch.
+func TestRun_DelegateShapedRequestSeesDynamicTools(t *testing.T) {
+	mock := &mockLLM{responses: []*llm.ChatResponse{{
+		Model:   "test-model",
+		Message: llm.Message{Role: "assistant", Content: "done"},
+	}}}
+	capTags := map[string]config.CapabilityTagConfig{
+		"base":  {Tools: []string{"base_tool"}},
+		"game":  {Tools: []string{"mcp_game_look"}},
+		"other": {Tools: []string{"other_tool"}},
+		"admin": {},
+	}
+	loop := setupCapabilityLoopWithClient(mock, []string{"base_tool", "mcp_game_look", "other_tool"}, capTags, "test-model")
+	loop.SetDynamicToolSource(fakeDynamicSource{
+		tools: []*tools.Tool{
+			dynTool("mcp_game_move"),  // first appeared after startup
+			dynTool("mcp_game_look"),  // definition changed after startup
+			dynTool("mcp_admin_wipe"), // appeared after startup, outside the scope
+		},
+		tagAdds: map[string][]string{
+			"game":  {"mcp_game_move", "mcp_game_look"},
+			"admin": {"mcp_admin_wipe"},
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages:         []Message{{Role: "user", Content: "Move the player north."}},
+		InitialTags:      []string{"game", "base"},
+		DelegationGating: "disabled",
+		ExcludeTools:     []string{"thane_delegate"},
+		UsageRole:        "delegate",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(mock.calls) == 0 {
+		t.Fatal("no LLM call recorded")
+	}
+
+	offered := make(map[string]string)
+	for _, def := range mock.calls[0].Tools {
+		fn, _ := def["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		desc, _ := fn["description"].(string)
+		offered[name] = desc
+	}
+	for _, name := range []string{"base_tool", "mcp_game_move", "mcp_game_look"} {
+		if _, ok := offered[name]; !ok {
+			t.Errorf("delegate-shaped run was not offered %s; offered %v", name, toolNames(mock.calls[0].Tools))
+		}
+	}
+	if got := offered["mcp_game_look"]; got != "dynamic mcp_game_look" {
+		t.Errorf("mcp_game_look description = %q, want the changed definition from the overlay", got)
+	}
+	for _, name := range []string{"mcp_admin_wipe", "other_tool"} {
+		if _, ok := offered[name]; ok {
+			t.Errorf("delegate-shaped run was offered %s outside its tag scope", name)
+		}
 	}
 }

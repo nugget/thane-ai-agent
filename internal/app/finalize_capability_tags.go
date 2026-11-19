@@ -50,8 +50,10 @@ func (a *App) finalizeCapabilityTags(s *newState) error {
 	}
 
 	// MCP server tags join the overrides so the tags of a server that is
-	// down at boot still exist (with no tools yet) in the tag_activate
-	// manifest and tag_inspect.
+	// down at boot are still known (with no tools yet) to tag resolution
+	// and tag_inspect. Only menu and protected tags are listed in the
+	// tag_activate menu, so a new leaf tag needs a trailhead's next_tags,
+	// core: true, or channel or loop tags to be discoverable.
 	resolved := resolveCapabilityTags(a.loop.Tools(), mcpCapabilityTagOverrides(cfg))
 	resolvedCapTags := resolved.Configs
 	if len(resolvedCapTags) == 0 {

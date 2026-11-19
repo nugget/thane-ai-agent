@@ -895,7 +895,10 @@ have no compiled-in entry in `internal/model/toolcatalog/catalog.go`;
 their capability tags come from the server's `tags:` or a per-tool
 `tools.<name>.tags` override (the older `default_tags:` key was renamed
 to `tags:` and is rejected). An untagged MCP tool is never offered in a
-tag-scoped run.
+tag-scoped run. A tag that no shipped trailhead names, such as `game`,
+also needs a way for the model to find it (a trailhead talent's
+`next_tags`, `core: true`, or channel or loop tags); `tag_inspect`
+knows it even while its server is down.
 
 The description and input schema come from the server. Descriptions are
 capped at 4096 bytes. Schemas are copied and adjusted only where model
@@ -904,13 +907,17 @@ providers require it (local `$ref` pointers inlined, top-level
 adjustment is logged once.
 
 **Availability.** Tools of servers ready at startup are registered on
-the shared registry and reach delegates. Tools that appear later reach
-the main loop through the dynamic tool overlay, not delegates. A server
-that is down or reconnecting answers `tools.ErrUnavailable`, so the tool
-stays declared and the model is told to use another tool or try later;
-a tool the server stopped offering answers the same way. Other failures
-reach the model as fixed sentences that say what to do next: a timeout
-or broken connection is an unknown outcome, refused credentials need the
+the shared registry. Tools that appear later, and new definitions of
+tools whose description or schema changed, are layered into every run
+through the dynamic tool overlay, so they reach the main loop and any
+delegate whose tag scope covers them. Only delegate model routing (its
+tool count), `tag_inspect` and the capability manifest's tool counts
+reflect the startup registry. A server that is down or reconnecting
+answers `tools.ErrUnavailable`, so the tool stays declared and the
+model is told to use another tool or try later; a tool the server
+stopped offering answers the same way. Other failures reach the model
+as fixed sentences that say what to do next: a timeout or broken
+connection is an unknown outcome, refused credentials need the
 operator, rejected arguments quote the server's message. The model never
 sees hosts, URLs or raw HTTP bodies. Results prefer the server's
 structured JSON, summarize images and binary resources instead of

@@ -118,16 +118,27 @@ restarts is reconnected in the background, and its tools answer
 
 ### What delegates see
 
-Delegates run on the registry as it stood at startup. Tools of servers
-that were ready then (Thane waits up to 30 seconds) reach delegates like
-native tools. Tools that first appear later, because a server came up
-late or changed its tool list, reach the main loop through the dynamic
-tool overlay but not delegates until the next restart. When a server
-changes a tool's description or schema after startup, the main loop sees
-the new definition and delegates keep the startup one.
+Delegates run through the same agent loop as the main conversation, so
+they see the same MCP tools. Tools of servers that were ready at startup
+(Thane waits up to 30 seconds) are registered like native tools. Tools
+that first appear later, because a server came up late or changed its
+tool list, are layered into every run through the dynamic tool overlay.
+When a server changes a tool's description or schema after startup,
+every run uses the new definition. Both reach the main loop and any
+delegate whose tag scope covers them, without a restart.
+
+Two things still reflect the tools registered at startup: the
+delegate's model routing, which counts the tools in its scope, and the
+capability views (`tag_inspect` and the tool counts in the capability
+manifest).
 
 Like every other tool, an MCP tool is only offered when one of its
-capability tags is active, so give each server `tags:`.
+capability tags is active, so give each server `tags:`. The model also
+has to be able to find the tag: a built-in tag such as `forge` is
+already named by a shipped trailhead, but a new one such as `game` also
+needs a trailhead talent with `next_tags: [game]`, or
+`capability_tags: {game: {core: true}}`. See
+[MCP Servers](../operating/configuration.md#mcp-servers).
 
 ### A note on Home Assistant
 

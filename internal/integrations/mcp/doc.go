@@ -1,6 +1,6 @@
 // Package mcp is Thane's MCP (Model Context Protocol) client. It
 // connects to external MCP servers and exposes their tools to the agent
-// loop and delegates as ordinary Thane tools. Thane is only ever the
+// loop, and so to delegates, as ordinary Thane tools. Thane is only ever the
 // client; it does not act as an MCP server.
 //
 // # Transports
@@ -35,11 +35,16 @@
 // session expires. [Manager.Start] connects all servers in parallel and,
 // after the first attempts finish (bounded), registers the tools of
 // servers with a tool list on the shared registry, before capability
-// tags are resolved, so delegates and tag gating see them. Tools that
-// appear later (a server that came up late, a tools/list_changed
-// notification, an expired modern list ttl) reach the main loop through
-// [Manager.Snapshot], an agent.DynamicToolSource overlay; delegates see
-// only the tools registered at Start.
+// tags are resolved, so tag resolution and the capability views see
+// them. Tools that appear later (a server that came up late, a
+// tools/list_changed notification, an expired modern list ttl), and new
+// definitions of registered tools whose description or schema changed,
+// are served by [Manager.Snapshot], an agent.DynamicToolSource overlay
+// the agent loop applies to every run. Delegates run through the same
+// loop, so these tools reach the main loop and any delegate whose tag
+// scope covers them. Only what is computed from the shared registry alone (a
+// delegate's model routing by tool count, tag_inspect and the manifest
+// tool counts) reflects the tools registered at Start.
 //
 // Bridged tools are named mcp_{server}_{tool} (sanitized, capped at 64
 // bytes with a stable hash suffix) and carry CanonicalID

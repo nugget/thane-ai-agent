@@ -2,6 +2,7 @@ package app
 
 import (
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/integrations/companion"
 	"github.com/nugget/thane-ai-agent/internal/integrations/mcp"
+	"github.com/nugget/thane-ai-agent/internal/model/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/platform/config"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -125,5 +127,31 @@ func TestMCPCapabilityTagOverrides(t *testing.T) {
 	}
 	if len(cfg.CapabilityTags) != 1 {
 		t.Fatalf("config mutated: %v", cfg.CapabilityTags)
+	}
+}
+
+// TestMCPServerTagKnownWhileServerDown pins what the MCP Servers docs
+// promise about a custom tag such as "game" on a server that is down at
+// boot: the tag is resolved (so tag_inspect knows it) but, as a leaf,
+// it is not listed in the tag_activate menu. If the menu starts listing
+// such tags, update docs/operating/configuration.md#mcp-servers and
+// docs/understanding/delegation.md, which tell operators how to make
+// the tag discoverable.
+func TestMCPServerTagKnownWhileServerDown(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{MCP: config.MCPConfig{Servers: []config.MCPServerConfig{
+		{Name: "game", Transport: "http", URL: "http://localhost:11212/mcp", Tags: []string{"game"}},
+	}}}
+	// No tools registered: the server is down at boot.
+	resolved := resolveCapabilityTags(tools.NewEmptyRegistry(), mcpCapabilityTagOverrides(cfg))
+	if _, ok := resolved.Configs["game"]; !ok {
+		t.Fatalf("game missing from resolved capability tags %v", slices.Sorted(maps.Keys(resolved.Configs)))
+	}
+	surface := buildCapabilitySurface(resolved, nil, nil, nil, nil)
+	if !slices.ContainsFunc(surface, func(e toolcatalog.CapabilitySurface) bool { return e.Tag == "game" }) {
+		t.Error("game missing from the capability surface tag_inspect reads")
+	}
+	if desc := toolcatalog.RenderCapabilityActivationDescription(surface); strings.Contains(desc, "**game**") {
+		t.Errorf("tag_activate menu now lists the leaf tag game; update the MCP docs on tag discoverability:\n%s", desc)
 	}
 }

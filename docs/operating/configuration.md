@@ -1180,8 +1180,8 @@ mcp:
 | `transport` | required | `stdio` (spawn `command` with `args`) or `http` (Streamable HTTP at `url`, `http` or `https`). |
 | `protocol` | `auto` | `auto` probes with `server/discover` and falls back to the `initialize` handshake; `modern` requires a stateless 2026-07-28 server; `legacy` runs `initialize` directly (2024-11-05 through 2025-11-25). Use `legacy` for older servers that answer the probe slowly; the probe waits up to 10s for a reply before falling back on stdio. |
 | `connect_timeout` | `30s` | One connection attempt: start or reach the server, negotiate, list tools. Failed attempts retry in the background with backoff from 2s up to 60s. |
-| `call_timeout` | `2m` | One tool call, unless the caller already has an earlier deadline. |
-| `cwd` | Thane's | stdio working directory. |
+| `call_timeout` | `2m` | One tool call, unless the caller already has an earlier deadline. `0` means the default, not unlimited. |
+| `cwd` | Thane's | stdio working directory. Root prefixes such as `kb:` and a leading `~/` expand; a value that does not end up absolute is rejected when the config loads. |
 | `env` | none | stdio extra environment, `KEY=VALUE`. The subprocess also inherits Thane's environment. Entries without `=` are dropped with a warning. |
 | `headers` | none | http headers sent on every request. Protocol headers (`Accept`, `Content-Type`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*`, `Last-Event-ID`) belong to Thane and are dropped with a warning. |
 | `include_tools` / `exclude_tools` | all tools | Raw MCP tool names to bridge or skip (not both). Names the server never reports are logged as a warning. |
@@ -1191,8 +1191,24 @@ mcp:
 **Tags are required for visibility.** A tool with no capability tag is
 never offered in a run scoped by capability tags, so give every server
 `tags:` (or tag its tools under `tools:`). Thane warns at startup about
-a server whose tools have no tag. The tags exist in the `tag_activate`
-manifest even while the server is down.
+a server whose tools have no tag.
+
+The model also has to find the tag. The `tag_activate` menu and the
+capability manifest in the prompt list only the broad menu tags; each
+menu tag's trailhead talent names narrower tags in its `next_tags`. A
+built-in tag that a shipped trailhead already names, such as `files`,
+`forge` or `web`, needs nothing more. A new tag such as `game` stays
+out of sight until one of these leads to it:
+
+- a trailhead talent whose `next_tags` lists it (see
+  [Authoring Talents](../talent-authoring.md));
+- `capability_tags: {game: {core: true}}`, which loads it in every run;
+- `channel_tags` or a loop's `tags`, which activate it for that source
+  or loop.
+
+`tag_inspect` knows a server's tags even while the server is down.
+`capability_tags.<tag>.exclude` keeps a tool out of that tag, including
+tools that first appear after startup.
 
 **Authentication** is static headers only, typically
 `Authorization: Bearer …`. Config expands `${VAR}` anywhere in the file,
@@ -1202,16 +1218,50 @@ config error. OAuth sign-in is not supported.
 
 **Availability.** Servers connect in parallel at startup; Thane waits up
 to 30 seconds for them. Tools of servers that are ready by then are
-registered like native tools and reach delegates. A server that is down
-at startup keeps reconnecting in the background. One that crashes or
-restarts later reconnects too, and meanwhile its tools stay declared and
-answer that the server is not reachable right now. Tools that first
-appear after startup (a late server, or a server that changes its tool
-list) reach the main loop but not delegates. Each server's health shows
-up as `mcp-<name>` in `/health`. Tool names longer than 64 characters
-are shortened with a short stable hash suffix. If two tools map to the
-same name, the first one (servers in config order, then raw tool names
-sorted) wins and the other is skipped with a warning.
+registered like native tools. A server that is down at startup keeps
+reconnecting in the background. One that crashes or restarts later
+reconnects too, and meanwhile its tools stay declared and answer that
+the server is not reachable right now. Tools that first appear after
+startup (a late server, or a server that changes its tool list), and
+new definitions of tools whose description or schema changed, reach
+every run: the main loop, and any delegate whose tag scope covers them,
+since delegates run through the same agent loop. Only the delegate's
+model routing (it counts tools) and the capability views (`tag_inspect`
+and the manifest's tool counts) reflect the tools registered at
+startup. Tool names longer than 64 characters are shortened with a
+short stable hash suffix. If two tools map to the same name, the first
+one (servers in config order, then raw tool names sorted) wins and the
+other is skipped with a warning.
+
+**Health.** Every configured server is a health dependency named
+`mcp-<name>`. While a server is down or not yet connected, `/health`
+reports `status: degraded` and `system_health` shows
+`conn:mcp-<name>` as failed. Expect that for a server that only runs
+some of the time, such as a game that exposes MCP only while it is open.
+
+**Upgrading:** these change the behaviour of an existing `mcp:` config.
+
+- Calls from the main loop used to have no time limit. Every call now
+  stops at `call_timeout` (default `2m`), and the model is told the
+  outcome is unknown. Raise it (for example `30m`) for servers with
+  long-running tools; `0` means the default, not unlimited.
+- stdio servers run in their own process group, so Ctrl-C in Thane's
+  terminal no longer reaches them directly. Thane stops them on
+  shutdown: it closes stdin, then sends SIGTERM and finally SIGKILL to
+  the group. If Thane exits without a clean shutdown (a second Ctrl-C,
+  SIGKILL), each server has to exit by itself when its stdin closes.
+- When two tools map to the same name, the first one now wins, and a
+  native tool always wins over an MCP tool; the last one registered
+  used to.
+- `tools.<name>.enabled: true` now bridges a tool even when
+  `include_tools` or `exclude_tools` would leave it out.
+- Tool names longer than 64 characters change: they are shortened with
+  a hash suffix, so references to the old long names stop matching.
+- Protocol headers set under `headers:` (listed above) are dropped with
+  a warning.
+- `protocol: auto`, the default, sends `server/discover` before
+  `initialize`. Set `protocol: legacy` for an older server that
+  answers the probe slowly or badly.
 
 **Arguments** go through Thane's usual `temp:`/`kb:` prefix expansion,
 so file content referenced that way is sent to the MCP server.
