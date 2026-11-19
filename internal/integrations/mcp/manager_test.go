@@ -211,6 +211,45 @@ func TestManager_CollisionsAreDeterministic(t *testing.T) {
 	})
 }
 
+// TestManager_RawNameCollisionNeverReplacesAStaticTool: a server that
+// later offers another raw tool mapping to a static tool's Thane name
+// (foo-bar after foo_bar) does not replace that tool, whether or not the
+// original is still offered.
+func TestManager_RawNameCollisionNeverReplacesAStaticTool(t *testing.T) {
+	t.Parallel()
+	srv := wireTNewServer(clientTTool("foo_bar"))
+	m := wireTManager(t, []ServerConfig{wireTLegacy("s", "t")}, map[string]*wireTServer{"s": srv})
+	reg := tools.NewEmptyRegistry()
+	m.Start(t.Context(), reg)
+	if got := reg.Get("mcp_s_foo_bar"); got == nil || got.CanonicalID != "mcp:s/foo_bar" {
+		t.Fatalf("static tool = %+v", got)
+	}
+
+	// Both offered: the newcomer sorts first but must not take the name.
+	srv.setTools(clientTTool("foo_bar"), clientTTool("foo-bar"), clientTTool("added"))
+	clientTEventually(t, "the added tool in the overlay", func() bool {
+		return slices.Contains(wireTSnapshotNames(m), "mcp_s_added")
+	})
+	if got := wireTSnapshotNames(m); !slices.Equal(got, []string{"mcp_s_added"}) {
+		t.Errorf("overlay = %v, want only mcp_s_added (foo-bar collides with the static foo_bar)", got)
+	}
+
+	// The original gone: the newcomer still does not take its name, and
+	// the static tool reports itself as no longer offered.
+	srv.setTools(clientTTool("foo-bar"), clientTTool("added"), clientTTool("later"))
+	clientTEventually(t, "the later tool in the overlay", func() bool {
+		return slices.Contains(wireTSnapshotNames(m), "mcp_s_later")
+	})
+	if got := wireTSnapshotNames(m); !slices.Equal(got, []string{"mcp_s_added", "mcp_s_later"}) {
+		t.Errorf("overlay = %v, want mcp_s_added and mcp_s_later", got)
+	}
+	_, err := reg.Get("mcp_s_foo_bar").Handler(t.Context(), nil)
+	var unavailable tools.ErrUnavailable
+	if !errors.As(err, &unavailable) || unavailable.Reason != reasonToolGone {
+		t.Errorf("static foo_bar after it left = %v, want ErrUnavailable(%q)", err, reasonToolGone)
+	}
+}
+
 func TestManager_ProbeAndClose(t *testing.T) {
 	t.Parallel()
 	srv := wireTNewServer(clientTTool("echo"))

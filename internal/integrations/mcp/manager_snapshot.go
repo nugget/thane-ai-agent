@@ -40,15 +40,16 @@ func (m *Manager) rebuild() {
 // rebuildLocked recomputes the overlay from every server's current
 // list, in config order and then raw tool name order:
 //
-//   - a name registered at Start by the same server is left to the
-//     registry unless its definition drifted, in which case the new
+//   - a name registered at Start for the same server and raw tool is
+//     left to the registry unless its definition drifted, in which case the new
 //     definition is included under the same name. Runs use it: the
 //     main loop and any delegate whose tags cover it, since delegates
 //     run through the same loop. Only delegate model routing (its tool
 //     count) and capability views such as tag_inspect still reflect the
 //     startup registry;
 //   - a name the registry already holds for anything else (a native
-//     tool, another server's static tool) always wins over the overlay;
+//     tool, another server's static tool, another raw tool of the same
+//     server) always wins over the overlay;
 //   - among overlay tools the first claim to a name wins.
 //
 // Static tools a server stopped offering are simply absent; their
@@ -69,7 +70,11 @@ func (m *Manager) rebuildLocked() {
 		for _, bt := range s.bridge.bridge(defs) {
 			name := bt.tool.Name
 			if st, ok := m.static[name]; ok {
-				if st.server != s {
+				// Only the tool registered under this name may replace its
+				// definition. Another raw name that maps to the same Thane
+				// name (foo-bar after foo_bar) is a collision, even from the
+				// same server and even with an identical definition.
+				if st.server != s || st.raw != bt.raw {
 					m.logCollision(s, bt)
 					continue
 				}

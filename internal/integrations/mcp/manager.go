@@ -80,9 +80,11 @@ type managedServer struct {
 	bridge *serverBridge
 }
 
-// staticTool remembers a tool registered at Start.
+// staticTool remembers a tool registered at Start: which server and raw
+// MCP tool it calls, and its definition's fingerprint.
 type staticTool struct {
 	server *managedServer
+	raw    string
 	fp     string
 }
 
@@ -236,7 +238,7 @@ func (m *Manager) Start(ctx context.Context, reg *tools.Registry) {
 				continue
 			}
 			reg.Register(bt.tool)
-			m.static[bt.tool.Name] = staticTool{server: s, fp: bt.fp}
+			m.static[bt.tool.Name] = staticTool{server: s, raw: bt.raw, fp: bt.fp}
 			registered++
 		}
 	}
