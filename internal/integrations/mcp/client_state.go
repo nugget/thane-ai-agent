@@ -250,9 +250,10 @@ func (c *serverClient) logReady(conn *clientConn, set *toolSet, flapping bool) {
 	}
 }
 
-// rearmExitWarn re-arms the stdio exit WARN for conn, a connect just
-// logged at INFO, so that its loss warns with its own stderr tail even
-// when an earlier start-up failure of the run took the WARN. If conn's
+// rearmExitWarn re-arms the stdio exit WARN for conn: a connect just
+// logged at INFO, or a connection that has lived stableAfter. Its loss
+// then warns with its own stderr tail even when an earlier failure of
+// the run took the WARN. If conn's
 // transport has already ended, its exit may have been logged before the
 // re-arm; the gate is then set again, so the WARN cannot pass to a later
 // exit of a connection logged at Debug.

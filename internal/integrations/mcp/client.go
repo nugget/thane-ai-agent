@@ -365,14 +365,19 @@ func (c *serverClient) connectAttempt() (*clientConn, *toolSet, error) {
 // the connection lived stableAfter, which ends the run of failures. A
 // stable connection re-arms the stdio exit WARN and, while flapping,
 // logs that it is stable again, because its connect was logged only at
-// Debug. The timer does that at stableAfter, before the process can
-// exit. A refresh runs inline and can outlast stableAfter, though, and
-// when the connection then ends, the fired timer and the end are both
-// ready and the select picks one at random. So how long the connection
-// lived decides, and serve applies a fired timer's effects before it
-// returns.
+// Debug.
+//
+// The re-arm runs on its own timer, so it happens at stableAfter even
+// while serve is busy in an inline refresh, before the process can exit
+// and claim the gate. The rest is serve's: a refresh can outlast
+// stableAfter, and when the connection then ends, the fired timer and
+// the end are both ready and the select picks one at random. So how
+// long the connection lived decides, and serve applies a fired timer's
+// effects before it returns.
 func (c *serverClient) serve(conn *clientConn, flapping bool) (serveEnd, bool) {
 	readyAt := time.Now()
+	rearm := time.AfterFunc(c.cfg.stableAfter, func() { c.rearmExitWarn(conn) })
+	defer rearm.Stop()
 	timer := time.NewTimer(c.cfg.stableAfter)
 	defer timer.Stop()
 	stable := false
@@ -381,7 +386,6 @@ func (c *serverClient) serve(conn *clientConn, flapping bool) (serveEnd, bool) {
 			return
 		}
 		stable = true
-		c.exitWarned.Store(false)
 		if flapping {
 			c.logger.Info("mcp: server connection is stable again", "up_for", c.cfg.stableAfter)
 		}

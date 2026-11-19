@@ -655,6 +655,45 @@ func TestClient_StableThroughABlockedRefresh(t *testing.T) {
 	}
 }
 
+// TestClient_StableRearmsExitWarnDuringABlockedRefresh: a connection
+// that reaches stableAfter re-arms the stdio exit WARN at that moment,
+// even while serve is stuck in an inline refresh, so a process that then
+// dies during the refresh warns with its own stderr tail instead of
+// finding the gate still taken by an earlier quick crash.
+func TestClient_StableRearmsExitWarnDuringABlockedRefresh(t *testing.T) {
+	const stableAfter = 30 * time.Millisecond
+	routes := clientTLegacyRoutes("", clientTTool("echo"))
+	list := routes[methodToolsList]
+	routes[methodToolsList] = func(ctx context.Context, tr *clientTFakeTransport, req *Request, info callInfo) (*Response, error) {
+		if clientTSentCount(tr, methodToolsList) > 1 {
+			return clientTHang(ctx, tr, req, info) // the refresh never answers
+		}
+		return list(ctx, tr, req, info)
+	}
+	srv := &clientTFakeServer{handle: routes.handler()}
+	cfg := clientTConfig(transportStdio, protocolLegacy)
+	cfg.stableAfter = 4 * stableAfter
+	cfg.connectTimeout = time.Minute // the refresh outlasts the test
+	c := clientTNew(t, srv, cfg)
+	clientTStart(t, c)
+	clientTReadyOn(t, c, srv, 1)
+	c.exitWarned.Store(true) // an exit earlier in this run warned
+	srv.last().serverNotify(methodToolsListChanged, "")
+	clientTEventually(t, "the refresh hanging", func() bool { return srv.count(methodToolsList) == 2 })
+	deadline := time.Now().Add(time.Second)
+	for c.exitWarned.Load() && time.Now().Before(deadline) {
+		time.Sleep(stableAfter / 3)
+	}
+	if c.exitWarned.Load() {
+		t.Fatalf("the exit WARN is still taken %v after connecting (stableAfter %v) while a refresh blocks serve", time.Second, cfg.stableAfter)
+	}
+	select {
+	case <-srv.transportAt(0).Done():
+		t.Fatal("the connection ended; the re-arm must happen while it is live")
+	default:
+	}
+}
+
 // TestClient_RearmExitWarnAtInfoConnect: a connect logged at INFO
 // re-arms the stdio exit WARN, so that connection's crash warns even
 // after a start-up failure took the WARN. If the transport already
