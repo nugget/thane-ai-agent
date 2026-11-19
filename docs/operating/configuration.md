@@ -1178,8 +1178,8 @@ mcp:
 |-----|---------|---------|
 | `name` | required | Short identifier. It prefixes tool names after sanitizing (lowercase, other characters become `_`), so two names that sanitize alike, or one that sanitizes to nothing, are rejected. |
 | `transport` | required | `stdio` (spawn `command` with `args`) or `http` (Streamable HTTP at `url`, `http` or `https`). |
-| `protocol` | `auto` | `auto` probes with `server/discover` and falls back to the `initialize` handshake; `modern` requires a stateless 2026-07-28 server; `legacy` runs `initialize` directly (2024-11-05 through 2025-11-25). Use `legacy` for older servers that answer the probe slowly; the probe waits up to 10s for a reply before falling back on stdio. |
-| `connect_timeout` | `30s` | One connection attempt: start or reach the server, negotiate, list tools. Failed attempts retry in the background with backoff from 2s up to 60s. |
+| `protocol` | `auto` | `auto` probes with `server/discover` and falls back to the `initialize` handshake; `modern` requires a stateless 2026-07-28 server; `legacy` runs `initialize` directly (2024-11-05 through 2025-11-25). Use `legacy` for older servers that answer the probe slowly. On stdio the probe waits up to 10s for a reply, and never more than half of `connect_timeout`, before falling back, so a legacy server still has time for `initialize`. |
+| `connect_timeout` | `30s` | One connection attempt: start or reach the server, negotiate, list tools. Failed attempts retry in the background with backoff from 2s up to 60s (see **Reconnects** below). |
 | `call_timeout` | `2m` | One tool call, unless the caller already has an earlier deadline. `0` means the default, not unlimited. |
 | `cwd` | Thane's | stdio working directory. Root prefixes such as `kb:` and a leading `~/` expand; a value that does not end up absolute is rejected when the config loads. |
 | `env` | none | stdio extra environment, `KEY=VALUE`. The subprocess also inherits Thane's environment. Entries without `=` are dropped with a warning. |
@@ -1231,13 +1231,53 @@ and the manifest's tool counts) reflect the tools registered at
 startup. Tool names longer than 64 characters are shortened with a
 short stable hash suffix. If two tools map to the same name, the first
 one (servers in config order, then raw tool names sorted) wins and the
-other is skipped with a warning.
+other is skipped with a warning. A tool whose input schema is larger
+than 64 KiB is not offered to the model at all; Thane logs
+`mcp: tool input schema too large to offer to the model; tool skipped`
+at WARN once for each such tool (see
+[MCP tools](../reference/tools.md#mcp-tools) for how schemas are
+adjusted first).
+
+**Reconnects.** After a failed connection attempt Thane waits before
+the next one: 2s at first, doubling with each further failure up to
+60s. A connection lost within 60s of connecting counts as a failure
+too, so a server that crashes right after it starts is not respawned
+every 2s; a connection that stays up 60s resets the wait to 2s. Every
+wait is moved at random by up to 20% either way, so servers that failed
+together do not reconnect in lockstep. When an HTTP server reports that
+Thane's session expired, Thane reconnects at once, without a wait.
+
+The log follows the same runs of failures. Each of
+`mcp: connecting to the server failed; retrying in the background`,
+`mcp: server connection lost; reconnecting` and, for stdio,
+`mcp: stdio server exited unexpectedly` is a WARN line at most once
+per run; repeats in the same run are Debug. A connection that stays up
+60s ends the run, so the next failure is a WARN again. After a run that
+included quick losses, Thane also logs
+`mcp: server connection is stable again` at INFO at that point.
 
 **Health.** Every configured server is a health dependency named
 `mcp-<name>`. While a server is down or not yet connected, `/health`
 reports `status: degraded` and `system_health` shows
 `conn:mcp-<name>` as failed. Expect that for a server that only runs
 some of the time, such as a game that exposes MCP only while it is open.
+
+While a server is connected, the health check is a `ping` (or
+`server/discover` for a stateless 2026-07-28 server), and any JSON-RPC
+answer counts as healthy. A failed check never drops the connection.
+The error that `/health` and `system_health` show is one of a fixed set,
+never a host, URL or server text; the full error is logged at Debug as
+`mcp: health check failed`.
+
+| Error | Meaning |
+|-------|---------|
+| `mcp: not connected: unreachable` | Thane cannot reach the server, or the connection broke. |
+| `mcp: not connected: credentials refused` | The server refused Thane's credentials (HTTP 401 or 403). |
+| `mcp: not connected: protocol incompatible` | The server and Thane share no protocol version, or the server broke the protocol while connecting. |
+| `mcp: health check timed out` | A connected server did not answer the health check in time. |
+| `mcp: health check failed: server error` | A connected server answered the health check with an HTTP error status. |
+| `mcp: health check failed: unusable reply` | A connected server answered the health check with a reply Thane could not use. |
+| `mcp: not connected` | Not connected for another reason, for example while the first attempt is still running. |
 
 **Upgrading:** these change the behaviour of an existing `mcp:` config.
 

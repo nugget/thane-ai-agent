@@ -902,9 +902,24 @@ knows it even while its server is down.
 
 The description and input schema come from the server. Descriptions are
 capped at 4096 bytes. Schemas are copied and adjusted only where model
-providers require it (local `$ref` pointers inlined, top-level
-`oneOf`/`anyOf`/`allOf` merged, root forced to an object), and each
-adjustment is logged once.
+providers require it, and each adjustment is logged once:
+
+- Local `$ref` pointers (`#/$defs/…`, `#/definitions/…`, any `#/…`
+  JSON pointer) are replaced by copies of their targets, and `$defs`
+  and `definitions` are dropped once inlined. A recursive reference, a
+  reference nested more than 8 deep, or one that does not resolve
+  becomes `{}`. If the copies would add more than 32 KiB to the schema,
+  nothing is inlined: the schema keeps its `$ref` pointers and
+  definitions as the server sent them. Pointers into other documents
+  are left in place.
+- Top-level `oneOf`/`anyOf`/`allOf` are merged away, and the root is
+  forced to an object with a `properties` map.
+
+A tool whose input schema is still larger than 64 KiB after these
+adjustments is not offered to the model, because it would crowd the
+prompt of every request that offers it. Thane logs one WARN per such
+tool, `mcp: tool input schema too large to offer to the model; tool
+skipped`, with the schema's size and the cap.
 
 **Availability.** Tools of servers ready at startup are registered on
 the shared registry. Tools that appear later, and new definitions of
@@ -918,10 +933,27 @@ model is told to use another tool or try later; a tool the server
 stopped offering answers the same way. Other failures reach the model
 as fixed sentences that say what to do next: a timeout or broken
 connection is an unknown outcome, refused credentials need the
-operator, rejected arguments quote the server's message. The model never
-sees hosts, URLs or raw HTTP bodies. Results prefer the server's
-structured JSON, summarize images and binary resources instead of
-inlining them, and are capped at 16,000 bytes.
+operator, rejected arguments quote the server's message. A tool that
+needs a client feature Thane does not offer MCP servers (sampling,
+elicitation, roots), whether the server answers `-32021` (missing
+client capability) or asks for input that Thane declines, gets one
+fixed sentence: the tool cannot run through Thane, other arguments will
+not help, and the model should use another tool or ask the user to do
+that step directly. The model never sees hosts, URLs or raw HTTP
+bodies.
+
+Results prefer the server's structured JSON (`structuredContent`) when
+it fits, skipping the text blocks, in which servers repeat the same
+value; when the JSON does not fit but the content blocks do, the blocks
+are used. A `structuredContent` object that only wraps the text result,
+one key whose string value equals the text (such as the
+`{"result": "..."}` the Python MCP SDK returns for a plain value), is
+rendered from the text blocks instead, so line breaks and quotes stay
+readable. `\uXXXX` escapes in structured output are decoded, so
+non-ASCII text and characters such as `<`, `>` and `&` arrive as
+themselves. Error results render from the content blocks only. Images
+and binary resources are summarized instead of inlined, and results are
+capped at 16,000 bytes.
 
 Home Assistant needs no MCP bridge: the native `ha_*` tool set above is
 the complete HA surface (the `ha-mcp` bridge was retired in v0.10.2 once
