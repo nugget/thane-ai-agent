@@ -680,6 +680,36 @@ fallback ("I hit a problem before I could finish that"), and the
 runtime's timeout notice or recovery summary are not sent: such a turn
 logs a Warn and stores a `signal_reply_not_sent` note.
 
+A message whose turn cannot be prepared three times, or that kills the
+process each time it is handled, is set aside so the person's later
+messages get through. It is logged at Warn as `loop mailbox item set
+aside after repeated failed deliveries` with its `item_id`, and
+`system_health` reports it under `queue_set_aside` for a day. Nothing
+answers it or retries it. Set-aside rows stay in `thane.db`'s
+`loop_queue` table:
+
+```sql
+-- Inspect
+SELECT consumer_loop, dedup_key, attempts, enqueued_at, updated_at, payload
+FROM loop_queue WHERE status = 'set_aside' ORDER BY updated_at DESC;
+
+-- Replay one: delivered on the sender's next message or the next restart.
+-- A message that killed the process can do so again, up to three times.
+UPDATE loop_queue SET status = 'pending', attempts = 0, updated_at = CURRENT_TIMESTAMP
+WHERE consumer_loop = ? AND dedup_key = ? AND status = 'set_aside';
+
+-- Discard one
+DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = 'set_aside';
+```
+
+A delivery in flight when the process dies counts against its item, so
+a crash loop with an unrelated cause also sets aside other senders'
+messages that were being handled at the time. Replay everything set
+aside since it began by matching `updated_at >= '2026-11-18 04:00:00'`
+instead of one key: UTC, with a space between date and time, as the
+column stores it. A `T` separator compares as later than every time on
+that date and silently skips those rows.
+
 ## Contacts & CardDAV
 
 ```yaml

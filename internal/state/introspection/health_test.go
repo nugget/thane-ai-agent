@@ -56,6 +56,11 @@ func TestInspectorHealthAssemblesAnnunciator(t *testing.T) {
 				{Consumer: "core", Pending: 1, OldestEnqueuedAt: now.Add(-3 * time.Hour)},
 			}, nil
 		},
+		QueueSetAside: func(context.Context, time.Time) ([]loopqueue.ConsumerSetAside, error) {
+			return []loopqueue.ConsumerSetAside{
+				{Consumer: "signal/sender-1a2b", Count: 1, NewestSetAsideAt: now.Add(-3 * time.Hour)},
+			}, nil
+		},
 		LoopStatuses: func() []looppkg.Status {
 			return []looppkg.Status{
 				{Name: "core", State: looppkg.State("processing")},
@@ -93,6 +98,10 @@ func TestInspectorHealthAssemblesAnnunciator(t *testing.T) {
 	if row := rowByName(t, snap, "queue_backlog"); row.Status != HealthDegraded || !strings.Contains(row.Detail, "core") {
 		t.Errorf("queue_backlog row = %+v, want degraded naming core", row)
 	}
+	// Set aside: an item set aside 3h ago degrades its own row.
+	if row := rowByName(t, snap, "queue_set_aside"); row.Status != HealthDegraded || !strings.Contains(row.Detail, "signal/sender-1a2b: 1") {
+		t.Errorf("queue_set_aside row = %+v, want degraded naming the partition", row)
+	}
 	if len(snap.Queues) != 2 || snap.Queues[0].Consumer != "archivist" || snap.Queues[0].Pending != 3 {
 		t.Errorf("queues = %+v", snap.Queues)
 	}
@@ -116,7 +125,7 @@ func TestInspectorHealthAssemblesAnnunciator(t *testing.T) {
 	for _, row := range degraded {
 		names = append(names, row.Name)
 	}
-	want := []string{"conn:signal", "doc_sync:self", "queue_backlog", "loops"}
+	want := []string{"conn:signal", "doc_sync:self", "queue_backlog", "queue_set_aside", "loops"}
 	if len(degraded) != len(want) {
 		t.Errorf("degraded rows = %v, want %v", names, want)
 	}

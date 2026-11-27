@@ -180,6 +180,16 @@ var nonToolTokens = map[string]struct{}{
 	// `attachment_` is a real tool prefix.
 	"attachment_id": {},
 
+	// logs_query and loop_status parameter. The diagnostics talent names
+	// it as the filter that finds a partition's set-aside items. The
+	// matcher flags it because `loop_` is a real tool prefix.
+	"loop_name": {},
+
+	// system_health row name. The diagnostics talent names the row that
+	// reports queued items set aside after every delivery failed. The
+	// matcher flags it because `queue_` is a real tool prefix.
+	"queue_set_aside": {},
+
 	// Archive candidate field value. A session candidate's `age` is a
 	// delta, and `time_basis` names the instant it is measured from:
 	// `session_started`, the value, not a tool. The matcher flags it for

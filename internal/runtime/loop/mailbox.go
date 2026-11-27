@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,6 +33,9 @@ type MailboxItem struct {
 	// Receipt is the runtime-only queue receipt retained across delivery
 	// and acknowledgement; mailbox payloads never expose it to the model.
 	Receipt string `json:"-"`
+	// PriorDeliveries counts earlier wake deliveries of this item that
+	// ended without an ack and were not refunded. Runtime-only.
+	PriorDeliveries int `json:"-"`
 }
 
 // MailboxReceipt summarizes the effect of enqueuing a mailbox item.
@@ -105,7 +109,9 @@ func (l *Loop) buildMailboxPullInput(
 		}
 		var fresh []MailboxItem
 		for _, it := range items {
-			if delivered[it.ID] {
+			// A previously delivered item travels only alone, at the
+			// head of a wake, so it never rides into another turn here.
+			if delivered[it.ID] || it.PriorDeliveries > 0 {
 				continue
 			}
 			fresh = append(fresh, it)
@@ -220,10 +226,11 @@ func (m *Mailbox) Peek(ctx context.Context, loopName string, limit int) ([]Mailb
 	items := make([]MailboxItem, 0, len(stored))
 	for _, it := range stored {
 		items = append(items, MailboxItem{
-			ID:         it.DedupKey,
-			Payload:    append([]byte(nil), it.Payload...),
-			EnqueuedAt: it.EnqueuedAt,
-			Receipt:    it.Receipt,
+			ID:              it.DedupKey,
+			Payload:         append([]byte(nil), it.Payload...),
+			EnqueuedAt:      it.EnqueuedAt,
+			Receipt:         it.Receipt,
+			PriorDeliveries: it.Attempts,
 		})
 	}
 	return items, nil
@@ -233,16 +240,20 @@ func (m *Mailbox) ack(ctx context.Context, loopName string, items []MailboxItem)
 	if m == nil || m.store == nil || len(items) == 0 {
 		return nil
 	}
+	// Ack every item even when one fails, so one failed write does not
+	// leave the rest of the batch to be handled again.
+	var errs []error
 	for _, item := range items {
 		outcome, err := m.store.Ack(ctx, loopName, item.ID, item.Receipt)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		if outcome == loopqueue.AckSuperseded {
-			return fmt.Errorf("loop mailbox item %s advanced while being handled", item.ID)
+			errs = append(errs, fmt.Errorf("loop mailbox item %s advanced while being handled", item.ID))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (m *Mailbox) depth(ctx context.Context, loopName string) (int, error) {

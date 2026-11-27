@@ -26,10 +26,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/platform/database"
 )
 
-// StatusPending marks an item available for draining. v1 only ever
-// stores pending items (Ack deletes); the column exists so a future
-// claim/visibility model can add intermediate states without a
-// migration.
+// StatusPending marks an item available for draining. Ack deletes a
+// pending item; the only other state is [StatusSetAside].
 const StatusPending = "pending"
 
 // AckOutcome reports whether a receipt-guarded acknowledgement removed its
@@ -53,6 +51,10 @@ type Item struct {
 	Priority   int
 	EnqueuedAt time.Time
 	Payload    []byte
+	// Attempts counts the times the item was taken up and left
+	// unfinished: each [Store.Defer], and each [Store.RecordDelivery]
+	// not taken back by [Store.RefundDelivery].
+	Attempts int
 }
 
 // Store is a durable, deduped, per-consumer-loop work queue backed by a
@@ -216,7 +218,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 		return nil, fmt.Errorf("loopqueue: consumer_loop is required")
 	}
 	query := `
-		SELECT dedup_key, receipt, priority, payload, enqueued_at
+		SELECT dedup_key, receipt, priority, attempts, payload, enqueued_at
 		FROM loop_queue
 		WHERE consumer_loop = ? AND status = ?
 		ORDER BY priority DESC, enqueued_at ASC, dedup_key ASC`
@@ -238,7 +240,7 @@ func (s *Store) peek(ctx context.Context, consumerLoop string, limit int) ([]Ite
 			payload     string
 			enqueuedRaw any
 		)
-		if err := rows.Scan(&it.DedupKey, &it.Receipt, &it.Priority, &payload, &enqueuedRaw); err != nil {
+		if err := rows.Scan(&it.DedupKey, &it.Receipt, &it.Priority, &it.Attempts, &payload, &enqueuedRaw); err != nil {
 			return nil, err
 		}
 		it.Payload = []byte(payload)
@@ -356,40 +358,37 @@ func (s *Store) Ack(ctx context.Context, consumerLoop, dedupKey, expectedReceipt
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
-	var (
-		enqueuedRaw   any
-		actualReceipt string
-	)
+	// Write first. A deferred transaction that reads before it writes
+	// cannot wait for the write lock: under WAL, SQLite refuses the
+	// upgrade at once when another connection has written, and
+	// busy_timeout never applies. The guarded DELETE takes the lock first
+	// and waits like any other writer. Only a removed row is journaled,
+	// so a concurrent Ack of the same key that loses the race journals
+	// nothing.
+	var enqueuedRaw any
 	err = tx.QueryRowContext(ctx,
-		`SELECT enqueued_at, receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ?`,
-		consumerLoop, dedupKey,
-	).Scan(&enqueuedRaw, &actualReceipt)
+		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ? AND status = ?
+		RETURNING enqueued_at`,
+		consumerLoop, dedupKey, expectedReceipt, StatusPending,
+	).Scan(&enqueuedRaw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AckMissing, nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	if actualReceipt != expectedReceipt {
+		// Nothing removed: a pending row under another receipt has moved
+		// on since it was handed out; otherwise the item is gone.
+		var actualReceipt string
+		err = tx.QueryRowContext(ctx,
+			`SELECT receipt FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND status = ?`,
+			consumerLoop, dedupKey, StatusPending,
+		).Scan(&actualReceipt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return AckMissing, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
+		}
 		return AckSuperseded, nil
 	}
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM loop_queue WHERE consumer_loop = ? AND dedup_key = ? AND receipt = ?`,
-		consumerLoop, dedupKey, expectedReceipt,
-	)
 	if err != nil {
 		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	// Journal only when this transaction actually removed the row. Two
-	// concurrent Acks of the same key can both pass the SELECT before
-	// serializing on the write; the loser's DELETE affects zero rows,
-	// and journaling it anyway would double-count throughput.
-	deleted, err := res.RowsAffected()
-	if err != nil {
-		return "", fmt.Errorf("loopqueue: ack %s/%s: %w", consumerLoop, dedupKey, err)
-	}
-	if deleted == 0 {
-		return AckSuperseded, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO loop_queue_completions (consumer_loop, dedup_key, enqueued_at, acked_at)

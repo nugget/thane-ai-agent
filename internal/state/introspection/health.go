@@ -367,6 +367,9 @@ type HealthSources struct {
 	SyncStates func() []checkout.SyncState
 	// QueueStats reports live work-queue backlog per partition.
 	QueueStats func(ctx context.Context) ([]loopqueue.ConsumerPending, error)
+	// QueueSetAside reports, per partition, the work-queue items set
+	// aside at or after since because every delivery of them failed.
+	QueueSetAside func(ctx context.Context, since time.Time) ([]loopqueue.ConsumerSetAside, error)
 	// ProviderBilling reports cloud provider accounts refusing service
 	// over billing state — persistent, operator-actionable, and not
 	// fixable by any retry. Nil-safe; an empty slice means healthy.
@@ -580,6 +583,10 @@ func (i *Inspector) Health(ctx context.Context) HealthSnapshot {
 				row.Detail = fmt.Sprintf("pending work older than %s in: %v", promptfmt.FormatDuration(queueBacklogStaleAfter), stale)
 			}
 		}
+		snap.Annunciator = append(snap.Annunciator, row)
+	}
+
+	if row, ok := i.queueSetAsideRow(ctx, now); ok {
 		snap.Annunciator = append(snap.Annunciator, row)
 	}
 

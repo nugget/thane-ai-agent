@@ -434,3 +434,41 @@ func TestBuildMailboxPullInputPassesTheRunContextToRender(t *testing.T) {
 		t.Errorf("tag requester saw %v, want [attachments]", requested)
 	}
 }
+
+// TestBuildMailboxPullInputSkipsPriorDeliveries pins that an item whose
+// earlier delivery failed is never merged into another turn mid-way: it
+// travels only alone, at the head of a wake.
+func TestBuildMailboxPullInputSkipsPriorDeliveries(t *testing.T) {
+	t.Parallel()
+
+	mailbox := newTestMailbox(t)
+	l := mustNew(t, Config{Name: "pull-suspect", Task: "t", MidTurnInputBudget: 4},
+		Deps{Runner: &noopRunner{}, Mailbox: mailbox})
+	ctx := context.Background()
+	suspect, err := mailbox.Enqueue(ctx, l.Name(), "test", []byte("suspect"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mailbox.recordDelivery(ctx, l.Name(), []MailboxItem{suspect}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mailbox.Enqueue(ctx, l.Name(), "test", []byte("fresh")); err != nil {
+		t.Fatal(err)
+	}
+
+	render := func(_ context.Context, items []MailboxItem) []llm.Message {
+		out := make([]llm.Message, len(items))
+		for i, it := range items {
+			out[i] = llm.Message{Role: "user", Content: string(it.Payload)}
+		}
+		return out
+	}
+	var pulled []MailboxItem
+	got := l.buildMailboxPullInput("conv-test", nil, &pulled, render)(ctx)
+	if len(got) != 1 || got[0].Content != "fresh" {
+		t.Fatalf("pull delivered %v, want only the fresh item", got)
+	}
+	if len(pulled) != 1 || pulled[0].ID == suspect.ID {
+		t.Fatalf("pulled items = %v, want only the fresh item", pulled)
+	}
+}
