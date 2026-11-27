@@ -1,91 +1,67 @@
-# Build output
+# Every path pattern below is anchored to the repo root. Checkouts on
+# macOS are case-insensitive (core.ignorecase=true), so an unanchored
+# pattern like `knowledge/` or `MEMORY.md` silently ignores source files
+# such as internal/state/knowledge/ or docs/understanding/memory.md.
+
+# Build output (`just build` writes to dist/; the rest are binaries from
+# building a cmd/ in the repo root). There is deliberately no `/thane`
+# entry: case-insensitively it matches the Thane/ dev directory.
 /dist/
-/thane
 /openclaw-import
+/prewarm-replay
+/uiharness
 *.exe
 *.dll
 *.so
 *.dylib
-
-# Test binary
 *.test
-
-# Output of go coverage
 *.out
 
 # Go workspace
-go.work
-go.work.sum
+/go.work
+/go.work.sum
 
 # AI agent tooling
-.claude/
+/.claude/
 
-# IDE
+# IDE and OS
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Local config (may contain secrets)
-thane.yaml
-thane.local.yaml
-*.local.yaml
+# Local config and secrets — unanchored on purpose, so a stray copy is
+# never committed from anywhere in the tree.
 config.yaml
+*.local.yaml
+.env
 
-# Development working directory (site-specific, mirrors ~/Thane/ in production)
+# Databases and logs, wherever they land.
+*.db
+*.sqlite
+*.log
+
+# Development working directory (mirrors ~/Thane/ in production).
 /Thane/*
 !/Thane/README.md
 
-# Memory database
-*.db
-*.sqlite
-/data/
-/db/
-
-# Logs
-*.log
-logs/
-
-# Legacy build artifacts
-thane-darwin-arm64
-thane-linux-*
-.env
-docker-compose.pocket.yml
-docker-compose.*.yml
-
-# Instance-specific identity symlinks (Phase 1 memory pooling)
-MEMORY.md
-SOUL.md
-USER.md
-TOOLS.md
-IDENTITY.md
-/memory/
-thane-notes/
-persona.md
-talents/shared-memory.md
-.golangci.bck.yml
--e 
-# Site-specific talents (personal to each instance)
-talents/my-*
-
-# Built dev-tool binary (cmd/prewarm-replay)
-/prewarm-replay
-
-# Runtime state written by a local `thane serve` or `thane init` run in
-# the repo root. These are workspace artifacts, not source: the archive
+# Runtime state written by a local `thane serve` or `thane init` in the
+# repo root. These are workspace artifacts, not source: the archive
 # segments embed absolute paths from whoever ran the binary, and the
 # SQLite sidecars change on every run.
-archive/
-db/
-core/
-scratchpad/
-knowledge/
-projects/
-generated/
-talents_backup/
-/uiharness
+/archive/
+/core/
+/data/
+/db/
+/generated/
+/knowledge/
+/logs/
+/projects/
+/scratchpad/
+/talents_backup/
+
+# Site-specific talents (personal to each instance).
+/talents/my-*
